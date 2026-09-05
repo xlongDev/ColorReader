@@ -1,0 +1,18 @@
+#!/bin/sh
+# Fast gate only. The full matrix (build, clippy) runs in CI.
+set -e
+
+echo "› prettier"
+pnpm exec prettier --check .
+
+echo "› oxlint"
+pnpm exec oxlint .
+
+echo "› tsc"
+pnpm exec tsc --noEmit
+
+echo "› rustfmt"
+cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+
+echo "› clippy"
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings

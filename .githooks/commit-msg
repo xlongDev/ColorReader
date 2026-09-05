@@ -1,0 +1,18 @@
+#!/bin/sh
+# Enforce the Conventional Commits prefix used by this repo.
+set -e
+
+pattern='^(feat|fix|refactor|perf|test|docs|chore|build|ci|revert)(\(.+\))?!?: .+'
+
+subject=$(head -n 1 "$1")
+case "$1" in
+*MERGE_MSG | *SQUASH_MSG) exit 0 ;;
+esac
+
+if printf '%s' "$subject" | grep -qE "$pattern"; then
+  exit 0
+fi
+
+printf 'Invalid commit message:\n  %s\n\nExpected: <type>(<scope>): <subject>\n' "$subject" >&2
+printf 'Types: feat fix refactor perf test docs chore build ci revert\n' >&2
+exit 1

@@ -1,0 +1,34 @@
+# Dependencies
+node_modules
+.pnpm-store
+
+# Build output
+dist
+target
+src-tauri/target
+
+# Tauri generated schemas
+src-tauri/gen/schemas
+
+# Test & coverage
+coverage
+
+# Logs
+*.log
+
+# Secrets / local env
+.env
+.env.local
+.env.*.local
+
+# Editors & OS
+.DS_Store
+.vscode
+.idea
+
+# Playwright
+test-results
+playwright-report
+
+# WorkBuddy session data
+.workbuddy

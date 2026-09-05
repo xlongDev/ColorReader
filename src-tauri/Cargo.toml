@@ -1,0 +1,53 @@
+[package]
+name = "colorreader"
+version = "0.1.0"
+description = "ColorReader - AI native, local first, high performance ebook reader"
+authors = ["xlongDev"]
+edition = "2024"
+rust-version = "1.88"
+default-run = "colorreader"
+
+[lib]
+name = "colorreader_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+rusqlite = { version = "0.40", features = ["bundled"] }
+zip = "8"
+quick-xml = "0.42"
+sha2 = "0.11.0"
+uuid = { version = "1", features = ["v4"] }
+tauri-plugin-dialog = "2"
+# `.ctzx` encryption. Both are RustCrypto crates; nothing here invents a cipher
+# or a KDF, and both are on the hot path only while exporting or importing.
+argon2 = "0.5"
+aes-gcm = "0.10"
+# Outbound HTTP for AI providers. `rustls-tls` keeps the build free of a
+# system OpenSSL, which is the usual cross-platform build breaker.
+reqwest = { version = "0.12", default-features = false, features = [
+  "rustls-tls",
+  "json",
+  "stream",
+  "charset",
+  "http2",
+  "macos-system-configuration",
+] }
+futures-util = "0.3"
+
+[dev-dependencies]
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

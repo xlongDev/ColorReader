@@ -1,0 +1,65 @@
+import { forwardRef, type InputHTMLAttributes } from "react";
+import * as SwitchPrimitive from "@radix-ui/react-switch";
+
+import { cn } from "@/lib/cn";
+
+interface GlassInputProps extends InputHTMLAttributes<HTMLInputElement> {}
+
+/** Glass input that reads as a single quiet band. */
+export const GlassInput = forwardRef<HTMLInputElement, GlassInputProps>(function GlassInput(
+  { className, ...rest },
+  ref,
+) {
+  return (
+    <input
+      ref={ref}
+      className={cn(
+        "border-hairline bg-surface-1 h-9 w-full rounded-md border px-3 text-sm",
+        "text-text-1 placeholder:text-text-3 transition-colors",
+        "focus-visible:border-accent focus-visible:bg-surface-2 focus-visible:outline-none",
+        className,
+      )}
+      {...rest}
+    />
+  );
+});
+
+interface GlassSwitchProps {
+  checked: boolean;
+  onCheckedChange: (next: boolean) => void;
+  id?: string;
+  ariaLabel?: string;
+  disabled?: boolean;
+}
+
+/** A quiet glass switch built on Radix for proper a11y semantics. */
+export function GlassSwitch({
+  checked,
+  onCheckedChange,
+  id,
+  ariaLabel,
+  disabled,
+}: GlassSwitchProps) {
+  return (
+    <SwitchPrimitive.Root
+      id={id}
+      checked={checked}
+      onCheckedChange={onCheckedChange}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      className={cn(
+        "relative inline-flex h-6 w-11 shrink-0 cursor-pointer items-center rounded-full",
+        "border-hairline border transition-colors",
+        "bg-surface-2 data-[state=checked]:bg-accent",
+        "focus-visible:focus-ring disabled:pointer-events-none disabled:opacity-50",
+      )}
+    >
+      <SwitchPrimitive.Thumb
+        className={cn(
+          "bg-text-1 block h-5 w-5 translate-x-0.5 rounded-full transition-transform",
+          "data-[state=checked]:bg-on-accent data-[state=checked]:translate-x-[22px]",
+        )}
+      />
+    </SwitchPrimitive.Root>
+  );
+}

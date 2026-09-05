@@ -1,0 +1,400 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------
+   ColorReader Design Tokens
+   The "Liquid Glass" look is a web approximation of Apple's platform
+   material: backdrop-filter + layered borders + highlight overlays +
+   tinted shadows. It is NOT Apple-issued, only a documented lookalike.
+------------------------------------------------------------------ */
+
+@theme {
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI Variable Display", "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei",
+    sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --radius-xs: 10px;
+  --radius-sm: 14px;
+  --radius-md: 18px;
+  --radius-lg: 24px;
+  --radius-xl: 28px;
+  --radius-2xl: 32px;
+  --radius-3xl: 40px;
+  --radius-full: 9999px;
+
+  --blur-sm: 12px;
+  --blur-md: 20px;
+  --blur-lg: 30px;
+  --blur-xl: 48px;
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.32, 0.72, 0, 1);
+
+  --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 18px 50px rgba(0, 0, 0, 0.45);
+  --shadow-panel: 0 30px 80px rgba(0, 0, 0, 0.55);
+}
+
+@theme inline {
+  --color-app: var(--app-bg);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-hairline: var(--hairline);
+  --color-hairline-strong: var(--hairline-strong);
+  --color-text-1: var(--text-1);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+}
+
+/* -- dark (default) -------------------------------------------------
+   Text alphas are contrast-checked against the darkest surface they sit on
+   (surface-3 over app-bg ≈ #161922), not against app-bg alone.
+     text-1 0.92 → ~14.0:1 · text-2 0.64 → ~7.7:1 · text-3 0.52 → ~5.1:1
+   text-3 carries 12px meta copy, so it still has to clear AA 4.5:1. --------- */
+:root,
+[data-theme="dark"] {
+  --app-bg: #0b0d11;
+  --surface-1: rgba(255, 255, 255, 0.055);
+  --surface-2: rgba(255, 255, 255, 0.085);
+  --surface-3: rgba(24, 27, 33, 0.86);
+  --hairline: rgba(255, 255, 255, 0.1);
+  --hairline-strong: rgba(255, 255, 255, 0.18);
+  --highlight: rgba(255, 255, 255, 0.14);
+  --text-1: rgba(255, 255, 255, 0.92);
+  --text-2: rgba(255, 255, 255, 0.64);
+  --text-3: rgba(255, 255, 255, 0.52);
+  --accent: #e9a13b;
+  --accent-soft: rgba(233, 161, 59, 0.16);
+  --on-accent: #17120a;
+  --danger: #f47174;
+  --success: #5cc28a;
+  --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 18px 50px rgba(0, 0, 0, 0.45);
+  --shadow-panel: 0 30px 80px rgba(0, 0, 0, 0.55);
+  --app-glow-1: rgba(233, 161, 59, 0.1);
+  --app-glow-2: rgba(72, 106, 160, 0.12);
+  --grain-opacity: 0.035;
+}
+
+/* -- light ----------------------------------------------------------
+   Same check against surface-3 over app-bg ≈ #fdfeff (L ≈ 0.83):
+     text-1 0.90 → ~13:1 · text-2 0.70 → ~5.3:1 · text-3 0.62 → ~4.5:1
+   accent #96591a keeps white-on-accent label copy at ~5.4:1; the lighter
+   #a9671b it replaced only reached 3.9:1 and failed AA for button text. ---- */
+[data-theme="light"] {
+  --app-bg: #e9ebef;
+  --surface-1: rgba(255, 255, 255, 0.58);
+  --surface-2: rgba(255, 255, 255, 0.78);
+  --surface-3: rgba(255, 255, 255, 0.92);
+  --hairline: rgba(16, 20, 28, 0.1);
+  --hairline-strong: rgba(16, 20, 28, 0.2);
+  --highlight: rgba(255, 255, 255, 0.85);
+  --text-1: rgba(11, 13, 17, 0.9);
+  --text-2: rgba(11, 13, 17, 0.7);
+  --text-3: rgba(11, 13, 17, 0.62);
+  --accent: #96591a;
+  --accent-soft: rgba(150, 89, 26, 0.12);
+  --on-accent: #fff8ec;
+  --danger: #b53a3a;
+  --success: #2f7d4f;
+  --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.9) inset, 0 14px 34px rgba(16, 20, 28, 0.12);
+  --shadow-panel: 0 30px 70px rgba(16, 20, 28, 0.16);
+  --app-glow-1: rgba(233, 161, 59, 0.18);
+  --app-glow-2: rgba(120, 150, 200, 0.2);
+  --grain-opacity: 0.02;
+}
+
+/* -- reduced transparency (system or user opt-out) ------------------ */
+@media (prefers-reduced-transparency: reduce) {
+  :root,
+  [data-theme="dark"],
+  [data-theme="light"] {
+    --surface-1: rgba(20, 22, 28, 0.94);
+    --surface-2: rgba(24, 27, 33, 0.96);
+    --surface-3: rgba(28, 31, 38, 0.98);
+  }
+  [data-theme="light"] {
+    --surface-1: rgba(255, 255, 255, 0.94);
+    --surface-2: rgba(255, 255, 255, 0.97);
+    --surface-3: rgba(255, 255, 255, 0.99);
+  }
+}
+
+[data-transparency="reduced"] {
+  --surface-1: rgba(20, 22, 28, 0.94);
+  --surface-2: rgba(24, 27, 33, 0.96);
+  --surface-3: rgba(28, 31, 38, 0.98);
+}
+[data-transparency="reduced"][data-theme="light"] {
+  --surface-1: rgba(255, 255, 255, 0.94);
+  --surface-2: rgba(255, 255, 255, 0.97);
+  --surface-3: rgba(255, 255, 255, 0.99);
+}
+
+/* -- accessibility: higher contrast -------------------------------- */
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme="dark"] {
+    --hairline: rgba(255, 255, 255, 0.2);
+    --hairline-strong: rgba(255, 255, 255, 0.32);
+    --text-1: rgba(255, 255, 255, 0.98);
+    --text-2: rgba(255, 255, 255, 0.82);
+    --text-3: rgba(255, 255, 255, 0.7);
+  }
+  [data-theme="light"] {
+    --hairline: rgba(16, 20, 28, 0.22);
+    --hairline-strong: rgba(16, 20, 28, 0.34);
+    --text-1: rgba(11, 13, 17, 0.98);
+    --text-2: rgba(11, 13, 17, 0.84);
+    --text-3: rgba(11, 13, 17, 0.74);
+  }
+}
+
+/* -- base ------------------------------------------------------------ */
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-1);
+  background: var(--app-bg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--text-1);
+}
+
+button {
+  font-family: inherit;
+}
+
+input,
+textarea,
+select {
+  font-family: inherit;
+  color: inherit;
+}
+
+/* -- surfaces the browser draws and we did not ----------------------
+   Caret, scrollbars, placeholder, underline offset and the native control
+   accent all ship with UA defaults that belong to no design system. These
+   are the cheapest signal that a shell was built rather than assembled. */
+
+:root {
+  caret-color: var(--accent);
+  accent-color: var(--accent);
+  text-underline-offset: 3px;
+}
+
+::placeholder {
+  color: var(--text-3);
+  opacity: 1;
+}
+
+/* Thin pill thumb floating in a transparent gutter, so it reads as an overlay
+   scrollbar rather than a permanent track. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--hairline-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background-color: var(--hairline-strong);
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-3);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* -- backdrop layers (aurora + grain) -------------------------------
+   Documented z-index scale, the only four layers the shell needs:
+     -1  window backdrop (aurora behind everything)
+      0  content
+     50  modal / palette overlay
+     60  grain (fixed, pointer-events-none, never on a scrolling box)
+   Anything else should reuse these; do not invent one-off z values. */
+.app-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(60% 50% at 12% 0%, var(--app-glow-1), transparent 70%),
+    radial-gradient(50% 50% at 100% 100%, var(--app-glow-2), transparent 75%), var(--app-bg);
+}
+
+.app-grain {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  opacity: var(--grain-opacity);
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  0 0 0 0.6 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+  background-size: 200px 200px;
+}
+
+/* Material ladder. Only elevation 2 blurs its backdrop: nested glass inside an
+   already-blurred parent compounds both cost and muddiness. */
+@utility glass {
+  background-color: var(--surface-1);
+  border: 1px solid var(--hairline);
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    var(--shadow-glass);
+}
+
+@utility glass-2 {
+  background-color: var(--surface-2);
+  border: 1px solid var(--hairline);
+  box-shadow:
+    inset 0 1px 0 var(--highlight),
+    var(--shadow-glass);
+  backdrop-filter: blur(var(--blur-lg)) saturate(180%);
+  -webkit-backdrop-filter: blur(var(--blur-lg)) saturate(180%);
+}
+
+@utility glass-solid {
+  background-color: var(--surface-3);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-panel);
+}
+
+/* Reduced transparency turns the top-level material opaque and drops the blur,
+   which is also the cheapest path on low-end GPUs. */
+@media (prefers-reduced-transparency: reduce) {
+  .glass-2 {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+[data-transparency="reduced"] .glass-2 {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+[data-transparency="reduced"] .backdrop-glass {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+
+/* -- focus ring shared by all interactive primitives ---------------- */
+@utility focus-ring {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* -- chapter transitions ---------------------------------------------
+   The reader remounts the article per chapter; the entry animation is the
+   "page turn". Reduced motion gets an instant swap. */
+@keyframes chapter-fwd {
+  from {
+    opacity: 0;
+    transform: translateX(48px);
+  }
+}
+
+@keyframes chapter-back {
+  from {
+    opacity: 0;
+    transform: translateX(-48px);
+  }
+}
+
+@keyframes chapter-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes chapter-paper-fwd {
+  from {
+    opacity: 0;
+    transform: perspective(1200px) rotateY(-10deg);
+  }
+}
+
+@keyframes chapter-paper-back {
+  from {
+    opacity: 0;
+    transform: perspective(1200px) rotateY(10deg);
+  }
+}
+
+.chapter-slide-fwd {
+  animation: chapter-fwd 0.32s var(--ease-out) both;
+}
+
+.chapter-slide-back {
+  animation: chapter-back 0.32s var(--ease-out) both;
+}
+
+.chapter-fade {
+  animation: chapter-fade 0.36s var(--ease-out) both;
+}
+
+.chapter-paper-fwd {
+  animation: chapter-paper-fwd 0.4s var(--ease-out) both;
+  transform-origin: left center;
+}
+
+.chapter-paper-back {
+  animation: chapter-paper-back 0.4s var(--ease-out) both;
+  transform-origin: right center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chapter-slide-fwd,
+  .chapter-slide-back,
+  .chapter-fade,
+  .chapter-paper-fwd,
+  .chapter-paper-back {
+    animation: none;
+  }
+}
+
+/* Blank paragraphs the extractors leave behind read as doubled gaps; hide
+   them while keeping the node (annotation offsets and paragraph indexes stay
+   valid for highlights and read-aloud). */
+.prose-reader p:empty {
+  display: none;
+}
+
+/* -- keep the macOS overlay traffic lights clear -------------------- */
+[data-tauri-drag-region] {
+  -webkit-user-select: none;
+  user-select: none;
+}

@@ -1,0 +1,5 @@
+msrv = "1.88"
+
+# Reading and parsing large books lives on the hot path: be loud about
+# allocations that hide inside iterators.
+too-many-arguments-threshold = 8
