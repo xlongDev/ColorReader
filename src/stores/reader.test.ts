@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { updateReadingSpeed } from "@/stores/reader";
+import { foldScrollDelta, updateReadingSpeed } from "@/stores/reader";
 import { SPEECH_RATES, nextSpeechRate } from "@/stores/reader";
 
 describe("nextSpeechRate", () => {
@@ -14,6 +14,27 @@ describe("nextSpeechRate", () => {
 
   it("treats an unknown rate as the start of the cycle", () => {
     expect(nextSpeechRate(3)).toBe(SPEECH_RATES[0]);
+  });
+});
+
+describe("foldScrollDelta", () => {
+  it("keeps slow speeds moving by carrying sub-pixel steps across frames", () => {
+    // 40 px/s on a 120 Hz display moves 0.33 px per frame; without the carry
+    // every whole-pixel write rounds back to zero and the page never scrolls.
+    let carry = 0;
+    let moved = 0;
+    for (let frame = 0; frame < 120; frame += 1) {
+      const fold = foldScrollDelta(40, 1 / 120, carry);
+      carry = fold.carry;
+      moved += fold.delta;
+    }
+    expect(moved).toBe(40);
+  });
+
+  it("emits whole pixels immediately at fast speeds", () => {
+    const fold = foldScrollDelta(480, 1 / 60, 0);
+    expect(fold.delta).toBe(8);
+    expect(fold.carry).toBeLessThan(1e-9);
   });
 });
 

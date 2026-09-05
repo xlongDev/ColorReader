@@ -49,7 +49,7 @@ export const GlassButton = forwardRef<HTMLButtonElement, GlassButtonProps>(funct
       ref={ref}
       type={type}
       disabled={disabled}
-      whileTap={reduce || disabled ? undefined : { scale: 0.98 }}
+      whileTap={reduce || disabled ? undefined : { scale: 0.94 }}
       transition={{ type: "spring", stiffness: 420, damping: 30 }}
       className={cn(
         "inline-flex items-center justify-center gap-2 border font-medium",

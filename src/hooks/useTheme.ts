@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 import { useSettings, type ThemeMode, type TransparencyMode } from "@/stores/settings";
 
@@ -36,4 +36,20 @@ export function useTheme(): void {
   useEffect(() => {
     applyTransparency(transparency);
   }, [transparency]);
+}
+
+/** The resolved light/dark appearance, reactive to both setting and system. */
+export function useResolvedTheme(): "light" | "dark" {
+  const mode = useSettings((state) => state.theme);
+  const [sysLight, setSysLight] = useState(
+    () => typeof window !== "undefined" && window.matchMedia(THEME_MEDIA).matches,
+  );
+  useEffect(() => {
+    const mql = window.matchMedia(THEME_MEDIA);
+    const onSystem = () => setSysLight(mql.matches);
+    mql.addEventListener("change", onSystem);
+    return () => mql.removeEventListener("change", onSystem);
+  }, []);
+  if (mode === "light" || mode === "dark") return mode;
+  return sysLight ? "light" : "dark";
 }

@@ -11,6 +11,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import {
   ArrowsOut,
   ArrowsIn,
+  ArrowClockwise,
   DownloadSimple,
   ArrowLeft,
   ArrowDown,
@@ -22,13 +23,16 @@ import {
   HighlighterCircle,
   ListBullets,
   MagnifyingGlass,
+  Minus,
   Pause,
+  Plus,
   SpeakerHigh,
   Stop,
   Trash,
   X,
 } from "@phosphor-icons/react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
@@ -54,6 +58,7 @@ import { SearchPanel } from "@/features/search/SearchPanel";
 import { useAnnotations, useCreateAnnotation, useDeleteAnnotation } from "@/hooks/useAnnotations";
 import { useBookmarks, useCreateBookmark, useDeleteBookmark } from "@/hooks/useBookmarks";
 import { useAiChat } from "@/hooks/useAi";
+import { useResolvedTheme } from "@/hooks/useTheme";
 import { useIndexBook, useRagStatus } from "@/hooks/useRag";
 import {
   useBook,
@@ -63,12 +68,11 @@ import {
   useSetProgress,
 } from "@/hooks/useReader";
 import {
-  AUTO_SCROLL_SPEEDS,
   LINE_HEIGHTS,
   MAX_FONT_SIZE,
   MIN_FONT_SIZE,
-  PAGE_MARGINS,
   PARA_GAPS,
+  foldScrollDelta,
   updateReadingSpeed,
   useReaderSettings,
 } from "@/stores/reader";
@@ -80,25 +84,22 @@ import type { Annotation, BookImage, Bookmark, ChapterMeta, RagHit, SearchHit } 
 /** How long to wait after scrolling stops before persisting the position. */
 const SAVE_DELAY_MS = 600;
 
-/** Gutter between the two columns of a spread. */
-const SPREAD_GAP = 72;
+/** Gutter between the two columns of a spread: the page margin itself, so the
+ * centre gap matches the outer margins and both paged modes share one rhythm. */
 
 /** Wheel silence (ms) that ends one trackpad gesture and re-arms paging. */
 const GESTURE_GAP = 200;
 
-/**
- * Books look right with breathing room: paged modes enforce a generous floor
- * on the page margin (the user's setting can only widen it), Apple Books style.
- */
-const MIN_PAGE_MARGIN = 48;
-
 /** A paragraph starting with this marker renders as an in-book image. */
 const IMAGE_PARAGRAPH_PREFIX = "￼";
 
-/** Page margin actually applied: the user's choice, floored in paged modes. */
-function effectiveMargin(mode: LayoutMode, margin: number): number {
-  return mode === "scroll" ? margin : Math.max(margin, MIN_PAGE_MARGIN);
-}
+/** Lightbox zoom bounds and wheel/button step. */
+const MIN_ZOOM = 1;
+const MAX_ZOOM = 5;
+const ZOOM_STEP = 1.25;
+
+/** Extra margin on all four sides while in fullscreen immersion. */
+const FULLSCREEN_MARGIN_BONUS = 48;
 
 /** Paragraph list for the voice: image placeholders speak as nothing. */
 function speakable(paragraphs: string[]): string[] {
@@ -110,11 +111,12 @@ function speakable(paragraphs: string[]): string[] {
 /** Which side panel is open. Only one at a time, so they never stack. */
 type Panel = "none" | "annotations" | "search" | "ai" | "graph" | "toc" | "settings";
 
-/** Distance between neighbouring column boundaries in a paged layout (px). */
+/** Distance between neighbouring column boundaries in a paged layout (px).
+ * `margin` is the final applied side margin. */
 function columnPitch(el: HTMLDivElement, mode: LayoutMode, margin: number): number {
-  const content = el.clientWidth - effectiveMargin(mode, margin) * 2;
-  const colWidth = mode === "double" ? (content - SPREAD_GAP) / 2 : content;
-  return colWidth + SPREAD_GAP;
+  const content = el.clientWidth - margin * 2;
+  const colWidth = mode === "double" ? (content - margin) / 2 : content;
+  return colWidth + margin;
 }
 
 /** Applies a saved fraction along the active axis of the reading viewport. */
@@ -134,6 +136,46 @@ function applyPosition(
   const pitch = columnPitch(el, mode, margin);
   const columns = pitch > 0 ? Math.round((fraction * max) / pitch) : 0;
   el.scrollLeft = Math.min(columns * pitch, Math.max(max, 0));
+}
+
+/** A transparent strip that pads the scroll range so the chapter's last page
+ * also starts exactly on a column boundary. */
+interface TailPad {
+  left: number;
+  width: number;
+}
+
+/**
+ * Chapter content rarely spans an exact multiple of the column pitch, so the
+ * maximum scroll offset lands mid-column and the last page shows slivers of
+ * its neighbours. Extends the scroll range with an absolutely-positioned
+ * spacer until the end aligns with the grid.
+ */
+function alignTail(
+  el: HTMLDivElement,
+  mode: LayoutMode,
+  margin: number,
+  ref: React.RefObject<TailPad | null>,
+  set: (pad: TailPad | null) => void,
+): void {
+  if (mode === "scroll") {
+    if (ref.current !== null) {
+      ref.current = null;
+      set(null);
+    }
+    return;
+  }
+  const pitch = columnPitch(el, mode, margin);
+  // Exclude the currently rendered spacer so the measurement is idempotent.
+  const contentEnd = el.scrollWidth - (ref.current?.width ?? 0);
+  const max = contentEnd - el.clientWidth;
+  const width = pitch > 0 && max > 0 ? (pitch - (max % pitch)) % pitch : 0;
+  const next = width > 0 ? { left: contentEnd, width } : null;
+  const prev = ref.current;
+  if (next?.width !== prev?.width || next?.left !== prev?.left) {
+    ref.current = next;
+    set(next);
+  }
 }
 
 interface ReaderViewProps {
@@ -175,13 +217,14 @@ function ReaderView({
     setFontSize,
     lineHeightIdx,
     paraGapIdx,
-    marginIdx,
+    marginX,
+    marginY,
     indent,
     surface: surfaceKey,
     customSurface,
     pageTransition,
     layoutMode,
-    autoScrollIdx,
+    autoScrollSpeed,
     readingSpeed,
     setReadingSpeed,
     showPageNumbers,
@@ -215,6 +258,9 @@ function ReaderView({
   const [aiContext, setAiContext] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [autoScrolling, setAutoScrolling] = useState(false);
+  // End-of-chapter column alignment spacer; mirror kept for idempotent measures.
+  const [tail, setTail] = useState<TailPad | null>(null);
+  const tailRef = useRef<TailPad | null>(null);
 
   // A chapter named in the URL wins over the saved position: arriving from a
   // search result means "open here", not "resume".
@@ -247,9 +293,12 @@ function ReaderView({
   // Mirror of the layout mode so scroll-dependent callbacks never go stale;
   // kept in sync by the layout effect below.
   const layoutModeRef = useRef<LayoutMode>(layoutMode);
-  // Same trick for the page margin: it sets the column pitch. Synced by an
-  // effect below, mirroring layoutModeRef.
-  const marginRef = useRef<number>(PAGE_MARGINS[marginIdx]!);
+  // Same trick for the side margin: it sets the column pitch. Holds the final
+  // applied value (setting + fullscreen bonus), synced by an effect below,
+  // mirroring layoutModeRef.
+  const marginRef = useRef<number>(marginX + (fullscreen ? FULLSCREEN_MARGIN_BONUS : 0));
+  /** Continuous scroll vs paged single/double spread. */
+  const paged = layoutMode !== "scroll";
   /** Viewport width, drives the column layout of paged modes. */
   const [viewportW, setViewportW] = useState(0);
   /** Previous progress sample for the sustained reading speed estimate. */
@@ -261,11 +310,25 @@ function ReaderView({
   /** Book image opened in the lightbox viewer, an index into the book-wide `bookImages`. */
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const flipHintTimer = useRef<number | null>(null);
+  // WebKit synthesizes mousemoves when content scrolls under a resting cursor
+  // (keyboard and wheel flips), which would wake the flip chrome. Only real
+  // pointer travel re-reveals it; pointer-down still always does.
+  const lastPointer = useRef({ x: 0, y: 0 });
   const revealFlipHint = useCallback(() => {
     setFlipHint(true);
     if (flipHintTimer.current !== null) window.clearTimeout(flipHintTimer.current);
     flipHintTimer.current = window.setTimeout(() => setFlipHint(false), 2000);
   }, []);
+  const revealFlipHintOnMove = useCallback(
+    (event: React.MouseEvent) => {
+      const dx = event.clientX - lastPointer.current.x;
+      const dy = event.clientY - lastPointer.current.y;
+      lastPointer.current = { x: event.clientX, y: event.clientY };
+      if (Math.hypot(dx, dy) < 3) return;
+      revealFlipHint();
+    },
+    [revealFlipHint],
+  );
   useEffect(
     () => () => {
       if (flipHintTimer.current !== null) window.clearTimeout(flipHintTimer.current);
@@ -356,7 +419,10 @@ function ReaderView({
     if (chapter.data == null) return;
     const el = scrollRef.current;
     if (!el) return;
-    const frame = requestAnimationFrame(() => applyPending(el));
+    const frame = requestAnimationFrame(() => {
+      alignTail(el, layoutModeRef.current, marginRef.current, tailRef, setTail);
+      applyPending(el);
+    });
     return () => cancelAnimationFrame(frame);
   }, [chapter.data, applyPending]);
 
@@ -364,13 +430,41 @@ function ReaderView({
   useEffect(() => {
     layoutModeRef.current = layoutMode;
     const el = scrollRef.current;
+    if (layoutMode === "scroll" && tailRef.current !== null) {
+      tailRef.current = null;
+      setTail(null);
+    }
     if (el) applyPosition(el, fractionRef.current, layoutMode, marginRef.current);
   }, [layoutMode]);
 
   // Keep the margin mirror fresh; margin is not needed for rendering effects.
   useEffect(() => {
-    marginRef.current = PAGE_MARGINS[marginIdx]!;
-  }, [marginIdx]);
+    marginRef.current = marginX + (fullscreen ? FULLSCREEN_MARGIN_BONUS : 0);
+  }, [fullscreen, marginX]);
+
+  // Any typography or side-margin change re-flows the columns mid-read; the
+  // viewport must re-anchor on the new pitch, otherwise it lands between column
+  // boundaries and shows sliced-off slivers of the neighbouring pages. The
+  // layout fingerprint skips the work when nothing that re-flows changed
+  // (deps-array form trips exhaustive-deps: these inputs intentionally trigger
+  // without being read inside).
+  const reflowKeyRef = useRef("");
+  useEffect(() => {
+    const sideMargin = marginX + (fullscreen ? FULLSCREEN_MARGIN_BONUS : 0);
+    const key = paged
+      ? `${fontSize}|${lineHeightIdx}|${paraGapIdx}|${indent ? 1 : 0}|${settings.fontFamily}|${sideMargin}`
+      : "";
+    if (key === reflowKeyRef.current) return;
+    reflowKeyRef.current = key;
+    if (!paged) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const frame = requestAnimationFrame(() => {
+      alignTail(el, layoutModeRef.current, sideMargin, tailRef, setTail);
+      applyPosition(el, fractionRef.current, layoutModeRef.current, sideMargin);
+    });
+    return () => cancelAnimationFrame(frame);
+  });
 
   // Track the viewport width; paged modes lay the chapter out in columns and
   // re-anchor the position whenever the columns re-flow.
@@ -380,16 +474,15 @@ function ReaderView({
     const observer = new ResizeObserver(() => {
       setViewportW(el.clientWidth);
       if (layoutModeRef.current !== "scroll") {
-        requestAnimationFrame(() =>
-          applyPosition(el, fractionRef.current, layoutModeRef.current, marginRef.current),
-        );
+        requestAnimationFrame(() => {
+          alignTail(el, layoutModeRef.current, marginRef.current, tailRef, setTail);
+          applyPosition(el, fractionRef.current, layoutModeRef.current, marginRef.current);
+        });
       }
     });
     observer.observe(el);
     return () => observer.disconnect();
   }, []);
-
-  const paged = layoutMode !== "scroll";
 
   /** Flips one page in a paged layout; rolls into the neighbouring chapter at the edges. */
   const flip = useCallback(
@@ -520,6 +613,11 @@ function ReaderView({
         event.preventDefault();
         return;
       }
+      if (event.key === "Escape" && panel !== "none") {
+        if (panel === "search") setSearch("");
+        setPanel("none");
+        return;
+      }
       if (event.key === "Escape" && fullscreen) {
         void toggleFullscreen();
         return;
@@ -533,24 +631,41 @@ function ReaderView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [chapterIdx, bookImages.length, flip, fullscreen, goTo, lightboxIdx, paged, toggleFullscreen]);
+  }, [
+    chapterIdx,
+    bookImages.length,
+    flip,
+    fullscreen,
+    goTo,
+    lightboxIdx,
+    panel,
+    paged,
+    toggleFullscreen,
+  ]);
 
-  // Auto-scroll: advances the viewport along the active axis until it runs out.
+  // Auto-scroll: advances the viewport down the scroll layout until it runs
+  // out. Paged layouts move in whole flipped pages, so auto-scroll only runs
+  // in the scroll layout and a running session stops when the layout changes.
+  // Sub-pixel per-frame steps are folded across frames (see `foldScrollDelta`),
+  // otherwise slow speeds on high-refresh displays round away to no movement.
   useEffect(() => {
     if (!autoScrolling) return;
     let raf = 0;
     let last = performance.now();
+    let carry = 0;
     const step = (now: number) => {
       const el = scrollRef.current;
-      if (!el) return;
+      if (!el || layoutModeRef.current !== "scroll") {
+        setAutoScrolling(false);
+        return;
+      }
       const dt = Math.min((now - last) / 1000, 0.25);
       last = now;
-      const pagedNow = layoutModeRef.current !== "scroll";
-      if (pagedNow) el.scrollLeft += AUTO_SCROLL_SPEEDS[autoScrollIdx]! * dt;
-      else el.scrollTop += AUTO_SCROLL_SPEEDS[autoScrollIdx]! * dt;
-      const max = pagedNow ? el.scrollWidth - el.clientWidth : el.scrollHeight - el.clientHeight;
-      const pos = pagedNow ? el.scrollLeft : el.scrollTop;
-      if (pos >= max - 1) {
+      const fold = foldScrollDelta(autoScrollSpeed, dt, carry);
+      carry = fold.carry;
+      if (fold.delta !== 0) el.scrollTop += fold.delta;
+      const max = el.scrollHeight - el.clientHeight;
+      if (el.scrollTop >= max - 1) {
         setAutoScrolling(false);
         return;
       }
@@ -558,7 +673,7 @@ function ReaderView({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [autoScrolling, autoScrollIdx]);
+  }, [autoScrolling, autoScrollSpeed]);
 
   // The hook reads the rate from a ref, so a change lands on the next paragraph.
   useEffect(() => {
@@ -636,7 +751,7 @@ function ReaderView({
     if (!paged || !showPageNumbers) return;
     const el = scrollRef.current;
     if (!el) return;
-    const pageMargin = Math.max(PAGE_MARGINS[marginIdx]!, MIN_PAGE_MARGIN);
+    const pageMargin = marginX + (fullscreen ? FULLSCREEN_MARGIN_BONUS : 0);
     const pitch = columnPitch(el, layoutMode, pageMargin);
     const max = el.scrollWidth - el.clientWidth;
     if (pitch <= 0) return;
@@ -644,7 +759,7 @@ function ReaderView({
       page: Math.round(el.scrollLeft / pitch) + 1,
       pages: Math.round(max / pitch) + 1,
     });
-  }, [layoutMode, marginIdx, paged, showPageNumbers]);
+  }, [fullscreen, layoutMode, marginX, paged, showPageNumbers]);
 
   // Flush a pending save on unmount.
   useEffect(() => {
@@ -744,14 +859,22 @@ function ReaderView({
 
   const total = chapters.length;
   const chapterTitle = chapter.data?.title ?? "";
-  const surface = resolveSurface(surfaceKey, customSurface);
-  const margin = effectiveMargin(layoutMode, PAGE_MARGINS[marginIdx]!);
+  // Each appearance keeps its own reading surface: a dark shell starts on the
+  // night palette, and both stay user-changeable in the settings panel.
+  const appTheme = useResolvedTheme();
+  const surface = resolveSurface(
+    appTheme === "dark" ? settings.nightSurface : surfaceKey,
+    customSurface,
+  );
+  const fullscreenBonus = fullscreen ? FULLSCREEN_MARGIN_BONUS : 0;
+  const margin = marginX + fullscreenBonus;
+  const blockMargin = marginY + fullscreenBonus;
 
   /** Column width for the paged layouts; `undefined` keeps flow layout. */
   const columnWidth = useMemo(() => {
     if (!paged || viewportW <= 0) return undefined;
     const content = viewportW - margin * 2;
-    return layoutMode === "double" ? (content - SPREAD_GAP) / 2 : content;
+    return layoutMode === "double" ? (content - margin) / 2 : content;
   }, [layoutMode, margin, paged, viewportW]);
 
   const chapterRemaining = Math.max(
@@ -787,14 +910,12 @@ function ReaderView({
     lineHeight: LINE_HEIGHTS[lineHeightIdx],
     color: surface.fg,
     paddingInline: margin,
-    // Paged layouts breathe like a paper page: real margins on all four
-    // sides, not just left/right.
+    paddingBlock: blockMargin,
     ...(columnWidth !== undefined
       ? {
           height: "100%",
-          paddingBlock: margin,
           columnWidth,
-          columnGap: SPREAD_GAP,
+          columnGap: margin,
           columnFill: "auto",
         }
       : {}),
@@ -920,7 +1041,7 @@ function ReaderView({
           pointer-down and fade out after 2s, so they never sit on the text. */}
       <div
         className="relative flex min-h-0 flex-1"
-        onMouseMove={revealFlipHint}
+        onMouseMove={revealFlipHintOnMove}
         onPointerDown={revealFlipHint}
         onMouseLeave={() => setFlipHint(false)}
       >
@@ -929,13 +1050,13 @@ function ReaderView({
           onScroll={onScroll}
           className={cn(
             "min-h-0 flex-1",
-            paged ? "overflow-x-auto overflow-y-hidden" : "overflow-y-auto",
+            paged ? "relative overflow-x-auto overflow-y-hidden" : "overflow-y-auto",
           )}
           style={{ background: surface.background }}
         >
           <article
             key={chapterIdx}
-            className={cn("prose-reader mx-auto", !paged && "max-w-2xl py-10", transitionClass)}
+            className={cn("prose-reader mx-auto", !paged && "max-w-3xl", transitionClass)}
             style={articleStyle}
           >
             {chapter.isPending ? (
@@ -960,7 +1081,7 @@ function ReaderView({
                     key={key}
                     data-para-idx={idx}
                     className={cn(
-                      "text-pretty",
+                      "text-justify text-pretty",
                       speechParagraph === idx && "bg-accent-soft -mx-2 rounded-lg px-2",
                     )}
                     style={{
@@ -990,6 +1111,13 @@ function ReaderView({
               )
             )}
           </article>
+          {paged && tail && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute top-0 h-px"
+              style={{ left: tail.left, width: tail.width }}
+            />
+          )}
         </div>
 
         {/* Page indicator (settings-gated) and a hairline progress rail that
@@ -1002,12 +1130,21 @@ function ReaderView({
             {pageInfo.page} / {pageInfo.pages} 页
           </p>
         )}
+        {/* Quiet progress rail in the text colour: a barely-there track that
+            never competes with the page, and a whisper fill while active. */}
+        <div
+          className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-px"
+          style={{ background: surface.fg, opacity: 0.08 }}
+        />
         <div
           className={cn(
-            "bg-accent absolute bottom-0 left-0 z-10 h-0.5 transition-opacity duration-300 motion-reduce:transition-none",
-            flipHint ? "opacity-100" : "opacity-0",
+            "absolute bottom-0 left-0 z-10 h-px transition-opacity duration-300 motion-reduce:transition-none",
+            flipHint ? "opacity-40" : "opacity-0",
           )}
-          style={{ width: `${Math.round(displayProgress * 100)}%` }}
+          style={{
+            width: `${Math.round(displayProgress * 100)}%`,
+            background: surface.fg,
+          }}
         />
 
         {paged && (
@@ -1078,8 +1215,11 @@ function ReaderView({
             <span className="text-[11px] font-semibold">{speechRate}×</span>
           </GlassIconButton>
           <GlassIconButton
-            label={autoScrolling ? "暂停自动滚动" : "开始自动滚动"}
+            label={
+              paged ? "自动滚动仅支持滚动排版" : autoScrolling ? "暂停自动滚动" : "开始自动滚动"
+            }
             size="sm"
+            disabled={paged}
             onClick={() => setAutoScrolling((on) => !on)}
           >
             {autoScrolling ? <Pause size={16} /> : <ArrowDown size={16} />}
@@ -1144,101 +1284,105 @@ function ReaderView({
         </div>
       )}
 
-      {panel === "toc" && (
-        <ReaderDrawer title="目录与书签" onClose={() => setPanel("none")}>
-          <TocPanel
-            chapters={chapters}
-            currentIdx={chapterIdx}
-            bookmarks={bookmarks ?? []}
-            busy={createBookmark.isPending || deleteBookmark.isPending}
-            onJump={(idx) => {
+      {/* One drawer at a time; AnimatePresence keeps it mounted while it
+          slides out, and clicking the dimmed backdrop dismisses it. */}
+      <AnimatePresence>
+        {panel !== "none" && (
+          <ReaderDrawer
+            key="reader-drawer"
+            title={
+              panel === "toc"
+                ? "目录与书签"
+                : panel === "settings"
+                  ? "阅读设置"
+                  : panel === "annotations"
+                    ? "标注"
+                    : panel === "search"
+                      ? "搜索正文"
+                      : panel === "graph"
+                        ? "知识图谱"
+                        : "AI 助手"
+            }
+            onClose={() => {
+              if (panel === "search") setSearch("");
               setPanel("none");
-              goTo(idx);
             }}
-            onJumpBookmark={(bookmark: Bookmark) => {
-              setPanel("none");
-              jumpTo(bookmark.chapterIdx, bookmark.fraction);
-            }}
-            onDeleteBookmark={(id) => deleteBookmark.mutate(id)}
-            onAddBookmark={addBookmark}
-          />
-        </ReaderDrawer>
-      )}
-
-      {panel === "settings" && (
-        <ReaderDrawer title="阅读设置" onClose={() => setPanel("none")}>
-          <SettingsPanel />
-        </ReaderDrawer>
-      )}
-
-      {panel === "annotations" && (
-        <ReaderDrawer title="标注" onClose={() => setPanel("none")}>
-          <AnnotationList
-            annotations={annotations ?? []}
-            busy={deleteAnnotation.isPending}
-            onDelete={(id) => deleteAnnotation.mutate(id)}
-          />
-        </ReaderDrawer>
-      )}
-
-      {panel === "search" && (
-        <ReaderDrawer
-          title="搜索正文"
-          onClose={() => {
-            setSearch("");
-            setPanel("none");
-          }}
-        >
-          <SearchPanel
-            bookId={bookId}
-            onPick={(hit, needle) => {
-              setSearch(needle);
-              pickHit(hit);
-            }}
-          />
-        </ReaderDrawer>
-      )}
-
-      {panel === "graph" && (
-        <ReaderDrawer title="知识图谱" onClose={() => setPanel("none")}>
-          <GraphPanel
-            bookId={bookId}
-            onOpenChapter={(idx) => {
-              setPanel("none");
-              goTo(idx);
-            }}
-          />
-        </ReaderDrawer>
-      )}
-
-      {panel === "ai" && (
-        <ReaderDrawer title="AI 助手" onClose={() => setPanel("none")}>
-          <AskAiPanel
-            bookId={bookId}
-            selection={aiContext}
-            onClearSelection={() => setAiContext(null)}
-            chapterTitle={chapterTitle || `第 ${chapterIdx + 1} 章`}
-            paragraphs={chapter.data?.paragraphs ?? []}
-            onJump={jumpToCitation}
-          />
-        </ReaderDrawer>
-      )}
+          >
+            {panel === "toc" && (
+              <TocPanel
+                chapters={chapters}
+                currentIdx={chapterIdx}
+                bookmarks={bookmarks ?? []}
+                busy={createBookmark.isPending || deleteBookmark.isPending}
+                onJump={(idx) => {
+                  setPanel("none");
+                  goTo(idx);
+                }}
+                onJumpBookmark={(bookmark: Bookmark) => {
+                  setPanel("none");
+                  jumpTo(bookmark.chapterIdx, bookmark.fraction);
+                }}
+                onDeleteBookmark={(id) => deleteBookmark.mutate(id)}
+                onAddBookmark={addBookmark}
+              />
+            )}
+            {panel === "settings" && <SettingsPanel />}
+            {panel === "annotations" && (
+              <AnnotationList
+                annotations={annotations ?? []}
+                busy={deleteAnnotation.isPending}
+                onDelete={(id) => deleteAnnotation.mutate(id)}
+              />
+            )}
+            {panel === "search" && (
+              <SearchPanel
+                bookId={bookId}
+                onPick={(hit, needle) => {
+                  setSearch(needle);
+                  pickHit(hit);
+                }}
+              />
+            )}
+            {panel === "graph" && (
+              <GraphPanel
+                bookId={bookId}
+                onOpenChapter={(idx) => {
+                  setPanel("none");
+                  goTo(idx);
+                }}
+              />
+            )}
+            {panel === "ai" && (
+              <AskAiPanel
+                bookId={bookId}
+                selection={aiContext}
+                onClearSelection={() => setAiContext(null)}
+                chapterTitle={chapterTitle || `第 ${chapterIdx + 1} 章`}
+                paragraphs={chapter.data?.paragraphs ?? []}
+                onJump={jumpToCitation}
+              />
+            )}
+          </ReaderDrawer>
+        )}
+      </AnimatePresence>
 
       {/* Lightbox viewer: blank areas close, Esc closes, arrows flip the book's images. */}
-      {lightboxIdx !== null && bookImages.length > 0 && (
-        <ImageLightbox
-          bookId={bookId}
-          images={bookImages}
-          chapters={chapters}
-          index={Math.min(lightboxIdx, bookImages.length - 1)}
-          onClose={() => setLightboxIdx(null)}
-          onIndex={setLightboxIdx}
-          onJump={(target) => {
-            setLightboxIdx(null);
-            goTo(target);
-          }}
-        />
-      )}
+      <AnimatePresence>
+        {lightboxIdx !== null && bookImages.length > 0 && (
+          <ImageLightbox
+            bookId={bookId}
+            images={bookImages}
+            chapters={chapters}
+            index={Math.min(lightboxIdx, bookImages.length - 1)}
+            onClose={() => setLightboxIdx(null)}
+            onIndex={setLightboxIdx}
+            onJump={(target) => {
+              setLightboxIdx(null);
+              goTo(target);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -1271,6 +1415,46 @@ function ImageLightbox({
   const path = current.path;
   const location = chapters[current.chapterIdx]?.title ?? `第 ${current.chapterIdx + 1} 章`;
 
+  // Viewer transform state: wheel/buttons zoom, the button spins, and a zoomed
+  // picture pans by dragging. When the image changes, the render-time adjust
+  // below resets everything for the new picture.
+  const [zoom, setZoom] = useState(1);
+  const [rotation, setRotation] = useState(0);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const dragStartRef = useRef<{ x: number; y: number; baseX: number; baseY: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  const [prevPath, setPrevPath] = useState(path);
+  if (prevPath !== path) {
+    setPrevPath(path);
+    setZoom(1);
+    setRotation(0);
+    setPan({ x: 0, y: 0 });
+  }
+
+  // Wheel zoom needs a non-passive listener to be able to preventDefault.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    const onWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      setZoom((z) =>
+        Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z * (event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP))),
+      );
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  const clampPan = (value: { x: number; y: number }) => {
+    const limit = 200 * zoom;
+    return {
+      x: Math.min(limit, Math.max(-limit, value.x)),
+      y: Math.min(limit, Math.max(-limit, value.y)),
+    };
+  };
+
   useEffect(() => {
     let alive = true;
     let url: string | null = null;
@@ -1292,7 +1476,14 @@ function ImageLightbox({
     "glass-solid shadow-panel text-text-1 flex h-9 w-9 items-center justify-center rounded-full transition-opacity hover:opacity-90";
 
   return (
-    <div className="fixed inset-0 z-[100] flex flex-col bg-black/85 p-8">
+    <motion.div
+      ref={rootRef}
+      className="fixed inset-0 z-[100] flex flex-col bg-black/85 p-8"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.18 }}
+    >
       <button
         type="button"
         aria-label="关闭预览"
@@ -1301,7 +1492,7 @@ function ImageLightbox({
       />
       {/* Blank space passes through (pointer-events-none) to the close button
           underneath, so clicking anywhere outside the picture dismisses it. */}
-      <div className="pointer-events-none relative flex min-h-0 flex-1 items-center justify-center">
+      <div className="pointer-events-none relative flex min-h-0 flex-1 items-center justify-center overflow-hidden">
         {index > 0 && (
           <button
             type="button"
@@ -1313,11 +1504,53 @@ function ImageLightbox({
           </button>
         )}
         {src && (
-          <img
+          <motion.img
+            key={path}
             src={src}
             alt=""
+            initial={{ opacity: 0, scale: 0.97 }}
+            animate={{ opacity: 1, scale: 1 }}
+            transition={{ duration: 0.18 }}
             className="shadow-panel pointer-events-auto max-h-full max-w-full rounded-xl object-contain"
+            style={{
+              transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
+              transition: dragging ? "none" : "transform 0.22s ease-out",
+              cursor: zoom > 1 ? (dragging ? "grabbing" : "grab") : "zoom-in",
+            }}
             draggable={false}
+            onDoubleClick={() => {
+              if (zoom > 1) {
+                setZoom(1);
+                setPan({ x: 0, y: 0 });
+              } else {
+                setZoom(2.5);
+              }
+            }}
+            onPointerDown={(event) => {
+              if (zoom <= 1) return;
+              event.currentTarget.setPointerCapture(event.pointerId);
+              dragStartRef.current = {
+                x: event.clientX,
+                y: event.clientY,
+                baseX: pan.x,
+                baseY: pan.y,
+              };
+              setDragging(true);
+            }}
+            onPointerMove={(event) => {
+              const drag = dragStartRef.current;
+              if (!drag) return;
+              setPan(
+                clampPan({
+                  x: drag.baseX + (event.clientX - drag.x),
+                  y: drag.baseY + (event.clientY - drag.y),
+                }),
+              );
+            }}
+            onPointerUp={() => {
+              dragStartRef.current = null;
+              setDragging(false);
+            }}
           />
         )}
         {index < images.length - 1 && (
@@ -1331,7 +1564,49 @@ function ImageLightbox({
           </button>
         )}
       </div>
-      <div className="relative mt-5 flex items-center justify-center gap-3">
+      <div className="relative mt-5 flex flex-wrap items-center justify-center gap-3">
+        <div className="glass-solid shadow-panel pointer-events-auto flex items-center gap-1 rounded-full p-1">
+          <button
+            type="button"
+            aria-label="缩小"
+            disabled={zoom <= MIN_ZOOM}
+            onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / ZOOM_STEP))}
+            className="text-text-1 flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80 disabled:opacity-30"
+          >
+            <Minus size={14} />
+          </button>
+          <button
+            type="button"
+            aria-label="重置缩放与旋转"
+            title="重置缩放与旋转"
+            onClick={() => {
+              setZoom(1);
+              setRotation(0);
+              setPan({ x: 0, y: 0 });
+            }}
+            className="text-text-1 w-12 text-center text-xs tabular-nums transition-opacity hover:opacity-80"
+          >
+            {Math.round(zoom * 100)}%
+          </button>
+          <button
+            type="button"
+            aria-label="放大"
+            disabled={zoom >= MAX_ZOOM}
+            onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z * ZOOM_STEP))}
+            className="text-text-1 flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80 disabled:opacity-30"
+          >
+            <Plus size={14} />
+          </button>
+          <button
+            type="button"
+            aria-label="旋转 90 度"
+            title="旋转 90 度"
+            onClick={() => setRotation((r) => (r + 90) % 360)}
+            className="text-text-1 flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80"
+          >
+            <ArrowClockwise size={14} />
+          </button>
+        </div>
         <span className="text-xs text-white/70 tabular-nums">
           {index + 1} / {images.length}
         </span>
@@ -1360,7 +1635,7 @@ function ImageLightbox({
           关闭（Esc）
         </button>
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -1578,7 +1853,10 @@ function ChapterImage({
   );
 }
 
-/** Right-hand drawer shared by the annotation list and the search panel. */ function ReaderDrawer({
+/** Right-hand drawer over a dimmed backdrop shared by every reader panel.
+ * The backdrop click and the ✕ both dismiss; motion slides the sheet in from
+ * the right edge and back out on close, gated by reduced motion. */
+function ReaderDrawer({
   title,
   onClose,
   children,
@@ -1587,22 +1865,41 @@ function ChapterImage({
   onClose: () => void;
   children: ReactNode;
 }) {
+  const reduce = useReducedMotion();
   return (
-    <aside className="fixed inset-y-0 right-0 z-40 w-80 max-w-[85vw] p-3">
-      <div className="glass-solid shadow-panel flex h-full flex-col rounded-2xl">
-        <div className="border-hairline flex items-center justify-between border-b px-4 py-3">
-          <p className="text-text-1 text-sm font-medium">{title}</p>
-          <button
-            type="button"
-            aria-label={`关闭${title}`}
-            onClick={onClose}
-            className="text-text-3 hover:text-text-1 transition-colors"
-          >
-            <X size={15} />
-          </button>
+    <aside className="fixed inset-0 z-40">
+      <motion.button
+        type="button"
+        aria-label="关闭面板"
+        className="absolute inset-0 cursor-default bg-black/25"
+        initial={reduce ? { opacity: 1 } : { opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={reduce ? { opacity: 1 } : { opacity: 0 }}
+        transition={{ duration: 0.2 }}
+        onClick={onClose}
+      />
+      <motion.div
+        className="absolute inset-y-0 right-0 w-80 max-w-[85vw] p-3"
+        initial={reduce ? { opacity: 0 } : { x: "110%" }}
+        animate={{ x: 0, opacity: 1 }}
+        exit={reduce ? { opacity: 0 } : { x: "110%", opacity: 1 }}
+        transition={{ type: "spring", stiffness: 320, damping: 34 }}
+      >
+        <div className="glass-solid shadow-panel flex h-full flex-col rounded-2xl">
+          <div className="border-hairline flex items-center justify-between border-b px-4 py-3">
+            <p className="text-text-1 text-sm font-medium">{title}</p>
+            <button
+              type="button"
+              aria-label={`关闭${title}`}
+              onClick={onClose}
+              className="text-text-3 hover:text-text-1 transition-colors"
+            >
+              <X size={15} />
+            </button>
+          </div>
+          {children}
         </div>
-        {children}
-      </div>
+      </motion.div>
     </aside>
   );
 }

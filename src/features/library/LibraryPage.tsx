@@ -1,5 +1,6 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { AnimatePresence, motion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   BookOpen,
@@ -144,21 +145,29 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             </GlassButton>
           </div>
         </div>
-        {webNotice && (
-          <div className="border-hairline glass-2 mt-4 flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5">
-            <p className="text-text-2 text-sm">
-              网页版仅用于界面预览，导入书籍需要下载桌面端应用（阅读数据保存在本机）。
-            </p>
-            <button
-              type="button"
-              aria-label="关闭提示"
-              className="text-text-3 hover:text-text-1 shrink-0"
-              onClick={() => setWebNotice(false)}
+        <AnimatePresence>
+          {webNotice && (
+            <motion.div
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.2 }}
+              className="border-hairline glass-2 mt-4 flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5"
             >
-              <X size={14} />
-            </button>
-          </div>
-        )}
+              <p className="text-text-2 text-sm">
+                网页版仅用于界面预览，导入书籍需要下载桌面端应用（阅读数据保存在本机）。
+              </p>
+              <button
+                type="button"
+                aria-label="关闭提示"
+                className="text-text-3 hover:text-text-1 shrink-0 transition-colors"
+                onClick={() => setWebNotice(false)}
+              >
+                <X size={14} />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </header>
 
       <div className="flex-1 overflow-y-auto px-8 pb-8">

@@ -1,13 +1,21 @@
 import { useRef } from "react";
 import { ImageSquare } from "@phosphor-icons/react";
+import { motion, useReducedMotion } from "motion/react";
 
 import { cn } from "@/lib/cn";
+import { useResolvedTheme } from "@/hooks/useTheme";
 import {
-  AUTO_SCROLL_SPEEDS,
+  DEFAULT_AUTO_SCROLL_SPEED,
   LINE_HEIGHTS,
+  MAX_AUTO_SCROLL_SPEED,
   MAX_FONT_SIZE,
+  MAX_MARGIN_X,
+  MAX_MARGIN_Y,
+  MIN_AUTO_SCROLL_SPEED,
   MIN_FONT_SIZE,
-  PAGE_MARGINS,
+  MIN_MARGIN_X,
+  MIN_MARGIN_Y,
+  MARGIN_X_PRESETS,
   PARA_GAPS,
   useReaderSettings,
 } from "@/stores/reader";
@@ -26,7 +34,12 @@ import {
 export function SettingsPanel() {
   const settings = useReaderSettings();
   const { update } = settings;
+  const appTheme = useResolvedTheme();
+  // The picker edits the surface of the appearance currently active.
+  const surfaceField = appTheme === "dark" ? "nightSurface" : "surface";
+  const activeSurface = appTheme === "dark" ? settings.nightSurface : settings.surface;
   const fileRef = useRef<HTMLInputElement>(null);
+  const reduce = useReducedMotion();
 
   const pickImage = async (file: File) => {
     update({ surface: "custom", customSurface: await compressImage(file) });
@@ -95,11 +108,42 @@ export function SettingsPanel() {
         />
       </Group>
       <Group label="页边距">
-        <Chips
-          options={PAGE_MARGINS.map((_, index) => ({ key: index, label: MARGIN_LABELS[index]! }))}
-          value={settings.marginIdx}
-          onChange={(index) => update({ marginIdx: index })}
-        />
+        <div className="w-full min-w-0">
+          <div className="flex flex-wrap gap-1.5">
+            {MARGIN_X_PRESETS.map((preset, index) => (
+              <motion.button
+                key={preset}
+                type="button"
+                aria-pressed={nearestMargin(settings.marginX) === preset}
+                onClick={() => update({ marginX: preset })}
+                whileTap={reduce ? undefined : { scale: 0.94 }}
+                transition={{ type: "spring", stiffness: 480, damping: 28 }}
+                className={cn(
+                  "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+                  nearestMargin(settings.marginX) === preset && "border-accent text-accent",
+                )}
+              >
+                {MARGIN_LABELS[index]!}
+              </motion.button>
+            ))}
+          </div>
+          <SliderRow
+            label="左右"
+            readout={`${Math.round(settings.marginX)} px`}
+            min={MIN_MARGIN_X}
+            max={MAX_MARGIN_X}
+            value={settings.marginX}
+            onChange={(value) => update({ marginX: value })}
+          />
+          <SliderRow
+            label="上下"
+            readout={`${Math.round(settings.marginY)} px`}
+            min={MIN_MARGIN_Y}
+            max={MAX_MARGIN_Y}
+            value={settings.marginY}
+            onChange={(value) => update({ marginY: value })}
+          />
+        </div>
       </Group>
       <Group label="段首缩进">
         <Chips
@@ -125,14 +169,16 @@ export function SettingsPanel() {
       <Group label="阅读背景">
         <div className="flex flex-wrap items-center gap-1.5">
           {READING_SURFACES.map((surface) => (
-            <button
+            <motion.button
               key={surface.key}
               type="button"
-              aria-pressed={settings.surface === surface.key}
-              onClick={() => update({ surface: surface.key })}
+              aria-pressed={activeSurface === surface.key}
+              onClick={() => update({ [surfaceField]: surface.key })}
+              whileTap={reduce ? undefined : { scale: 0.94 }}
+              transition={{ type: "spring", stiffness: 480, damping: 28 }}
               className={cn(
                 "border-hairline text-text-2 hover:text-text-1 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
-                settings.surface === surface.key && "border-accent text-accent",
+                activeSurface === surface.key && "border-accent text-accent",
               )}
             >
               <span
@@ -140,24 +186,26 @@ export function SettingsPanel() {
                 style={{ background: surface.background }}
               />
               {surface.label}
-            </button>
+            </motion.button>
           ))}
-          <button
+          <motion.button
             type="button"
-            aria-pressed={settings.surface === "custom"}
+            aria-pressed={activeSurface === "custom"}
             onClick={() => fileRef.current?.click()}
+            whileTap={reduce ? undefined : { scale: 0.94 }}
+            transition={{ type: "spring", stiffness: 480, damping: 28 }}
             className={cn(
               "border-hairline text-text-2 hover:text-text-1 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
-              settings.surface === "custom" && "border-accent text-accent",
+              activeSurface === "custom" && "border-accent text-accent",
             )}
           >
             <ImageSquare size={12} /> 自定义图片
-          </button>
-          {settings.surface === "custom" && (
+          </motion.button>
+          {activeSurface === "custom" && (
             <button
               type="button"
               onClick={() => {
-                update({ surface: "standard", customSurface: null });
+                update({ [surfaceField]: "standard", customSurface: null });
               }}
               className="text-text-3 hover:text-text-1 px-1 text-[12px] transition-colors"
             >
@@ -165,17 +213,57 @@ export function SettingsPanel() {
             </button>
           )}
         </div>
+        {appTheme === "dark" && (
+          <p className="text-text-3 mt-1.5 text-[12px]">
+            当前为深色外观的阅读背景，浅色外观可在浅色模式下单独设置
+          </p>
+        )}
       </Group>
 
       <Group label="自动滚动速度">
-        <Chips
-          options={AUTO_SCROLL_SPEEDS.map((_, index) => ({
-            key: index,
-            label: AUTO_SCROLL_LABELS[index]!,
-          }))}
-          value={settings.autoScrollIdx}
-          onChange={(index) => update({ autoScrollIdx: index })}
-        />
+        <div className="w-full min-w-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-1.5">
+              {AUTO_SCROLL_PRESETS.map((preset) => (
+                <motion.button
+                  key={preset.speed}
+                  type="button"
+                  aria-pressed={nearestPreset(settings.autoScrollSpeed).speed === preset.speed}
+                  onClick={() => update({ autoScrollSpeed: preset.speed })}
+                  whileTap={reduce ? undefined : { scale: 0.94 }}
+                  transition={{ type: "spring", stiffness: 480, damping: 28 }}
+                  className={cn(
+                    "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+                    nearestPreset(settings.autoScrollSpeed).speed === preset.speed &&
+                      "border-accent text-accent",
+                  )}
+                >
+                  {preset.label}
+                </motion.button>
+              ))}
+            </div>
+            <motion.button
+              type="button"
+              onClick={() => update({ autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED })}
+              whileTap={reduce ? undefined : { scale: 0.94 }}
+              transition={{ type: "spring", stiffness: 480, damping: 28 }}
+              className={cn(
+                "text-text-3 hover:text-text-1 shrink-0 text-[12px] transition-colors",
+                settings.autoScrollSpeed === DEFAULT_AUTO_SCROLL_SPEED && "opacity-40",
+              )}
+            >
+              恢复默认
+            </motion.button>
+          </div>
+          <SliderRow
+            label="速度"
+            readout={`${Math.round(settings.autoScrollSpeed)} px/秒`}
+            min={MIN_AUTO_SCROLL_SPEED}
+            max={MAX_AUTO_SCROLL_SPEED}
+            value={settings.autoScrollSpeed}
+            onChange={(value) => update({ autoScrollSpeed: value })}
+          />
+        </div>
       </Group>
 
       <input
@@ -218,21 +306,24 @@ function Chips<K extends string | number | boolean>({
   value: K;
   onChange: (value: K) => void;
 }) {
+  const reduce = useReducedMotion();
   return (
     <>
       {options.map((option) => (
-        <button
+        <motion.button
           key={String(option.key)}
           type="button"
           aria-pressed={option.key === value}
           onClick={() => onChange(option.key)}
+          whileTap={reduce ? undefined : { scale: 0.94 }}
+          transition={{ type: "spring", stiffness: 480, damping: 28 }}
           className={cn(
             "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
             option.key === value && "border-accent text-accent",
           )}
         >
           {option.label}
-        </button>
+        </motion.button>
       ))}
     </>
   );
@@ -249,23 +340,86 @@ function Stepper({
   disabled: boolean;
   children: React.ReactNode;
 }) {
+  const reduce = useReducedMotion();
   return (
-    <button
+    <motion.button
       type="button"
       aria-label={label}
       onClick={onClick}
       disabled={disabled}
+      whileTap={reduce || disabled ? undefined : { scale: 0.94 }}
+      transition={{ type: "spring", stiffness: 480, damping: 28 }}
       className="border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] font-semibold transition-colors disabled:opacity-40"
     >
       {children}
-    </button>
+    </motion.button>
   );
 }
 
 const LINE_HEIGHT_LABELS = ["紧凑", "标准", "宽松", "特宽"];
 const PARA_GAP_LABELS = ["紧凑", "标准", "宽松", "特宽"];
-const MARGIN_LABELS = ["窄", "标准", "宽", "特宽"];
-const AUTO_SCROLL_LABELS = ["慢", "适中", "快", "极快"];
+const MARGIN_LABELS = ["窄", "标准", "宽松", "特宽"];
+
+/** The margin preset closest to `value`, highlighted so fine-tuning keeps context. */
+function nearestMargin(value: number): number {
+  return MARGIN_X_PRESETS.reduce((best, preset) =>
+    Math.abs(preset - value) < Math.abs(best - value) ? preset : best,
+  );
+}
+
+/** A slider row: label on the left, live value on the right, accent fill. */
+function SliderRow({
+  label,
+  readout,
+  min,
+  max,
+  value,
+  onChange,
+}: {
+  label: string;
+  readout: string;
+  min: number;
+  max: number;
+  value: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <div className="mt-2 flex items-center gap-2.5">
+      <span className="text-text-3 shrink-0 text-[12px]">{label}</span>
+      <input
+        type="range"
+        aria-label={label === "速度" ? "自动滚动速度微调" : `${label}边距微调`}
+        className="range min-w-0 flex-1"
+        min={min}
+        max={max}
+        step={1}
+        value={Math.round(value)}
+        style={{
+          ["--range-fill" as string]: `${((value - min) / (max - min)) * 100}%`,
+        }}
+        onChange={(event) => onChange(Number(event.currentTarget.value))}
+      />
+      <span className="text-accent w-[72px] shrink-0 text-right text-[12px] font-semibold tabular-nums">
+        {readout}
+      </span>
+    </div>
+  );
+}
+
+/** Suggested auto-scroll speeds; the slider fine-tunes between them. */
+const AUTO_SCROLL_PRESETS = [
+  { speed: 40, label: "慢" },
+  { speed: 80, label: "适中" },
+  { speed: 160, label: "快" },
+  { speed: 320, label: "极快" },
+];
+
+/** The preset closest to `speed`, highlighted so fine-tuning keeps context. */
+function nearestPreset(speed: number): (typeof AUTO_SCROLL_PRESETS)[number] {
+  return AUTO_SCROLL_PRESETS.reduce((best, preset) =>
+    Math.abs(preset.speed - speed) < Math.abs(best.speed - speed) ? preset : best,
+  );
+}
 
 /**
  * Downscales a picked image into a JPEG data URL capped at 1600px on the long
