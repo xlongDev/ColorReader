@@ -8,6 +8,8 @@
  * reason: a user image must not decide text contrast.
  */
 
+import type { CSSProperties } from "react";
+
 export interface ReadingSurface {
   key: string;
   label: string;
@@ -15,22 +17,57 @@ export interface ReadingSurface {
   background: string;
   /** Body text color, contrast-checked against `background`. */
   fg: string;
+  /** Solid representative color for tinting the reader chrome (header,
+   * footer, glass buttons) so the whole page reads as one material. */
+  tint: string;
+  /** Which app chrome palette pairs with this surface while reading. */
+  mode: "light" | "dark";
 }
 
 export type PageTransition = "none" | "slide" | "fade" | "paper";
 export type LayoutMode = "scroll" | "single" | "double";
 
 export const READING_SURFACES: ReadingSurface[] = [
-  { key: "standard", label: "标准", background: "#fbfbfd", fg: "#23272e" },
-  { key: "sepia", label: "护眼", background: "#f4ecd8", fg: "#443c2c" },
-  { key: "green", label: "绿色护眼", background: "#e4eee2", fg: "#2c3a2c" },
-  { key: "night", label: "夜间", background: "#15181d", fg: "#c9ced8" },
+  {
+    key: "standard",
+    label: "标准",
+    background: "#fbfbfd",
+    fg: "#23272e",
+    tint: "#f4f5f8",
+    mode: "light",
+  },
+  {
+    key: "sepia",
+    label: "护眼",
+    background: "#f4ecd8",
+    fg: "#443c2c",
+    tint: "#f2e9d2",
+    mode: "light",
+  },
+  {
+    key: "green",
+    label: "绿色护眼",
+    background: "#e4eee2",
+    fg: "#2c3a2c",
+    tint: "#e2ecdf",
+    mode: "light",
+  },
+  {
+    key: "night",
+    label: "夜间",
+    background: "#15181d",
+    fg: "#c9ced8",
+    tint: "#181c23",
+    mode: "dark",
+  },
   {
     key: "paper",
     label: "纸纹",
     background:
       "repeating-linear-gradient(0deg, rgba(120,90,40,0.035) 0px, rgba(120,90,40,0.035) 1px, transparent 1px, transparent 3px), #f7f3ea",
     fg: "#3f3a30",
+    tint: "#f5f1e7",
+    mode: "light",
   },
   {
     key: "linen",
@@ -38,6 +75,8 @@ export const READING_SURFACES: ReadingSurface[] = [
     background:
       "repeating-linear-gradient(45deg, rgba(90,110,90,0.04) 0px, rgba(90,110,90,0.04) 2px, transparent 2px, transparent 6px), #eef0e9",
     fg: "#33382e",
+    tint: "#edefe7",
+    mode: "light",
   },
 ];
 
@@ -53,9 +92,28 @@ export function resolveSurface(key: string, customImage: string | null): Reading
       label: "自定义",
       background: `linear-gradient(${CUSTOM_SURFACE_SCRIM}, ${CUSTOM_SURFACE_SCRIM}), url("${customImage}") center / cover no-repeat`,
       fg: CUSTOM_SURFACE_FG,
+      tint: "#f4f5f8",
+      mode: "light",
     };
   }
   return READING_SURFACES.find((surface) => surface.key === key) ?? READING_SURFACES[0]!;
+}
+
+/** Re-roots the glass token set on a reading surface: chrome styled from these
+ *  derives its ink, hairlines and glass fills from the same paper colours as
+ *  the reading viewport, so everything reads as one material. Ratios mirror
+ *  the theme defaults in globals.css. */
+export function readerGlassVars(surface: ReadingSurface): CSSProperties {
+  return {
+    "--text-1": surface.fg,
+    "--text-2": `color-mix(in srgb, ${surface.fg} 72%, transparent)`,
+    "--text-3": `color-mix(in srgb, ${surface.fg} 60%, transparent)`,
+    "--hairline": `color-mix(in srgb, ${surface.fg} 12%, transparent)`,
+    "--hairline-strong": `color-mix(in srgb, ${surface.fg} 24%, transparent)`,
+    "--surface-1": `color-mix(in srgb, ${surface.fg} 5%, transparent)`,
+    "--surface-2": `color-mix(in srgb, ${surface.fg} 9%, transparent)`,
+    "--surface-3": `color-mix(in srgb, ${surface.tint} 96%, ${surface.fg})`,
+  } as CSSProperties;
 }
 
 export interface FontOption {

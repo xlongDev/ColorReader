@@ -9,6 +9,8 @@ import {
   Globe,
   MagnifyingGlass,
   Sparkle,
+  SquaresFour,
+  Star,
   Sun,
   Upload,
   X,
@@ -16,6 +18,7 @@ import {
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton } from "@/components/glass/button";
+import { GlassDialog } from "@/components/glass/overlay";
 import { GlassInput } from "@/components/glass/input";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { BookCard, DeleteBookDialog } from "@/features/library/BookCard";
@@ -74,6 +77,10 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const [sourceOpen, setSourceOpen] = useState(false);
   /** True when the import button was clicked in the browser, which has no backend. */
   const [webNotice, setWebNotice] = useState(false);
+  /** Batch-manage mode: cards toggle selection instead of opening. */
+  const [managing, setManaging] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 60_000);
@@ -116,6 +123,30 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const picking = importBooks.isPending;
   const list = books.data ?? [];
   const continueReading = filter === "all" ? list.find((b) => b.progress > 0) : undefined;
+
+  const exitManaging = () => {
+    setManaging(false);
+    setSelected(new Set());
+    setBatchDeleteOpen(false);
+  };
+  const toggleSelect = (book: BookSummary) =>
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(book.id)) next.delete(book.id);
+      else next.add(book.id);
+      return next;
+    });
+  const allSelected = list.length > 0 && list.every((b) => selected.has(b.id));
+  const toggleSelectAll = () =>
+    setSelected(allSelected ? new Set() : new Set(list.map((b) => b.id)));
+  const batchFavorite = (favorite: boolean) => {
+    for (const id of selected) setFavorite.mutate({ id, favorite });
+  };
+  const confirmBatchDelete = () => {
+    for (const id of selected) deleteBook.mutate(id);
+    setSelected(new Set());
+    setBatchDeleteOpen(false);
+  };
 
   // The browser build has no Rust backend: picking files would silently fail,
   // so the button surfaces an explanation instead of doing nothing.
@@ -217,7 +248,15 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             />
           </div>
 
-          {stats.data && stats.data.total > 0 && (
+          <GlassButton
+            size="md"
+            variant={managing ? "primary" : "subtle"}
+            onClick={() => (managing ? exitManaging() : setManaging(true))}
+          >
+            <SquaresFour size={15} /> {managing ? "退出管理" : "批量管理"}
+          </GlassButton>
+
+          {stats.data && stats.data.total > 0 && !managing && (
             <p className="text-text-3 ml-auto text-xs">
               共 {stats.data.total} 本{stats.data.reading > 0 && ` · 在读 ${stats.data.reading}`}
               {stats.data.favorites > 0 && ` · 收藏 ${stats.data.favorites}`}
@@ -259,6 +298,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
                 key={book.id}
                 book={book}
                 busy={setFavorite.isPending || deleteBook.isPending}
+                selecting={managing}
+                selected={selected.has(book.id)}
+                onToggleSelect={toggleSelect}
                 onOpen={(target) => navigate(`/reader?book=${target.id}`)}
                 onToggleFavorite={(target) =>
                   setFavorite.mutate({ id: target.id, favorite: !target.favorite })
@@ -270,6 +312,53 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           </div>
         )}
       </div>
+
+      <AnimatePresence>
+        {managing && (
+          <motion.div
+            initial={{ opacity: 0, y: 16, x: "-50%" }}
+            animate={{ opacity: 1, y: 0, x: "-50%" }}
+            exit={{ opacity: 0, y: 16, x: "-50%" }}
+            transition={{ duration: 0.2 }}
+            className="glass-2 shadow-panel fixed bottom-6 left-1/2 z-40 flex items-center gap-1.5 rounded-2xl p-2 pl-4"
+          >
+            <span className="text-text-2 mr-1 text-sm whitespace-nowrap tabular-nums">
+              已选 {selected.size} 本
+            </span>
+            <GlassButton size="sm" variant="subtle" onClick={toggleSelectAll}>
+              {allSelected ? "取消全选" : "全选"}
+            </GlassButton>
+            <GlassButton
+              size="sm"
+              variant="subtle"
+              disabled={selected.size === 0 || setFavorite.isPending}
+              onClick={() => batchFavorite(true)}
+            >
+              <Star size={13} /> 收藏
+            </GlassButton>
+            <GlassButton
+              size="sm"
+              variant="subtle"
+              disabled={selected.size === 0 || setFavorite.isPending}
+              onClick={() => batchFavorite(false)}
+            >
+              取消收藏
+            </GlassButton>
+            <GlassButton
+              size="sm"
+              variant="ghost"
+              className="text-danger"
+              disabled={selected.size === 0 || deleteBook.isPending}
+              onClick={() => setBatchDeleteOpen(true)}
+            >
+              删除
+            </GlassButton>
+            <GlassButton size="sm" variant="primary" onClick={exitManaging}>
+              完成
+            </GlassButton>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {sourceOpen && (
         <Suspense fallback={null}>
@@ -338,6 +427,34 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           })
         }
       />
+
+      <GlassDialog
+        open={batchDeleteOpen}
+        onOpenChange={(next) => {
+          if (!next) setBatchDeleteOpen(false);
+        }}
+        title={`删除选中的 ${selected.size} 本书？`}
+        description="选中的书籍会从书库中移除，对应的书籍文件和封面也会一并删除，此操作无法撤销。"
+        widthClass="w-[min(92vw,420px)]"
+      >
+        <div className="flex justify-end gap-2">
+          <GlassButton
+            variant="subtle"
+            onClick={() => setBatchDeleteOpen(false)}
+            disabled={deleteBook.isPending}
+          >
+            取消
+          </GlassButton>
+          <GlassButton
+            variant="ghost"
+            className="text-danger"
+            onClick={confirmBatchDelete}
+            disabled={deleteBook.isPending}
+          >
+            删除
+          </GlassButton>
+        </div>
+      </GlassDialog>
     </div>
   );
 }

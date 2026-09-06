@@ -1,3 +1,5 @@
+import { motion } from "motion/react";
+
 interface WordmarkProps {
   /** When the sidebar is collapsed, only the spectrum is shown. */
   compact?: boolean;
@@ -14,9 +16,17 @@ export function Wordmark({ compact = false }: WordmarkProps) {
         <rect x="2" y="16.6" width="18" height="2.4" rx="1.2" fill="#5C7FBF" />
         <rect x="2" y="16.6" width="10" height="2.4" rx="1.2" fill="#4FA89B" />
       </svg>
-      {!compact && (
-        <span className="text-text-1 text-[15px] font-semibold tracking-tight">ColorReader</span>
-      )}
+      {/* Stays in layout and fades instead of unmounting: collapsing fades it
+          out before the shell clips it, expanding fades it back in after the
+          pane has mostly opened. */}
+      <motion.span
+        initial={false}
+        animate={{ opacity: compact ? 0 : 1 }}
+        transition={{ duration: compact ? 0.1 : 0.18, delay: compact ? 0 : 0.15 }}
+        className="text-text-1 text-[15px] font-semibold tracking-tight whitespace-nowrap"
+      >
+        ColorReader
+      </motion.span>
     </div>
   );
 }

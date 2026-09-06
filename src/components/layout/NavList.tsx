@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { motion } from "motion/react";
 import type { Icon } from "@phosphor-icons/react";
 import {
   Books,
@@ -60,8 +61,20 @@ export function NavList() {
         >
           {({ isActive }) => (
             <>
-              <item.icon size={18} weight={isActive ? "fill" : "regular"} />
-              <span className={collapsed ? "sr-only" : undefined}>{item.label}</span>
+              {/* shrink-0: the always-in-layout nowrap label no longer fits
+                  the collapsed rail, and flex would otherwise squeeze the
+                  icon (svg min-width:auto = 0) down to nothing. */}
+              <item.icon size={18} weight={isActive ? "fill" : "regular"} className="shrink-0" />
+              {/* Always in layout, fading with the pane transition; nowrap so
+                  the label overflows instead of re-wrapping mid-animation. */}
+              <motion.span
+                initial={false}
+                animate={{ opacity: collapsed ? 0 : 1 }}
+                transition={{ duration: collapsed ? 0.1 : 0.18, delay: collapsed ? 0 : 0.15 }}
+                className="whitespace-nowrap"
+              >
+                {item.label}
+              </motion.span>
             </>
           )}
         </NavLink>
@@ -84,8 +97,15 @@ function Footer() {
       >
         {({ isActive }) => (
           <>
-            <GearSix size={18} weight={isActive ? "fill" : "regular"} />
-            <span className={collapsed ? "sr-only" : undefined}>设置</span>
+            <GearSix size={18} weight={isActive ? "fill" : "regular"} className="shrink-0" />
+            <motion.span
+              initial={false}
+              animate={{ opacity: collapsed ? 0 : 1 }}
+              transition={{ duration: collapsed ? 0.1 : 0.18, delay: collapsed ? 0 : 0.15 }}
+              className="whitespace-nowrap"
+            >
+              设置
+            </motion.span>
           </>
         )}
       </NavLink>
@@ -93,26 +113,35 @@ function Footer() {
         <GlassIconButton label="切换侧边栏" size="sm" onClick={toggle} className="flex-1">
           {collapsed ? <CaretRight size={16} /> : <CaretLeft size={16} />}
         </GlassIconButton>
-        {!collapsed && (
-          <>
-            <GlassIconButton
-              label="隐藏侧边栏"
-              size="sm"
-              onClick={() => hide(true)}
-              className="flex-1"
-            >
-              <ArrowLineLeft size={16} />
-            </GlassIconButton>
-            <GlassIconButton
-              label="打开命令面板"
-              size="sm"
-              onClick={() => openPalette(true)}
-              className="flex-1"
-            >
-              <span className="font-mono text-[11px]">⌘K</span>
-            </GlassIconButton>
-          </>
-        )}
+        {/* Width+opacity so the extra actions ebb with the pane instead of
+            popping; inert keeps the zero-width buttons out of tab order. */}
+        <motion.div
+          initial={false}
+          inert={collapsed}
+          className="flex min-w-0 gap-1 overflow-hidden"
+          animate={{ width: collapsed ? 0 : "auto", opacity: collapsed ? 0 : 1 }}
+          transition={{
+            width: { duration: collapsed ? 0.1 : 0.2, delay: collapsed ? 0 : 0.15 },
+            opacity: { duration: collapsed ? 0.1 : 0.15, delay: collapsed ? 0 : 0.15 },
+          }}
+        >
+          <GlassIconButton
+            label="隐藏侧边栏"
+            size="sm"
+            onClick={() => hide(true)}
+            className="flex-1"
+          >
+            <ArrowLineLeft size={16} />
+          </GlassIconButton>
+          <GlassIconButton
+            label="打开命令面板"
+            size="sm"
+            onClick={() => openPalette(true)}
+            className="flex-1"
+          >
+            <span className="font-mono text-[11px]">⌘K</span>
+          </GlassIconButton>
+        </motion.div>
       </div>
     </div>
   );

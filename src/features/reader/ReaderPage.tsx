@@ -53,7 +53,12 @@ import {
   type TextRange,
 } from "@/features/reader/selection";
 import { useTts } from "@/features/reader/tts";
-import { resolveFont, resolveSurface, type LayoutMode } from "@/features/reader/theme";
+import {
+  resolveFont,
+  resolveSurface,
+  readerGlassVars,
+  type LayoutMode,
+} from "@/features/reader/theme";
 import { SearchPanel } from "@/features/search/SearchPanel";
 import { useAnnotations, useCreateAnnotation, useDeleteAnnotation } from "@/hooks/useAnnotations";
 import { useBookmarks, useCreateBookmark, useDeleteBookmark } from "@/hooks/useBookmarks";
@@ -77,6 +82,7 @@ import {
   useReaderSettings,
 } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
+import { useSettings } from "@/stores/settings";
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
 import type { Annotation, BookImage, Bookmark, ChapterMeta, RagHit, SearchHit } from "@/types/ipc";
@@ -281,6 +287,19 @@ function ReaderView({
   /** Direction of the last chapter switch, drives the page transition. */
   const [nav, setNav] = useState<1 | -1>(1);
 
+  /** Continuous scroll vs paged single/double spread. */
+  const paged = layoutMode !== "scroll";
+  /** Viewport width, drives the column layout of paged modes. */
+  const [viewportW, setViewportW] = useState(0);
+  // While the sidebar spring resizes the reading pane, the article is pinned
+  // at its current px width: a per-frame multicol re-wrap of the whole
+  // chapter is what makes the animation janky on this page (the library has
+  // no such layout, so only the reader pays). Released after the spring
+  // settles into a single reflow + re-anchor. `pinnedRef` mirrors the state
+  // for the ResizeObserver / store-subscriber callbacks.
+  const [pinnedW, setPinnedW] = useState<number | null>(null);
+  const pinnedRef = useRef<number | null>(null);
+  const pinReleaseRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // Fraction to apply once the current chapter body has rendered. Starts at the
   // saved position, then is reset to the top of the chapter on navigation.
@@ -297,10 +316,6 @@ function ReaderView({
   // applied value (setting + fullscreen bonus), synced by an effect below,
   // mirroring layoutModeRef.
   const marginRef = useRef<number>(marginX + (fullscreen ? FULLSCREEN_MARGIN_BONUS : 0));
-  /** Continuous scroll vs paged single/double spread. */
-  const paged = layoutMode !== "scroll";
-  /** Viewport width, drives the column layout of paged modes. */
-  const [viewportW, setViewportW] = useState(0);
   /** Previous progress sample for the sustained reading speed estimate. */
   const speedSampleRef = useRef<{ at: number; chars: number } | null>(null);
   /** Hover-reveal flip affordance for paged modes; hides itself after 2s idle. */
@@ -472,6 +487,9 @@ function ReaderView({
     const el = scrollRef.current;
     if (!el) return;
     const observer = new ResizeObserver(() => {
+      // Sidebar spring: the article is pinned, the pane's per-frame width
+      // changes must not re-wrap anything or re-render the page.
+      if (pinnedRef.current !== null) return;
       setViewportW(el.clientWidth);
       if (layoutModeRef.current !== "scroll") {
         requestAnimationFrame(() => {
@@ -482,6 +500,49 @@ function ReaderView({
     });
     observer.observe(el);
     return () => observer.disconnect();
+  }, []);
+
+  // Pin the article while a sidebar width spring (hide/show or collapse)
+  // resizes the pane; subscribing to the store pins before React commits the
+  // shell change, so no frame is ever laid out on an intermediate width.
+  useEffect(() => {
+    const release = () => {
+      const el = scrollRef.current;
+      pinnedRef.current = null;
+      el?.style.removeProperty("overflow-x");
+      setPinnedW(null);
+      if (!el) return;
+      setViewportW(el.clientWidth);
+      if (layoutModeRef.current !== "scroll") {
+        requestAnimationFrame(() => {
+          alignTail(el, layoutModeRef.current, marginRef.current, tailRef, setTail);
+          applyPosition(el, fractionRef.current, layoutModeRef.current, marginRef.current);
+        });
+      }
+    };
+    const freeze = () => {
+      const el = scrollRef.current;
+      if (!el) return;
+      if (pinnedRef.current === null) {
+        const article = el.querySelector("article");
+        pinnedRef.current = Math.round(article?.getBoundingClientRect().width || el.clientWidth);
+        setPinnedW(pinnedRef.current);
+        // A frozen article can be wider than the shrinking pane; the
+        // transient horizontal scrollbar would be the only visual artifact.
+        el.style.overflowX = "hidden";
+      }
+      if (pinReleaseRef.current !== null) window.clearTimeout(pinReleaseRef.current);
+      pinReleaseRef.current = window.setTimeout(release, 450);
+    };
+    const unsubscribe = useSettings.subscribe((s, prev) => {
+      if (s.sidebarHidden !== prev.sidebarHidden || s.sidebarCollapsed !== prev.sidebarCollapsed) {
+        freeze();
+      }
+    });
+    return () => {
+      unsubscribe();
+      if (pinReleaseRef.current !== null) window.clearTimeout(pinReleaseRef.current);
+    };
   }, []);
 
   /** Flips one page in a paged layout; rolls into the neighbouring chapter at the edges. */
@@ -866,6 +927,14 @@ function ReaderView({
     appTheme === "dark" ? settings.nightSurface : surfaceKey,
     customSurface,
   );
+  // Re-root the glass token set on the reading surface: the header, footer and
+  // every glass control inside the reader tint themselves from the same ink
+  // and paper colours, so a sepia page reads warm edge to edge instead of
+  // clashing with the app chrome.
+  const readerVars = {
+    background: surface.background,
+    ...readerGlassVars(surface),
+  } as CSSProperties;
   const fullscreenBonus = fullscreen ? FULLSCREEN_MARGIN_BONUS : 0;
   const margin = marginX + fullscreenBonus;
   const blockMargin = marginY + fullscreenBonus;
@@ -919,6 +988,9 @@ function ReaderView({
           columnFill: "auto",
         }
       : {}),
+    // Sidebar spring: frozen at the pre-animation width so the per-frame pane
+    // resize never re-wraps the chapter (mx-auto keeps it centred).
+    ...(pinnedW !== null ? { width: pinnedW } : {}),
   };
 
   // Split the chapter into paragraph segments, wrapping the parts covered by an
@@ -947,10 +1019,7 @@ function ReaderView({
   // Shared header bar: rendered in flow normally, and dropped from the top
   // edge on hover while in fullscreen.
   const headerBar = (
-    <header
-      className="border-hairline flex items-center gap-3 border-b px-6 py-3"
-      style={fullscreen ? { background: surface.background } : undefined}
-    >
+    <header className="border-hairline flex items-center gap-3 border-b px-6 py-3">
       <GlassIconButton label="返回书库" size="sm" onClick={onBack}>
         <ArrowLeft size={16} />
       </GlassIconButton>
@@ -1024,7 +1093,7 @@ function ReaderView({
   );
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" style={readerVars}>
       {!fullscreen ? (
         headerBar
       ) : (
