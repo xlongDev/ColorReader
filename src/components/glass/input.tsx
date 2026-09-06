@@ -56,7 +56,11 @@ export function GlassSwitch({
     >
       <SwitchPrimitive.Thumb
         className={cn(
-          "bg-text-1 block h-5 w-5 translate-x-0.5 rounded-full transition-transform",
+          "bg-text-1 block h-5 w-5 translate-x-0.5 rounded-full",
+          // Back-out bezier: the thumb overshoots slightly before settling,
+          // reading as a physical toggle rather than a linear slide.
+          "transition-transform duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)]",
+          "motion-reduce:transition-none",
           "data-[state=checked]:bg-on-accent data-[state=checked]:translate-x-[22px]",
         )}
       />

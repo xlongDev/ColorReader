@@ -11,6 +11,10 @@
     "core:window:allow-start-dragging",
     "core:window:allow-is-fullscreen",
     "core:window:allow-set-fullscreen",
-    "dialog:allow-open"
+    "dialog:allow-open",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [{ "url": "https://github.com/xlongDev/ColorReader*" }]
+    }
   ]
 }

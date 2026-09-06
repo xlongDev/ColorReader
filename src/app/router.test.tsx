@@ -14,6 +14,7 @@ describe("AppRouter", () => {
 
     expect(screen.getByRole("navigation", { name: "主导航" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("书库");
-    expect(screen.getByRole("link", { name: "设置" })).toHaveAttribute("href", "/settings");
+    expect(screen.getByRole("button", { name: "设置" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "GitHub 仓库" })).toBeInTheDocument();
   });
 });

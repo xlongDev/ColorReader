@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { CloudArrowUp, Monitor, Moon, Sun, Info, Palette, Sparkle } from "@phosphor-icons/react";
+import { motion, useReducedMotion } from "motion/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassPanel } from "@/components/glass/panel";
@@ -63,6 +64,8 @@ function AppearanceSection({
   reducedTransparency,
   onTransparencyChange,
 }: AppearanceSectionProps) {
+  const reduce = useReducedMotion();
+  const groupId = useId();
   return (
     <GlassPanel className="px-5 pt-5 pb-1">
       <div className="mb-1 flex items-center gap-2">
@@ -72,31 +75,40 @@ function AppearanceSection({
 
       <SectionRow label="主题" hint="控制整个界面的明暗。">
         <div className="glass inline-flex rounded-lg p-0.5" role="radiogroup" aria-label="主题">
-          {THEMES.map(({ value, label, icon: Icon }) => (
-            // Native radios keep arrow-key navigation and screen reader semantics;
-            // the input is hidden and the label carries the whole visual treatment.
-            <label
-              key={value}
-              className={cn(
-                "inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-[13px]",
-                "focus-within:focus-ring transition-colors",
-                theme === value
-                  ? "bg-surface-3 text-text-1 shadow-glass"
-                  : "text-text-2 hover:text-text-1",
-              )}
-            >
-              <input
-                type="radio"
-                name="theme"
-                value={value}
-                checked={theme === value}
-                onChange={() => onThemeChange(value)}
-                className="sr-only"
-              />
-              <Icon size={14} weight={theme === value ? "fill" : "regular"} />
-              {label}
-            </label>
-          ))}
+          {THEMES.map(({ value, label, icon: Icon }) => {
+            const active = theme === value;
+            return (
+              // Native radios keep arrow-key navigation and screen reader semantics;
+              // the input is hidden and the label carries the whole visual treatment.
+              <label
+                key={value}
+                className={cn(
+                  "focus-within:focus-ring relative inline-flex h-7 cursor-pointer items-center gap-1.5 rounded-md px-2.5 text-[13px] transition-colors",
+                  active ? "text-text-1" : "text-text-2 hover:text-text-1",
+                )}
+              >
+                <input
+                  type="radio"
+                  name="theme"
+                  value={value}
+                  checked={active}
+                  onChange={() => onThemeChange(value)}
+                  className="sr-only"
+                />
+                {active && (
+                  <motion.span
+                    layoutId={`settings-theme-${groupId}`}
+                    className="bg-surface-3 shadow-glass absolute inset-0 rounded-md"
+                    transition={
+                      reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
+                    }
+                  />
+                )}
+                <Icon size={14} weight={active ? "fill" : "regular"} className="relative" />
+                <span className="relative">{label}</span>
+              </label>
+            );
+          })}
         </div>
       </SectionRow>
 

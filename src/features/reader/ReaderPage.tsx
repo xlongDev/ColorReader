@@ -1016,11 +1016,17 @@ function ReaderView({
     }));
   }, [chapter.data, chapterIdx, annotations, search]);
 
+  // Reader chrome button: same anatomy as the sidebar's glass buttons, but
+  // fill and hairline come from the re-rooted reading-surface tokens — the
+  // fill is a wash of the paper colour (--glass-btn), so the circles read as
+  // liquid glass over the page without darkening it like an ink fill would.
+  const chromeBtn = "bg-(--glass-btn) border-hairline-strong shadow-glass";
+
   // Shared header bar: rendered in flow normally, and dropped from the top
   // edge on hover while in fullscreen.
   const headerBar = (
     <header className="border-hairline flex items-center gap-3 border-b px-6 py-3">
-      <GlassIconButton label="返回书库" size="sm" onClick={onBack}>
+      <GlassIconButton label="返回书库" size="sm" onClick={onBack} className={chromeBtn}>
         <ArrowLeft size={16} />
       </GlassIconButton>
       <div className="min-w-0 flex-1">
@@ -1033,6 +1039,7 @@ function ReaderView({
         <GlassIconButton
           label="目录与书签"
           size="sm"
+          className={chromeBtn}
           onClick={() => setPanel((open) => (open === "toc" ? "none" : "toc"))}
         >
           <ListBullets size={16} />
@@ -1040,6 +1047,7 @@ function ReaderView({
         <GlassIconButton
           label="搜索"
           size="sm"
+          className={chromeBtn}
           onClick={() => setPanel((open) => (open === "search" ? "none" : "search"))}
         >
           <MagnifyingGlass size={16} />
@@ -1047,6 +1055,7 @@ function ReaderView({
         <GlassIconButton
           label="标注"
           size="sm"
+          className={chromeBtn}
           onClick={() => setPanel((open) => (open === "annotations" ? "none" : "annotations"))}
         >
           <HighlighterCircle size={16} />
@@ -1054,6 +1063,7 @@ function ReaderView({
         <GlassIconButton
           label="知识图谱"
           size="sm"
+          className={chromeBtn}
           onClick={() => setPanel((open) => (open === "graph" ? "none" : "graph"))}
         >
           <Graph size={16} />
@@ -1061,6 +1071,7 @@ function ReaderView({
         <GlassIconButton
           label="阅读设置"
           size="sm"
+          className={chromeBtn}
           onClick={() => setPanel((open) => (open === "settings" ? "none" : "settings"))}
         >
           <Faders size={16} />
@@ -1068,6 +1079,7 @@ function ReaderView({
         <GlassIconButton
           label="缩小字号"
           size="sm"
+          className={chromeBtn}
           onClick={() => setFontSize(fontSize - 1)}
           disabled={fontSize <= MIN_FONT_SIZE}
         >
@@ -1076,6 +1088,7 @@ function ReaderView({
         <GlassIconButton
           label="放大字号"
           size="sm"
+          className={chromeBtn}
           onClick={() => setFontSize(fontSize + 1)}
           disabled={fontSize >= MAX_FONT_SIZE}
         >
@@ -1084,6 +1097,7 @@ function ReaderView({
         <GlassIconButton
           label={fullscreen ? "退出全屏" : "全屏阅读"}
           size="sm"
+          className={chromeBtn}
           onClick={() => void toggleFullscreen()}
         >
           {fullscreen ? <ArrowsIn size={16} /> : <ArrowsOut size={16} />}
@@ -1267,18 +1281,20 @@ function ReaderView({
                   : "朗读本章"
             }
             size="sm"
+            className={chromeBtn}
             onClick={toggleSpeech}
           >
             {speechStatus === "playing" ? <Pause size={16} /> : <SpeakerHigh size={16} />}
           </GlassIconButton>
           {speechStatus !== "idle" && (
-            <GlassIconButton label="停止朗读" size="sm" onClick={stop}>
+            <GlassIconButton label="停止朗读" size="sm" className={chromeBtn} onClick={stop}>
               <Stop size={16} />
             </GlassIconButton>
           )}
           <GlassIconButton
             label={`语速 ${speechRate} 倍，点击切换`}
             size="sm"
+            className={chromeBtn}
             onClick={() => setSpeechRate(speechRate)}
           >
             <span className="text-[11px] font-semibold">{speechRate}×</span>
@@ -1288,6 +1304,7 @@ function ReaderView({
               paged ? "自动滚动仅支持滚动排版" : autoScrolling ? "暂停自动滚动" : "开始自动滚动"
             }
             size="sm"
+            className={chromeBtn}
             disabled={paged}
             onClick={() => setAutoScrolling((on) => !on)}
           >

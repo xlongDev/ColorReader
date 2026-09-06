@@ -53,11 +53,59 @@ export const READING_SURFACES: ReadingSurface[] = [
     mode: "light",
   },
   {
+    key: "mist",
+    label: "雾蓝",
+    background: "#e9eef5",
+    fg: "#2b3440",
+    tint: "#e8edf4",
+    mode: "light",
+  },
+  {
+    key: "blush",
+    label: "霞粉",
+    background: "#f6ebe8",
+    fg: "#40302c",
+    tint: "#f4e9e6",
+    mode: "light",
+  },
+  {
+    key: "dusk",
+    label: "暮紫",
+    background: "#edeaf3",
+    fg: "#332e3e",
+    tint: "#ebe8f1",
+    mode: "light",
+  },
+  {
     key: "night",
     label: "夜间",
     background: "#15181d",
     fg: "#c9ced8",
     tint: "#181c23",
+    mode: "dark",
+  },
+  {
+    key: "pine",
+    label: "松烟",
+    background: "#1b231e",
+    fg: "#c5d1c8",
+    tint: "#1e2620",
+    mode: "dark",
+  },
+  {
+    key: "indigo",
+    label: "黛蓝",
+    background: "#131a26",
+    fg: "#c3cbd9",
+    tint: "#161d29",
+    mode: "dark",
+  },
+  {
+    key: "void",
+    label: "玄黑",
+    background: "#0e1013",
+    fg: "#c6cad2",
+    tint: "#111317",
     mode: "dark",
   },
   {
@@ -113,6 +161,9 @@ export function readerGlassVars(surface: ReadingSurface): CSSProperties {
     "--surface-1": `color-mix(in srgb, ${surface.fg} 5%, transparent)`,
     "--surface-2": `color-mix(in srgb, ${surface.fg} 9%, transparent)`,
     "--surface-3": `color-mix(in srgb, ${surface.tint} 96%, ${surface.fg})`,
+    // Chrome buttons fill with the paper colour (not the ink), so floating
+    // controls read as clear glass instead of a dark ink wash on the page.
+    "--glass-btn": `color-mix(in srgb, ${surface.tint} 82%, transparent)`,
   } as CSSProperties;
 }
 

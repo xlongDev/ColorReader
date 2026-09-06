@@ -27,6 +27,7 @@ quick-xml = "0.42"
 sha2 = "0.11.0"
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
 # `.ctzx` encryption. Both are RustCrypto crates; nothing here invents a cipher
 # or a KDF, and both are on the hot path only while exporting or importing.
 argon2 = "0.5"

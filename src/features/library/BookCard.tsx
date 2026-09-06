@@ -1,3 +1,4 @@
+import { motion, useReducedMotion } from "motion/react";
 import { BookOpen, Check, Export, Star, Trash } from "@phosphor-icons/react";
 
 import { GlassDialog } from "@/components/glass/overlay";
@@ -32,8 +33,18 @@ export function BookCard({
   onToggleSelect,
 }: BookCardProps) {
   const authors = authorLine(book);
+  const reduce = useReducedMotion();
   return (
-    <div className="group relative">
+    // layout: shared-layout FLIP, so resorting or filtering the shelf glides
+    // cards to their new slots instead of snapping the grid into place.
+    <motion.div
+      layout
+      initial={reduce ? false : { opacity: 0, scale: 0.96 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={reduce ? undefined : { opacity: 0, scale: 0.94 }}
+      transition={{ type: "spring", stiffness: 380, damping: 32 }}
+      className="group relative"
+    >
       <button
         type="button"
         onClick={() => (selecting ? onToggleSelect?.(book) : onOpen(book))}
@@ -78,7 +89,14 @@ export function BookCard({
             selected ? "border-accent bg-accent text-on-accent" : "border-hairline glass-solid",
           )}
         >
-          <Check size={13} weight="bold" className={selected ? undefined : "opacity-0"} />
+          <motion.span
+            initial={false}
+            animate={{ scale: selected ? 1 : 0.4, opacity: selected ? 1 : 0 }}
+            transition={{ type: "spring", stiffness: 550, damping: 28 }}
+            className="flex"
+          >
+            <Check size={13} weight="bold" />
+          </motion.span>
         </span>
       ) : (
         <div className="glass-solid absolute top-2 right-2 flex gap-1 rounded-full p-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
@@ -118,7 +136,7 @@ export function BookCard({
           </GlassIconButton>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 }
 

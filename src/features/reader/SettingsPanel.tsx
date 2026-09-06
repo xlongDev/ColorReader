@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useId, useRef } from "react";
 import { ImageSquare } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 
@@ -110,22 +110,34 @@ export function SettingsPanel() {
       <Group label="页边距">
         <div className="w-full min-w-0">
           <div className="flex flex-wrap gap-1.5">
-            {MARGIN_X_PRESETS.map((preset, index) => (
-              <motion.button
-                key={preset}
-                type="button"
-                aria-pressed={nearestMargin(settings.marginX) === preset}
-                onClick={() => update({ marginX: preset })}
-                whileTap={reduce ? undefined : { scale: 0.94 }}
-                transition={{ type: "spring", stiffness: 480, damping: 28 }}
-                className={cn(
-                  "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
-                  nearestMargin(settings.marginX) === preset && "border-accent text-accent",
-                )}
-              >
-                {MARGIN_LABELS[index]!}
-              </motion.button>
-            ))}
+            {MARGIN_X_PRESETS.map((preset, index) => {
+              const active = nearestMargin(settings.marginX) === preset;
+              return (
+                <motion.button
+                  key={preset}
+                  type="button"
+                  aria-pressed={active}
+                  onClick={() => update({ marginX: preset })}
+                  whileTap={reduce ? undefined : { scale: 0.94 }}
+                  transition={{ type: "spring", stiffness: 480, damping: 28 }}
+                  className={cn(
+                    "border-hairline text-text-2 hover:text-text-1 relative rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+                    active && "border-accent text-accent",
+                  )}
+                >
+                  {active && (
+                    <motion.span
+                      layoutId="margin-preset-pill"
+                      className="bg-accent-soft absolute inset-0 rounded-full"
+                      transition={
+                        reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
+                      }
+                    />
+                  )}
+                  <span className="relative">{MARGIN_LABELS[index]!}</span>
+                </motion.button>
+              );
+            })}
           </div>
           <SliderRow
             label="左右"
@@ -177,15 +189,24 @@ export function SettingsPanel() {
               whileTap={reduce ? undefined : { scale: 0.94 }}
               transition={{ type: "spring", stiffness: 480, damping: 28 }}
               className={cn(
-                "border-hairline text-text-2 hover:text-text-1 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+                "border-hairline text-text-2 hover:text-text-1 relative flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
                 activeSurface === surface.key && "border-accent text-accent",
               )}
             >
+              {activeSurface === surface.key && (
+                <motion.span
+                  layoutId="surface-pill"
+                  className="bg-accent-soft absolute inset-0 rounded-full"
+                  transition={
+                    reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
+                  }
+                />
+              )}
               <span
-                className="border-hairline h-3 w-3 rounded-full border"
+                className="border-hairline relative h-3 w-3 rounded-full border"
                 style={{ background: surface.background }}
               />
-              {surface.label}
+              <span className="relative">{surface.label}</span>
             </motion.button>
           ))}
           <motion.button
@@ -195,11 +216,22 @@ export function SettingsPanel() {
             whileTap={reduce ? undefined : { scale: 0.94 }}
             transition={{ type: "spring", stiffness: 480, damping: 28 }}
             className={cn(
-              "border-hairline text-text-2 hover:text-text-1 flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+              "border-hairline text-text-2 hover:text-text-1 relative flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
               activeSurface === "custom" && "border-accent text-accent",
             )}
           >
-            <ImageSquare size={12} /> 自定义图片
+            {activeSurface === "custom" && (
+              <motion.span
+                layoutId="surface-pill"
+                className="bg-accent-soft absolute inset-0 rounded-full"
+                transition={
+                  reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
+                }
+              />
+            )}
+            <span className="relative flex items-center gap-1.5">
+              <ImageSquare size={12} /> 自定义图片
+            </span>
           </motion.button>
           {activeSurface === "custom" && (
             <button
@@ -296,7 +328,11 @@ interface ChipOption<K extends string | number | boolean> {
   label: string;
 }
 
-/** A segmented row of pill toggles; the selected one carries the accent. */
+/** A segmented row of pill toggles; the selected one carries the accent.
+ *
+ * A soft accent disc springs between the options of one group (shared
+ * layoutId scoped by useId), so switching reads as one highlight travelling
+ * instead of two pills blinking. */
 function Chips<K extends string | number | boolean>({
   options,
   value,
@@ -307,24 +343,37 @@ function Chips<K extends string | number | boolean>({
   onChange: (value: K) => void;
 }) {
   const reduce = useReducedMotion();
+  const groupId = useId();
   return (
     <>
-      {options.map((option) => (
-        <motion.button
-          key={String(option.key)}
-          type="button"
-          aria-pressed={option.key === value}
-          onClick={() => onChange(option.key)}
-          whileTap={reduce ? undefined : { scale: 0.94 }}
-          transition={{ type: "spring", stiffness: 480, damping: 28 }}
-          className={cn(
-            "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
-            option.key === value && "border-accent text-accent",
-          )}
-        >
-          {option.label}
-        </motion.button>
-      ))}
+      {options.map((option) => {
+        const active = option.key === value;
+        return (
+          <motion.button
+            key={String(option.key)}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(option.key)}
+            whileTap={reduce ? undefined : { scale: 0.94 }}
+            transition={{ type: "spring", stiffness: 480, damping: 28 }}
+            className={cn(
+              "border-hairline text-text-2 hover:text-text-1 relative rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+              active && "border-accent text-accent",
+            )}
+          >
+            {active && (
+              <motion.span
+                layoutId={`chips-${groupId}`}
+                className="bg-accent-soft absolute inset-0 rounded-full"
+                transition={
+                  reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
+                }
+              />
+            )}
+            <span className="relative">{option.label}</span>
+          </motion.button>
+        );
+      })}
     </>
   );
 }

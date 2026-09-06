@@ -1,5 +1,6 @@
 import { Suspense, useEffect, type CSSProperties } from "react";
 import { Outlet, useLocation } from "react-router-dom";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { CaretRight } from "@phosphor-icons/react";
 
 import { TitleBar } from "@/components/layout/TitleBar";
@@ -27,6 +28,7 @@ export function AppShell() {
   const showSidebar = useSettings((s) => s.setSidebarHidden);
   const readerFullscreen = useChrome((s) => s.readerFullscreen);
   const setOpen = useCommandPalette((s) => s.setOpen);
+  const reduce = useReducedMotion();
 
   // While a book is open the whole window wears the reading surface: the
   // chrome palette (data-theme) pairs with the surface's light/dark mode and
@@ -97,7 +99,23 @@ export function AppShell() {
             {/* Lazy route chunks resolve on first navigation; local disk,
                 so a plain fallback is enough. */}
             <Suspense fallback={null}>
-              <Outlet />
+              {/* Cross-fade between pages: the outgoing view holds its ground
+                  while the incoming one resolves from a soft blur — a depth
+                  cue that suits pane-style navigation more than vertical
+                  motion. pathname keys keep the reader route stable across
+                  chapter navigations (query-only changes). */}
+              <AnimatePresence mode="popLayout" initial={false}>
+                <motion.div
+                  key={pathname}
+                  initial={reduce ? false : { opacity: 0, scale: 0.985, filter: "blur(6px)" }}
+                  animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
+                  exit={reduce ? undefined : { opacity: 0, scale: 0.99, filter: "blur(4px)" }}
+                  transition={{ duration: 0.22, ease: "easeOut" }}
+                  className="h-full"
+                >
+                  <Outlet />
+                </motion.div>
+              </AnimatePresence>
             </Suspense>
           </ErrorBoundary>
         </GlassPanel>

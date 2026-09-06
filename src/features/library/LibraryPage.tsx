@@ -293,22 +293,26 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           />
         ) : (
           <div className="grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
-            {list.map((book) => (
-              <BookCard
-                key={book.id}
-                book={book}
-                busy={setFavorite.isPending || deleteBook.isPending}
-                selecting={managing}
-                selected={selected.has(book.id)}
-                onToggleSelect={toggleSelect}
-                onOpen={(target) => navigate(`/reader?book=${target.id}`)}
-                onToggleFavorite={(target) =>
-                  setFavorite.mutate({ id: target.id, favorite: !target.favorite })
-                }
-                onAskDelete={setDeleteTarget}
-                onAskExport={setExportTarget}
-              />
-            ))}
+            {/* AnimatePresence + the cards' layout FLIP: removed cards shrink
+                in place while the survivors glide into their slots. */}
+            <AnimatePresence initial={false}>
+              {list.map((book) => (
+                <BookCard
+                  key={book.id}
+                  book={book}
+                  busy={setFavorite.isPending || deleteBook.isPending}
+                  selecting={managing}
+                  selected={selected.has(book.id)}
+                  onToggleSelect={toggleSelect}
+                  onOpen={(target) => navigate(`/reader?book=${target.id}`)}
+                  onToggleFavorite={(target) =>
+                    setFavorite.mutate({ id: target.id, favorite: !target.favorite })
+                  }
+                  onAskDelete={setDeleteTarget}
+                  onAskExport={setExportTarget}
+                />
+              ))}
+            </AnimatePresence>
           </div>
         )}
       </div>
@@ -316,14 +320,24 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       <AnimatePresence>
         {managing && (
           <motion.div
-            initial={{ opacity: 0, y: 16, x: "-50%" }}
-            animate={{ opacity: 1, y: 0, x: "-50%" }}
-            exit={{ opacity: 0, y: 16, x: "-50%" }}
-            transition={{ duration: 0.2 }}
+            initial={{ opacity: 0, y: 16, scale: 0.96, x: "-50%" }}
+            animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
+            exit={{ opacity: 0, y: 16, scale: 0.96, x: "-50%" }}
+            transition={{ type: "spring", stiffness: 420, damping: 30 }}
             className="glass-2 shadow-panel fixed bottom-6 left-1/2 z-40 flex items-center gap-1.5 rounded-2xl p-2 pl-4"
           >
-            <span className="text-text-2 mr-1 text-sm whitespace-nowrap tabular-nums">
-              已选 {selected.size} 本
+            <span className="text-text-2 mr-1 text-sm whitespace-nowrap">
+              已选{" "}
+              <motion.span
+                key={selected.size}
+                initial={{ y: 8, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                className="text-text-1 inline-block font-semibold tabular-nums"
+              >
+                {selected.size}
+              </motion.span>{" "}
+              本
             </span>
             <GlassButton size="sm" variant="subtle" onClick={toggleSelectAll}>
               {allSelected ? "取消全选" : "全选"}
