@@ -58,6 +58,7 @@ import {
   resolveSurface,
   readerGlassVars,
   type LayoutMode,
+  type PageTransition,
 } from "@/features/reader/theme";
 import { SearchPanel } from "@/features/search/SearchPanel";
 import { useAnnotations, useCreateAnnotation, useDeleteAnnotation } from "@/hooks/useAnnotations";
@@ -99,6 +100,12 @@ const GESTURE_GAP = 200;
 /** A paragraph starting with this marker renders as an in-book image. */
 const IMAGE_PARAGRAPH_PREFIX = "￼";
 
+/** A paragraph starting with this marker is an in-book link (EPUB table of
+    contents entry): `<target chapter idx>\u{1F}<text>`, resolved at import
+    time by the document parser. */
+const LINK_PARAGRAPH_PREFIX = "￻";
+const LINK_FIELD_SEPARATOR = "\u{1F}";
+
 /** Lightbox zoom bounds and wheel/button step. */
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
@@ -107,11 +114,27 @@ const ZOOM_STEP = 1.25;
 /** Extra margin on all four sides while in fullscreen immersion. */
 const FULLSCREEN_MARGIN_BONUS = 48;
 
-/** Paragraph list for the voice: image placeholders speak as nothing. */
+/** Parses a link-marker paragraph (`<marker><idx><sep><text>`) into its
+    target chapter and visible text; `null` when malformed. */
+function parseLinkParagraph(paragraph: string): { idx: number; text: string } | null {
+  const payload = paragraph.slice(LINK_PARAGRAPH_PREFIX.length);
+  const separator = payload.indexOf(LINK_FIELD_SEPARATOR);
+  if (separator < 0) return null;
+  const idx = Number.parseInt(payload.slice(0, separator), 10);
+  const text = payload.slice(separator + LINK_FIELD_SEPARATOR.length);
+  return Number.isFinite(idx) && text ? { idx, text } : null;
+}
+
+/** Paragraph list for the voice: image placeholders speak as nothing, link
+    entries speak as their visible text. */
 function speakable(paragraphs: string[]): string[] {
-  return paragraphs.map((paragraph) =>
-    paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX) ? "" : paragraph,
-  );
+  return paragraphs.map((paragraph) => {
+    if (paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX)) return "";
+    if (paragraph.startsWith(LINK_PARAGRAPH_PREFIX)) {
+      return paragraph.split(LINK_FIELD_SEPARATOR)[1] ?? "";
+    }
+    return paragraph;
+  });
 }
 
 /** Which side panel is open. Only one at a time, so they never stack. */
@@ -184,6 +207,45 @@ function alignTail(
   }
 }
 
+/**
+ * Performs one in-chapter page flip, honouring the page-transition setting:
+ * "slide" keeps the native smooth scroll (a horizontal slide already), "fade"
+ * and "paper" jump to the target page instantly and animate the new page in
+ * via WAAPI — imperative, so a flip never re-renders or remounts the chapter —
+ * and "none" jumps with no animation. Reduced motion always jumps instantly.
+ */
+function flipPage(
+  el: HTMLElement,
+  left: number,
+  mode: PageTransition,
+  dir: 1 | -1,
+  /** `null` while motion preference is undetermined; treated as no reduction. */
+  reduced: boolean | null,
+) {
+  if (reduced || mode === "slide") {
+    el.scrollTo({ left, behavior: "smooth" });
+    return;
+  }
+  if (mode === "none") {
+    el.scrollTo({ left, behavior: "auto" });
+    return;
+  }
+  el.scrollTo({ left, behavior: "auto" });
+  el.animate(
+    mode === "fade"
+      ? [{ opacity: 0 }, { opacity: 1 }]
+      : [
+          {
+            opacity: 0,
+            transform: `perspective(1200px) rotateY(${dir === 1 ? -10 : 10}deg)`,
+            transformOrigin: dir === 1 ? "left center" : "right center",
+          },
+          { opacity: 1, transform: "perspective(1200px) rotateY(0deg)" },
+        ],
+    { duration: mode === "paper" ? 400 : 300, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+  );
+}
+
 interface ReaderViewProps {
   bookId: string;
   title: string;
@@ -237,6 +299,7 @@ function ReaderView({
   } = settings;
   const speechRate = settings.speechRate;
   const setSpeechRate = settings.setSpeechRate;
+  const reduce = useReducedMotion();
   const annotationsQuery = useAnnotations(bookId);
   const createAnnotation = useCreateAnnotation(bookId);
   const deleteAnnotation = useDeleteAnnotation(bookId);
@@ -291,6 +354,9 @@ function ReaderView({
   const paged = layoutMode !== "scroll";
   /** Viewport width, drives the column layout of paged modes. */
   const [viewportW, setViewportW] = useState(0);
+  /** Viewport height, caps images to one page box in paged modes (see
+      globals.css `.paged-prose`; the measured px beats any 100vh estimate). */
+  const [viewportH, setViewportH] = useState(0);
   // While the sidebar spring resizes the reading pane, the article is pinned
   // at its current px width: a per-frame multicol re-wrap of the whole
   // chapter is what makes the animation janky on this page (the library has
@@ -491,6 +557,7 @@ function ReaderView({
       // changes must not re-wrap anything or re-render the page.
       if (pinnedRef.current !== null) return;
       setViewportW(el.clientWidth);
+      setViewportH(el.clientHeight);
       if (layoutModeRef.current !== "scroll") {
         requestAnimationFrame(() => {
           alignTail(el, layoutModeRef.current, marginRef.current, tailRef, setTail);
@@ -567,13 +634,13 @@ function ReaderView({
       const pitch = columnPitch(el, mode, margin);
       const page = pitch > 0 ? (mode === "double" ? 2 : 1) : 0;
       if (page === 0 || pitch <= 0) {
-        el.scrollBy({ left: dir * el.clientWidth, behavior: "smooth" });
+        flipPage(el, pos + dir * el.clientWidth, pageTransition, dir, reduce);
         return;
       }
       const target = (Math.round(pos / pitch) + dir * page) * pitch;
-      el.scrollTo({ left: Math.max(0, Math.min(target, max)), behavior: "smooth" });
+      flipPage(el, Math.max(0, Math.min(target, max)), pageTransition, dir, reduce);
     },
-    [chapterIdx, goTo],
+    [chapterIdx, goTo, pageTransition, reduce],
   );
 
   // In paged modes the wheel flips whole pages instead of nudging pixels:
@@ -986,6 +1053,12 @@ function ReaderView({
           columnWidth,
           columnGap: margin,
           columnFill: "auto",
+          // Page box for the `.paged-prose` image cap (see globals.css):
+          // the measured scroller height beats any 100vh estimate. Only
+          // inject a real measurement — a 0 would clamp the img cap to 0
+          // and silently hide every picture.
+          "--page-block": `${blockMargin}px`,
+          ...(viewportH > 0 ? { "--page-h": `${viewportH}px` } : {}),
         }
       : {}),
     // Sidebar spring: frozen at the pre-animation width so the per-frame pane
@@ -1006,6 +1079,9 @@ function ReaderView({
       imagePath: paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX)
         ? paragraph.slice(IMAGE_PARAGRAPH_PREFIX.length)
         : null,
+      // A link marker renders as a tappable entry that jumps to the target
+      // chapter (in-book tables of contents).
+      link: paragraph.startsWith(LINK_PARAGRAPH_PREFIX) ? parseLinkParagraph(paragraph) : null,
       segments: highlightSegments(paragraphs, idx, chapterAnnotations, search).map(
         (segment, position) => ({
           key: `${chapterIdx}-${idx}-${position}`,
@@ -1139,15 +1215,31 @@ function ReaderView({
         >
           <article
             key={chapterIdx}
-            className={cn("prose-reader mx-auto", !paged && "max-w-3xl", transitionClass)}
+            className={cn(
+              "prose-reader mx-auto",
+              !paged && "max-w-3xl",
+              paged && "paged-prose",
+              transitionClass,
+            )}
             style={articleStyle}
           >
             {chapter.isPending ? (
               <p className="text-sm opacity-60">正在加载章节…</p>
             ) : (
-              renderedParagraphs.map(({ idx, key, imagePath, segments }) =>
-                imagePath !== null ? (
-                  <p key={key} data-para-idx={idx} className="my-6 text-center">
+              renderedParagraphs.map(({ idx, key, imagePath, link, segments }) =>
+                link !== null ? (
+                  <p key={key} data-para-idx={idx} className="my-6">
+                    <button
+                      type="button"
+                      onClick={() => goTo(link.idx)}
+                      className="cursor-pointer underline decoration-dotted underline-offset-4 transition-opacity hover:opacity-70"
+                      style={{ color: "var(--accent)" }}
+                    >
+                      {link.text}
+                    </button>
+                  </p>
+                ) : imagePath !== null ? (
+                  <p key={key} data-para-idx={idx} className="image-para my-6 text-center">
                     <ChapterImage
                       bookId={bookId}
                       path={imagePath}
@@ -1548,7 +1640,12 @@ function ImageLightbox({
       .bookAsset(bookId, path)
       .then((buffer) => {
         if (!alive) return;
-        url = URL.createObjectURL(new Blob([buffer], { type: assetMime(path) }));
+        // The postMessage IPC fallback (active when the custom-protocol fetch
+        // is unavailable) resolves byte arrays as plain JS arrays; normalize
+        // before building the blob or it silently becomes a text blob.
+        const bytes =
+          buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : Uint8Array.from(buffer);
+        url = URL.createObjectURL(new Blob([bytes], { type: assetMime(path) }));
         setSrc(url);
       })
       .catch(() => {});
@@ -1902,6 +1999,7 @@ function ChapterImage({
   onOpen: (src: string) => void;
 }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -1910,17 +2008,27 @@ function ChapterImage({
       .bookAsset(bookId, path)
       .then((buffer) => {
         if (!alive) return;
-        url = URL.createObjectURL(new Blob([buffer], { type: assetMime(path) }));
+        // The postMessage IPC fallback (active when the custom-protocol fetch
+        // is unavailable) resolves byte arrays as plain JS arrays; normalize
+        // before building the blob or it silently becomes a text blob.
+        const bytes =
+          buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : Uint8Array.from(buffer);
+        url = URL.createObjectURL(new Blob([bytes], { type: assetMime(path) }));
         setSrc(url);
       })
-      .catch(() => {});
+      .catch(() => {
+        // A silent failure here reads as a blank page; surface it.
+        if (alive) setFailed(true);
+      });
     return () => {
       alive = false;
       if (url) URL.revokeObjectURL(url);
     };
   }, [bookId, path]);
 
-  if (!src) return null;
+  if (!src) {
+    return failed ? <span className="text-sm opacity-50">图片加载失败:{path}</span> : null;
+  }
   return (
     <button
       type="button"
@@ -1931,7 +2039,6 @@ function ChapterImage({
       <img
         src={src}
         alt=""
-        loading="lazy"
         className="border-hairline mx-auto max-w-full rounded-lg border"
         draggable={false}
       />

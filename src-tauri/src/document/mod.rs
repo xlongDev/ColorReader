@@ -20,6 +20,15 @@ use crate::error::{AppError, AppResult};
 /// fetches the bytes on demand via `book_asset`.
 pub const IMAGE_PARAGRAPH_PREFIX: &str = "\u{FFFC}";
 
+/// Marks a paragraph that is an in-book link (an EPUB table of contents
+/// entry). Payload is `<target>\u{1F}<text>`: the zip entry path resolved at
+/// parse time, rewritten to a chapter index once the whole spine is read
+/// (unreadable targets degrade to their plain text).
+pub const LINK_PARAGRAPH_PREFIX: &str = "\u{FFFB}";
+
+/// Field separator inside a [`LINK_PARAGRAPH_PREFIX`] payload.
+pub const LINK_FIELD_SEPARATOR: char = '\u{1F}';
+
 /// Formats the library can hold today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BookFormat {

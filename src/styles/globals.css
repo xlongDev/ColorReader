@@ -412,6 +412,28 @@ select {
   text-justify: inter-ideograph;
 }
 
+/* Paged layouts slice tall images across page columns. Cap each image to one
+   page box: the measured scroller height (`--page-h`, injected by the reader's
+   ResizeObserver) minus the article padding (`--page-block`) and the image
+   paragraph's own vertical margins, and make it atomic so it moves whole to
+   the next column instead of being cut. `break-inside`
+   belongs on the wrapping block: WebKit ignores it on inline replaced
+   elements and slices their line box at the column edge. The img is
+   block-level so no line-height strut pads the paragraph and the cap math
+   stays deterministic; `image-para` is set by the reader on image-only <p>s. */
+.paged-prose .image-para {
+  break-inside: avoid;
+}
+
+.paged-prose .image-para img {
+  display: block;
+  margin-inline: auto;
+  /* max() floors the cap: with tall margins on a small window the calc can
+     go negative, and a negative max-height clamps to 0 — an invisible image
+     reads as a blank page. */
+  max-height: max(160px, calc(var(--page-h, 100vh) - 2 * var(--page-block, 3rem) - 4rem));
+}
+
 /* -- keep the macOS overlay traffic lights clear -------------------- */
 [data-tauri-drag-region] {
   -webkit-user-select: none;

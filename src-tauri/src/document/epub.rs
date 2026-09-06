@@ -12,7 +12,10 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::reader::Reader;
 use zip::ZipArchive;
 
-use super::{BookMetadata, CoverImage, IMAGE_PARAGRAPH_PREFIX, RawChapter, resolve_href};
+use super::{
+    BookMetadata, CoverImage, IMAGE_PARAGRAPH_PREFIX, LINK_FIELD_SEPARATOR, LINK_PARAGRAPH_PREFIX,
+    RawChapter, resolve_href,
+};
 use crate::error::{AppError, AppResult};
 
 const CONTAINER_ENTRY: &str = "META-INF/container.xml";
@@ -65,6 +68,9 @@ pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
 
     let base_dir = opf_path.rsplit_once('/').map_or("", |(dir, _)| dir);
     let mut chapters = Vec::new();
+    // Spine entry path → chapter index, for rewriting in-book link targets.
+    let mut entry_index: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
 
     for idref in &document.spine {
         let Some(item) = document.manifest.iter().find(|item| &item.id == idref) else {
@@ -84,10 +90,34 @@ pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
         let html = String::from_utf8_lossy(&bytes).into_owned();
         let chapter_dir = entry.rsplit_once('/').map_or("", |(dir, _)| dir);
         let mut chapter = html_to_chapter(&html, chapter_dir);
+        // A spine document with no readable prose (a pure-SVG cover that
+        // failed to resolve, an empty shell) would render as a blank page;
+        // drop it instead of numbering the void.
+        if chapter.paragraphs.is_empty() {
+            continue;
+        }
         if chapter.title.is_none() {
             chapter.title = Some(format!("第 {} 章", chapters.len() + 1));
         }
+        entry_index.insert(entry, chapters.len());
         chapters.push(chapter);
+    }
+
+    // In-book links point at spine entry paths; now that every chapter has an
+    // index, rewrite the targets. Anything unresolvable degrades to its text.
+    for chapter in &mut chapters {
+        for paragraph in &mut chapter.paragraphs {
+            if let Some(payload) = paragraph.strip_prefix(LINK_PARAGRAPH_PREFIX)
+                && let Some((target, text)) = payload.split_once(LINK_FIELD_SEPARATOR)
+                && let Some(idx) = entry_index.get(target)
+            {
+                *paragraph = format!("{LINK_PARAGRAPH_PREFIX}{idx}{LINK_FIELD_SEPARATOR}{text}");
+            } else if paragraph.starts_with(LINK_PARAGRAPH_PREFIX) {
+                *paragraph = paragraph
+                    .split_once(LINK_FIELD_SEPARATOR)
+                    .map_or(String::new(), |(_, text)| text.to_string());
+            }
+        }
     }
 
     if chapters.is_empty() {
@@ -440,11 +470,19 @@ fn html_to_chapter(html: &str, base_dir: &str) -> RawChapter {
     let mut in_heading = false;
     // Tag whose contents we are skipping, if any.
     let mut skip: Option<String> = None;
+    // Resolved target of the `<a href>` currently open, if it is internal.
+    let mut link_target: Option<String> = None;
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(element)) => {
                 let tag = element.name().local_name().as_ref().to_string();
+                // EPUB cover pages are usually `<svg><image xlink:href/></svg>`;
+                // the svg skip must not swallow the one reference that matters.
+                if tag == "image" && skip.as_deref() == Some("svg") {
+                    push_image_marker(&mut chapter.paragraphs, base_dir, &element);
+                    continue;
+                }
                 if skip.is_some() {
                     continue;
                 }
@@ -457,10 +495,25 @@ fn html_to_chapter(html: &str, base_dir: &str) -> RawChapter {
                     flush_paragraph(&mut current, &mut chapter.paragraphs);
                     heading.clear();
                     in_heading = true;
+                } else if tag == "a" {
+                    let href = attribute(&element, "href");
+                    if is_internal_href(&href) {
+                        flush_paragraph(&mut current, &mut chapter.paragraphs);
+                        // Only the document path matters; chapter-level jumps.
+                        let mut target = resolve_href(base_dir, &href);
+                        if let Some(pos) = target.find('#') {
+                            target.truncate(pos);
+                        }
+                        link_target = Some(target);
+                    }
                 }
             }
             Ok(Event::Empty(element)) => {
                 let tag = element.name().local_name().as_ref().to_string();
+                if tag == "image" && skip.as_deref() == Some("svg") {
+                    push_image_marker(&mut chapter.paragraphs, base_dir, &element);
+                    continue;
+                }
                 if skip.is_some() {
                     continue;
                 }
@@ -491,6 +544,15 @@ fn html_to_chapter(html: &str, base_dir: &str) -> RawChapter {
                         }
                         in_heading = false;
                     }
+                } else if tag == "a" && link_target.is_some() {
+                    let text = take_normalised(&mut current);
+                    if let Some(target) = link_target.take()
+                        && !text.is_empty()
+                    {
+                        chapter.paragraphs.push(format!(
+                            "{LINK_PARAGRAPH_PREFIX}{target}{LINK_FIELD_SEPARATOR}{text}"
+                        ));
+                    }
                 } else if is_block(&tag) {
                     flush_paragraph(&mut current, &mut chapter.paragraphs);
                 }
@@ -520,6 +582,16 @@ fn html_to_chapter(html: &str, base_dir: &str) -> RawChapter {
 /// Elements whose contents are not prose and must not leak into paragraphs.
 fn is_skipped(tag: &str) -> bool {
     matches!(tag, "style" | "script" | "head" | "svg" | "math")
+}
+
+/// True for hrefs that can resolve to another spine document: not empty, not
+/// a same-document fragment, and not an external scheme.
+fn is_internal_href(href: &str) -> bool {
+    let href = href.trim();
+    !href.is_empty()
+        && !href.starts_with('#')
+        && !href.to_ascii_lowercase().starts_with("http")
+        && !href.to_ascii_lowercase().starts_with("mailto:")
 }
 
 /// Records an `<img>`/`<image>` reference as an image marker paragraph.
@@ -720,6 +792,37 @@ mod tests {
     }
 
     #[test]
+    fn an_image_inside_svg_becomes_a_marker_paragraph() {
+        let html = r#"<html xmlns="http://www.w3.org/1999/xhtml">
+          <body><svg viewBox="0 0 1 1"><image xlink:href="cover.jpg"/></svg></body>
+        </html>"#;
+
+        let chapter = html_to_chapter(html, "OEBPS");
+        assert_eq!(chapter.paragraphs, ["\u{FFFC}OEBPS/cover.jpg"]);
+    }
+
+    #[test]
+    fn an_internal_link_becomes_a_marker_paragraph_and_external_ones_do_not() {
+        let html = r##"<html><body>
+          <p><a href="ch3.xhtml">雕刻时光</a></p>
+          <p><a href="text/ch4.xhtml#p2">使命与命运</a></p>
+          <p><a href="https://example.com">外链</a></p>
+          <p><a href="#note">同文档</a></p>
+        </body></html>"##;
+
+        let chapter = html_to_chapter(html, "text");
+        assert_eq!(
+            chapter.paragraphs,
+            [
+                "\u{FFFB}text/ch3.xhtml\u{1F}雕刻时光",
+                "\u{FFFB}text/text/ch4.xhtml\u{1F}使命与命运",
+                "外链",
+                "同文档",
+            ]
+        );
+    }
+
+    #[test]
     fn chapters_follow_the_spine_order() {
         let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="2.0"
@@ -753,6 +856,82 @@ mod tests {
         assert_eq!(chapters[0].title.as_deref(), Some("甲"));
         assert_eq!(chapters[0].paragraphs, ["甲", "正文甲"]);
         assert_eq!(chapters[1].title.as_deref(), Some("乙"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn spine_links_resolve_to_chapter_indices_and_empty_documents_vanish() {
+        let opf = r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="2.0"
+         xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <metadata><dc:title>书</dc:title></metadata>
+  <manifest>
+    <item id="cover" href="text/cover.xhtml" media-type="application/xhtml+xml"/>
+    <item id="toc" href="text/toc.xhtml" media-type="application/xhtml+xml"/>
+    <item id="c1" href="text/c1.xhtml" media-type="application/xhtml+xml"/>
+  </manifest>
+  <spine><itemref idref="cover"/><itemref idref="toc"/><itemref idref="c1"/></spine>
+</package>"#;
+        let dir = fixture::temp_dir("epub-links");
+        let path = fixture::write_epub(
+            &dir,
+            "book.epub",
+            opf,
+            &[
+                // A pure-SVG shell: yields no prose, must not become a blank page.
+                (
+                    "OEBPS/text/cover.xhtml",
+                    r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><svg><image xlink:href="../img/c.jpg"/></svg></body></html>"#.as_bytes(),
+                ),
+                (
+                    "OEBPS/text/toc.xhtml",
+                    "<html><body><p><a href=\"c1.xhtml\">正文甲</a></p></body></html>".as_bytes(),
+                ),
+                (
+                    "OEBPS/text/c1.xhtml",
+                    "<html><body><h1>甲</h1><p>正文甲</p></body></html>".as_bytes(),
+                ),
+            ],
+        );
+
+        let chapters = read_chapters(&path).expect("read chapters");
+        assert_eq!(chapters.len(), 3, "SVG 封面要成为图片章节");
+        assert_eq!(chapters[0].paragraphs, ["\u{FFFC}OEBPS/img/c.jpg"]);
+        assert_eq!(chapters[1].paragraphs, ["\u{FFFB}2\u{1F}正文甲"]);
+        assert_eq!(chapters[2].paragraphs, ["甲", "正文甲"]);
+
+        // And a genuinely empty spine document is dropped rather than
+        // becoming a blank page.
+        let opf = opf
+            .replace(
+                "<itemref idref=\"cover\"/>",
+                "<itemref idref=\"void\"/>",
+            )
+            .replace(
+                "<item id=\"toc\"",
+                "<item id=\"void\" href=\"text/void.xhtml\" media-type=\"application/xhtml+xml\"/>\n    <item id=\"toc\"",
+            );
+        let path = fixture::write_epub(
+            &dir,
+            "book2.epub",
+            &opf,
+            &[
+                ("OEBPS/text/void.xhtml", "<html><body></body></html>".as_bytes()),
+                (
+                    "OEBPS/text/toc.xhtml",
+                    "<html><body><p><a href=\"c1.xhtml\">正文甲</a></p></body></html>".as_bytes(),
+                ),
+                (
+                    "OEBPS/text/c1.xhtml",
+                    "<html><body><h1>甲</h1><p>正文甲</p></body></html>".as_bytes(),
+                ),
+            ],
+        );
+
+        let chapters = read_chapters(&path).expect("read chapters");
+        assert_eq!(chapters.len(), 2, "空白 spine 文档必须被丢弃");
+        assert_eq!(chapters[0].paragraphs, ["\u{FFFB}1\u{1F}正文甲"]);
 
         std::fs::remove_dir_all(&dir).ok();
     }
