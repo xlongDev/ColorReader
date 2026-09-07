@@ -88,26 +88,35 @@ export function resolveSelection(selection: Selection, paragraphs: string[]): Te
 export interface Segment {
   text: string;
   highlighted: boolean;
+  /** The annotation covering this run, if any. Search matches highlight
+   *  without owning an annotation, so they stay undefined here. */
+  annotationId?: string;
 }
 
 /** A `[start, end)` run inside one paragraph's own text. */
 export type LocalRange = readonly [number, number];
+
+/** A highlight source: a local range plus the annotation that owns it. */
+export interface MarkRange {
+  range: LocalRange;
+  id?: string;
+}
 
 /**
  * Splits `text` into runs, marking the parts covered by `ranges`. Highlights
  * never overlap in practice, but a midpoint test keeps the sweep correct even
  * when two of them touch.
  */
-export function segmentText(text: string, ranges: readonly LocalRange[]): Segment[] {
+export function segmentText(text: string, ranges: readonly MarkRange[]): Segment[] {
   if (text.length === 0) return [];
   const clamp = (value: number) => Math.min(Math.max(value, 0), text.length);
   const clamped = ranges
-    .map(([start, end]) => [clamp(start), clamp(end)] as const)
-    .filter(([start, end]) => start < end);
+    .map(({ range: [start, end], id }) => ({ start: clamp(start), end: clamp(end), id }))
+    .filter(({ start, end }) => start < end);
   if (clamped.length === 0) return [{ text, highlighted: false }];
 
   const cuts = new Set<number>([0, text.length]);
-  for (const [start, end] of clamped) {
+  for (const { start, end } of clamped) {
     cuts.add(start);
     cuts.add(end);
   }
@@ -119,9 +128,11 @@ export function segmentText(text: string, ranges: readonly LocalRange[]): Segmen
     const to = points[i + 1]!;
     if (to <= from) continue;
     const mid = (from + to) >> 1;
+    const owner = clamped.find(({ start, end }) => mid >= start && mid < end);
     segments.push({
       text: text.slice(from, to),
-      highlighted: clamped.some(([start, end]) => mid >= start && mid < end),
+      highlighted: owner !== undefined,
+      ...(owner?.id !== undefined ? { annotationId: owner.id } : {}),
     });
   }
   return segments;
@@ -156,11 +167,13 @@ export function highlightSegments(
   const text = paragraphs[idx] ?? "";
   if (text.length === 0) return [];
   const localStart = paragraphStart(paragraphs, idx);
-  const ranges: LocalRange[] = annotations.map((annotation) => [
-    annotation.startChar - localStart,
-    annotation.endChar - localStart,
-  ]);
-  if (query.trim().length > 0) ranges.push(...matchRanges(text, query));
+  const ranges: MarkRange[] = annotations.map((annotation) => ({
+    range: [annotation.startChar - localStart, annotation.endChar - localStart],
+    id: annotation.id,
+  }));
+  if (query.trim().length > 0) {
+    ranges.push(...matchRanges(text, query).map((range) => ({ range })));
+  }
   return segmentText(text, ranges);
 }
 

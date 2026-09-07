@@ -61,7 +61,7 @@ describe("charRange", () => {
 
 describe("segmentText", () => {
   it("splits a paragraph around a single range", () => {
-    expect(segmentText("你好世界", [[1, 3]])).toEqual([
+    expect(segmentText("你好世界", [{ range: [1, 3] }])).toEqual([
       { text: "你", highlighted: false },
       { text: "好世", highlighted: true },
       { text: "界", highlighted: false },
@@ -70,22 +70,25 @@ describe("segmentText", () => {
 
   it("returns the whole text untouched without ranges", () => {
     expect(segmentText("abc", [])).toEqual([{ text: "abc", highlighted: false }]);
-    expect(segmentText("", [[0, 1]])).toEqual([]);
+    expect(segmentText("", [{ range: [0, 1] }])).toEqual([]);
   });
 
   it("clamps a range that bleeds past the text", () => {
-    expect(segmentText("abc", [[5, 12]])).toEqual([{ text: "abc", highlighted: false }]);
+    expect(segmentText("abc", [{ range: [5, 12] }])).toEqual([{ text: "abc", highlighted: false }]);
   });
 
   it("keeps two touching ranges from merging", () => {
-    expect(
-      segmentText("abcd", [
-        [0, 2],
-        [2, 4],
-      ]),
-    ).toEqual([
+    expect(segmentText("abcd", [{ range: [0, 2] }, { range: [2, 4] }])).toEqual([
       { text: "ab", highlighted: true },
       { text: "cd", highlighted: true },
+    ]);
+  });
+
+  it("reports the owning annotation on covered runs", () => {
+    expect(segmentText("abcd", [{ range: [1, 3], id: "a1" }])).toEqual([
+      { text: "a", highlighted: false },
+      { text: "bc", highlighted: true, annotationId: "a1" },
+      { text: "d", highlighted: false },
     ]);
   });
 });
@@ -95,14 +98,14 @@ describe("highlightSegments", () => {
     const segments = highlightSegments(paragraphs, 0, [annotation(0, 1, 3)], "");
     expect(segments).toEqual([
       { text: "你", highlighted: false },
-      { text: "好世", highlighted: true },
+      { text: "好世", highlighted: true, annotationId: "a" },
       { text: "界", highlighted: false },
     ]);
   });
 
   it("covers a whole paragraph when the highlight runs into the next one", () => {
     const segments = highlightSegments(paragraphs, 1, [annotation(0, 5, 12)], "");
-    expect(segments).toEqual([{ text: "abc", highlighted: true }]);
+    expect(segments).toEqual([{ text: "abc", highlighted: true, annotationId: "a" }]);
   });
 
   it("marks every occurrence of the search query", () => {
@@ -119,7 +122,7 @@ describe("highlightSegments", () => {
   it("keeps annotations and query matches together", () => {
     const segments = highlightSegments(paragraphs, 1, [annotation(0, 5, 6)], "c");
     expect(segments).toEqual([
-      { text: "a", highlighted: true },
+      { text: "a", highlighted: true, annotationId: "a" },
       { text: "b", highlighted: false },
       { text: "c", highlighted: true },
     ]);

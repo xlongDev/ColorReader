@@ -360,7 +360,12 @@ function ReaderView({
   const outline = outlineQuery.data ?? [];
   const [panel, setPanel] = useState<Panel>("none");
   const [search, setSearch] = useState(initialQuery);
-  const [pending, setPending] = useState<{ range: TextRange; x: number; y: number } | null>(null);
+  const [pending, setPending] = useState<{
+    range: TextRange;
+    x: number;
+    y: number;
+    annotationId?: string;
+  } | null>(null);
   // Quoted text for the AI drawer; `null` means "use the whole chapter".
   const [aiContext, setAiContext] = useState<string | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
@@ -1267,6 +1272,7 @@ function ReaderView({
           key: `${chapterIdx}-${idx}-${position}`,
           text: segment.text,
           highlighted: segment.highlighted,
+          annotationId: segment.annotationId,
         }),
       ),
     }));
@@ -1646,12 +1652,51 @@ function ReaderView({
                     >
                       {segments.map((segment) =>
                         segment.highlighted ? (
-                          <mark
-                            key={segment.key}
-                            className="bg-accent-soft rounded-[2px] text-inherit"
-                          >
-                            {segment.text}
-                          </mark>
+                          segment.annotationId ? (
+                            // An annotation-backed run opens the same pill a
+                            // fresh selection gets, with removal in place of
+                            // creation. The wrapper is an anchor, not a
+                            // `<button>`: buttons render as inline-block even
+                            // with `display: inline`, and one atomic box
+                            // breaks the paragraph's justified line breaking.
+                            // A native anchor is focusable and Enter-clickable
+                            // for free; the inner `<mark>` keeps the highlight
+                            // semantics. A search match has nothing to open
+                            // and stays a plain mark.
+                            <a
+                              key={segment.key}
+                              href={`#note-${segment.annotationId}`}
+                              className="cursor-pointer"
+                              onClick={(event) => {
+                                event.preventDefault();
+                                const annotation = annotations?.find(
+                                  (a) => a.id === segment.annotationId,
+                                );
+                                if (!annotation) return;
+                                setPending({
+                                  range: {
+                                    start: annotation.startChar,
+                                    end: annotation.endChar,
+                                    text: annotation.text,
+                                  },
+                                  x: event.clientX,
+                                  y: event.clientY,
+                                  annotationId: annotation.id,
+                                });
+                              }}
+                            >
+                              <mark className="bg-accent-soft rounded-[2px] text-inherit">
+                                {segment.text}
+                              </mark>
+                            </a>
+                          ) : (
+                            <mark
+                              key={segment.key}
+                              className="bg-accent-soft rounded-[2px] text-inherit"
+                            >
+                              {segment.text}
+                            </mark>
+                          )
                         ) : (
                           segment.text
                         ),
@@ -1770,13 +1815,26 @@ function ReaderView({
           style={{ left: pending.x, top: pending.y - 44 }}
         >
           <div className="glass-2 shadow-panel flex items-center overflow-hidden rounded-full">
-            <button
-              type="button"
-              onClick={() => createHighlight(pending.range)}
-              className="bg-accent text-on-accent px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90"
-            >
-              高亮
-            </button>
+            {pending.annotationId ? (
+              <button
+                type="button"
+                onClick={() => {
+                  deleteAnnotation.mutate(pending.annotationId!);
+                  setPending(null);
+                }}
+                className="bg-accent text-on-accent px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90"
+              >
+                取消高亮
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => createHighlight(pending.range)}
+                className="bg-accent text-on-accent px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90"
+              >
+                高亮
+              </button>
+            )}
             <button
               type="button"
               onClick={() => askAboutSelection(pending.range)}
