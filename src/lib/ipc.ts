@@ -72,6 +72,16 @@ export const ipc = {
     return invoke<ArrayBuffer>("book_asset", { id, path });
   },
 
+  /** The whole stored source file (binary channel); powers pdf.js rendering. */
+  bookFile(id: string): Promise<ArrayBuffer> {
+    return invoke<ArrayBuffer>("book_source_file", { id });
+  },
+
+  /** Stores a PNG the frontend rendered as this book's cover (PDF first page). */
+  bookCoverSave(id: string, bytes: ArrayBuffer): Promise<void> {
+    return invoke("book_cover_save", { id, bytes: Array.from(new Uint8Array(bytes)) });
+  },
+
   /** Every image in the book, in reading order, with its chapter index. */
   bookImages(id: string): Promise<BookImage[]> {
     return invoke<BookImage[]>("book_images", { id });

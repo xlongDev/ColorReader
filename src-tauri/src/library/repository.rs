@@ -421,6 +421,18 @@ pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> AppResult<()
     Ok(())
 }
 
+/// Points a book at an already-written cover file, after import.
+pub fn set_cover(conn: &Connection, id: &str, cover_path: &str) -> AppResult<()> {
+    let changed = conn.execute(
+        "UPDATE books SET cover_path = ?1, updated_at = ?2 WHERE id = ?3",
+        params![cover_path, super::now_seconds(), id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(id.to_string()));
+    }
+    Ok(())
+}
+
 /// Records a reading position, clamped to `0..=1`, and bumps `last_read_at`.
 pub fn set_progress(conn: &Connection, id: &str, progress: f64) -> AppResult<()> {
     let progress = progress.clamp(0.0, 1.0);
@@ -448,6 +460,10 @@ pub fn source(conn: &Connection, id: &str) -> AppResult<(String, BookFormat)> {
 fn parse_format(value: &str) -> AppResult<BookFormat> {
     match value {
         "epub" => Ok(BookFormat::Epub),
+        "pdf" => Ok(BookFormat::Pdf),
+        "mobi" => Ok(BookFormat::Mobi),
+        "fb2" => Ok(BookFormat::Fb2),
+        "cbz" => Ok(BookFormat::Cbz),
         "markdown" => Ok(BookFormat::Markdown),
         "txt" => Ok(BookFormat::Text),
         other => Err(AppError::UnsupportedFormat(other.to_string())),

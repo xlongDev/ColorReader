@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { readPdfOutline, type PdfOutlineItem } from "@/lib/pdf";
 import type { BookImage, ChapterContent, ChapterMeta } from "@/types/ipc";
 
 /** A single book for the reader header. */
@@ -51,6 +52,22 @@ export function useBookImages(bookId: string | null) {
       return ipc.bookImages(bookId);
     },
     enabled: bookId !== null,
+    staleTime: 60_000,
+  });
+}
+
+/** The PDF's bookmark outline, empty when the document has none. Read by
+    pdf.js (the same source readest uses), which resolves named destinations
+    and encoded titles that a hand-rolled walker misses. Only queried for PDF
+    books (`enabled`), where chapters are pages, not headings. */
+export function usePdfOutline(bookId: string | null, enabled: boolean) {
+  return useQuery({
+    queryKey: ["reader", "pdf-outline", bookId],
+    queryFn: () => {
+      if (!bookId || !isDesktopRuntime) return Promise.resolve<PdfOutlineItem[]>([]);
+      return readPdfOutline(bookId);
+    },
+    enabled: bookId !== null && enabled,
     staleTime: 60_000,
   });
 }

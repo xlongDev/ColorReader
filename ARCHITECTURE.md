@@ -43,7 +43,7 @@
 | `db/`         | SQLite 连接（WAL、单写者 `Arc<Mutex<Connection>>`）+ `user_version` 迁移运行器                                                                                                                                                                                       |
 | `ai/`         | AI 配置仓储（`settings` KV 表）+ OpenAI 兼容流式聊天客户端（SSE 解析为纯函数）+ embedding 客户端（批量、归一化、f32 序列化）+ rerank 客户端（Cohere 兼容）                                                                                                           |
 | `library/`    | 导入管线（去重、文件落盘、元数据提取）+ 书籍仓储（查询 / 统计）+ 章节仓储 + 标注仓储 + 全文检索 + 书档（导入 / 导出 / 加密）+ RAG（组块 / 索引 / 暴力检索）+ 知识图谱（LLM 抽取 / 存储 / 邻域查询）+ 书源（JSON 规则 / 搜索 / 下载）+ WebDAV 同步（进度 / LWW 合并） |
-| `document/`   | EPUB（OPF / spine 解析）/ TXT / Markdown 的元数据、封面与章节正文提取                                                                                                                                                                                                |
+| `document/`   | 七种格式的元数据、封面与章节正文提取：`epub`（OPF / spine）、`pdf`（逐页文本）、`mobi`（PDB 容器 + PalmDOC / HUFF-CDIC + EXTH）、`fb2`（XML，含 `.fb2.zip`）、`cbz`（图片页）、`plain`（TXT / Markdown），`html.rs` 为前三者共用的 HTML → 段落解析器                 |
 | `resource.rs` | `colorreader://` 自定义协议：封面图片按 id 从 Rust 流式返回                                                                                                                                                                                                          |
 | `error.rs`    | `AppError`：thiserror 定义，实现 `Serialize`，统一转成 `{ message }` 交给前端                                                                                                                                                                                        |
 | `state.rs`    | `AppState`（启动时间、数据目录布局、书库句柄），通过 `app.manage` 注入                                                                                                                                                                                               |
@@ -66,7 +66,11 @@ chapters_fts（FTS5 外部内容表，内容指向 chapters，由触发器维护
 
 ### 阅读引擎与进度模型
 
-章节正文在**导入时一次性提取并落库**，阅读阶段不再解析源文件。EPUB 按 OPF spine 顺序逐个 `itemref` 提取，`<head>/<style>/<script>/<svg>/<math>` 丢弃，块级边界切段落、首个标题当章节名；TXT/Markdown 按标题标记（ATX `#` / `第N章` / `Chapter N`）切分，无标记则整本单章。
+章节正文在**导入时一次性提取并落库**，阅读阶段不再解析源文件。EPUB 按 OPF spine 顺序逐个 `itemref` 提取，`<head>/<style>/<script>/<svg>/<math>` 丢弃，块级边界切段落、首个标题当章节名；MOBI 是单篇 HTML，走同一个 `html.rs` 解析器按标题切章（超长章按段落边界再切，避免整本一章）；FB2 按 `<body>` 里的 `<section>` 分章；CBZ 每页图片一章；PDF 每页一章；TXT/Markdown 按标题标记（ATX `#` / `第N章` / `Chapter N`）切分，无标记则整本单章。
+
+内嵌图片统一记成带内标记段落（`\u{FFFC}` + 容器内的可寻址名字），阅读时按需经 `book.asset` 取字节：EPUB / CBZ 按 ZIP 条目名，FB2 按 `#<binary id>`（base64 内联），其余格式没有内嵌资源。
+
+**PDF 是唯一的固定版式例外**：阅读器不走文字段落，而是用 pdf.js（懒加载独立 chunk）把每页原样画到 canvas，`book.source_file` 返回整份文件字节。提取的逐页文本仍落库，供全文检索、朗读与 AI 使用，但不负责显示。PDF 排版不走 prose 的 multicol 分栏（页盒画布进分栏必溢出一栏，读起来就是整页空白），由独立的固定高度容器承载。目录面板由 pdf.js `getOutline()` 解析（named dest、`/A` action、UTF-16 标题均已处理，映射到 0-based 页码）；没有书签的 PDF 回退到逐页列表。封面同理由前端渲染第 1 页成 PNG，经 `book.cover_save` 落盘（书库挂载时对缺封面的 PDF 自动补一次）。画布不可划选，标注/划词问 AI 在 PDF 上暂不可用。
 
 阅读器**一次只加载一章**，整本书既不进 React State 也不进 DOM。全局进度 `0..1` 通过 `chars` 前缀和映射到章节与章内比例（`locateChapter` / `globalProgress`），定位时不需要加载任何正文。Phase 3 之前导入的书没有 `chapters` 行，`reader_toc` 在首次读取时用 `ensure_chapters`（`with_tx` 内二次检查，防并发重复插入）惰性补建索引。
 

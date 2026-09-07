@@ -283,12 +283,80 @@ CREATE TABLE bookmarks (
 CREATE INDEX bookmarks_book ON bookmarks (book_id, chapter_idx, fraction);
 "#,
     },
+    Migration {
+        version: 10,
+        name: "books_format_unconstrained",
+        // The set of readable formats is data, not schema: `BookFormat` names
+        // it in Rust and it grows without a schema change, so the CHECK on
+        // `format` has to go. SQLite cannot alter a constraint in place, so the
+        // table is rebuilt the documented way: create, copy, drop, rename.
+        //
+        // [`migrate`] runs with foreign key enforcement off: with it on,
+        // `DROP TABLE books` fires an implicit DELETE that cascades into every
+        // table referencing it, and the rebuild would empty the whole library.
+        sql: r#"
+CREATE TABLE books_new (
+  id           TEXT PRIMARY KEY,
+  title        TEXT NOT NULL,
+  sort_title   TEXT NOT NULL,
+  subtitle     TEXT,
+  description  TEXT,
+  language     TEXT,
+  publisher    TEXT,
+  identifier   TEXT,
+  format       TEXT NOT NULL,
+  content_hash TEXT NOT NULL UNIQUE,
+  file_path    TEXT NOT NULL,
+  file_size    INTEGER NOT NULL,
+  cover_path   TEXT,
+  added_at     INTEGER NOT NULL,
+  updated_at   INTEGER NOT NULL,
+  last_read_at INTEGER,
+  progress     REAL NOT NULL DEFAULT 0 CHECK (progress >= 0 AND progress <= 1),
+  favorite     INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0, 1))
+);
+
+INSERT INTO books_new
+  (id, title, sort_title, subtitle, description, language, publisher, identifier,
+   format, content_hash, file_path, file_size, cover_path, added_at, updated_at,
+   last_read_at, progress, favorite)
+SELECT
+  id, title, sort_title, subtitle, description, language, publisher, identifier,
+  format, content_hash, file_path, file_size, cover_path, added_at, updated_at,
+  last_read_at, progress, favorite
+FROM books;
+
+DROP TABLE books;
+ALTER TABLE books_new RENAME TO books;
+
+CREATE INDEX books_added_at ON books (added_at DESC);
+CREATE INDEX books_last_read_at ON books (last_read_at DESC) WHERE last_read_at IS NOT NULL;
+CREATE INDEX books_sort_title ON books (sort_title COLLATE NOCASE);
+CREATE INDEX books_favorite ON books (added_at DESC) WHERE favorite = 1;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.
+///
+/// Enforcement of foreign keys is off while migrations run. A table rebuild
+/// (migration 10) drops the table it replaces, and with enforcement on SQLite
+/// answers a `DROP TABLE` with an implicit `DELETE` that cascades into every
+/// child table. The pragma is a no-op inside a transaction, so it is switched
+/// here rather than in the migration's SQL.
 pub fn migrate(conn: &mut Connection) -> AppResult<u32> {
     let current = schema_version(conn)?;
+    let enforced = foreign_keys_enforced(conn)?;
+    conn.pragma_update(None, "foreign_keys", "OFF")?;
 
+    let result = apply_pending(conn, current);
+    if enforced {
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+    }
+    result
+}
+
+fn apply_pending(conn: &mut Connection, current: u32) -> AppResult<u32> {
     for migration in MIGRATIONS {
         if migration.version <= current {
             continue;
@@ -303,6 +371,11 @@ pub fn migrate(conn: &mut Connection) -> AppResult<u32> {
     }
 
     schema_version(conn)
+}
+
+fn foreign_keys_enforced(conn: &Connection) -> AppResult<bool> {
+    let value: i64 = conn.pragma_query_value(None, "foreign_keys", |row| row.get(0))?;
+    Ok(value != 0)
 }
 
 /// Current `user_version`, i.e. the highest applied migration number.
@@ -352,6 +425,49 @@ mod tests {
         for expected in ["books", "authors", "book_authors", "tags", "book_tags"] {
             assert!(tables.contains(&expected.to_string()), "缺少表 {expected}: {tables:?}");
         }
+    }
+
+    #[test]
+    fn rebuilding_books_keeps_every_row_and_accepts_new_formats() {
+        // Start from the schema as it was before the rebuild, with data in a
+        // child table: the point of the test is that nothing is lost.
+        let mut conn = fresh();
+        for migration in &MIGRATIONS[..9] {
+            conn.execute_batch(migration.sql).expect("apply v9 schema");
+        }
+        conn.pragma_update(None, "user_version", 9).expect("pin version");
+        conn.execute(
+            "INSERT INTO books (id, title, sort_title, format, content_hash, file_path, file_size, \
+             added_at, updated_at) VALUES ('b', 'T', 't', 'epub', 'h', 'p', 1, 1, 1)",
+            [],
+        )
+        .expect("insert book");
+        conn.execute("INSERT INTO authors (id, name, sort_name) VALUES ('a', 'A', 'a')", [])
+            .expect("insert author");
+        conn.execute(
+            "INSERT INTO book_authors (book_id, author_id, position) VALUES ('b', 'a', 1)",
+            [],
+        )
+        .expect("link");
+
+        assert_eq!(migrate(&mut conn).expect("migrate"), 10);
+
+        let title: String = conn
+            .query_row("SELECT title FROM books WHERE id = 'b'", [], |row| row.get(0))
+            .expect("书必须还在");
+        assert_eq!(title, "T");
+        let links: i64 = conn
+            .query_row("SELECT COUNT(*) FROM book_authors", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(links, 1, "DROP TABLE 不得级联删掉子表行");
+
+        // The constraint that blocked new formats is gone.
+        conn.execute(
+            "INSERT INTO books (id, title, sort_title, format, content_hash, file_path, file_size, \
+             added_at, updated_at) VALUES ('c', 'C', 'c', 'cbz', 'h2', 'p2', 1, 1, 1)",
+            [],
+        )
+        .expect("新格式必须能入库");
     }
 
     #[test]

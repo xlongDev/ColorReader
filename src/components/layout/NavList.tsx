@@ -217,8 +217,9 @@ interface FooterAction {
  * 2. 折叠/隐藏/⌘K/GitHub (chrome actions), equal-width.
  * Collapsed rail: centered vertical stack of the actions that still make
  * sense at zero width. */
-function Footer() {
-  const collapsed = useSettings((s) => s.sidebarCollapsed);
+function Footer({ compact }: { compact?: boolean } = {}) {
+  const storeCollapsed = useSettings((s) => s.sidebarCollapsed);
+  const collapsed = compact ?? storeCollapsed;
   const toggle = useSettings((s) => s.toggleSidebar);
   const hide = useSettings((s) => s.setSidebarHidden);
   const openPalette = useCommandPalette((s) => s.setOpen);

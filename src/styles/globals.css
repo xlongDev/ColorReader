@@ -366,6 +366,19 @@ select {
   }
 }
 
+/* Bookmark-added confirmation pop on the reader header icon. */
+@keyframes bookmark-pop {
+  0% {
+    transform: scale(0.6);
+  }
+  45% {
+    transform: scale(1.25);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
 .chapter-slide-fwd {
   animation: chapter-fwd 0.32s var(--ease-out) both;
 }

@@ -12,9 +12,9 @@ use quick_xml::events::{BytesEnd, BytesStart, Event};
 use quick_xml::reader::Reader;
 use zip::ZipArchive;
 
+use super::html::{self, attribute, chapter_from_blocks};
 use super::{
-    BookMetadata, CoverImage, IMAGE_PARAGRAPH_PREFIX, LINK_FIELD_SEPARATOR, LINK_PARAGRAPH_PREFIX,
-    RawChapter, resolve_href,
+    BookMetadata, CoverImage, LINK_FIELD_SEPARATOR, LINK_PARAGRAPH_PREFIX, RawChapter, resolve_href,
 };
 use crate::error::{AppError, AppResult};
 
@@ -89,7 +89,7 @@ pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
         };
         let html = String::from_utf8_lossy(&bytes).into_owned();
         let chapter_dir = entry.rsplit_once('/').map_or("", |(dir, _)| dir);
-        let mut chapter = html_to_chapter(&html, chapter_dir);
+        let mut chapter = chapter_from_blocks(html::parse_html(&html, chapter_dir));
         // A spine document with no readable prose (a pure-SVG cover that
         // failed to resolve, an empty shell) would render as a blank page;
         // drop it instead of numbering the void.
@@ -171,16 +171,6 @@ fn read_entry(
 
 fn extension_of(path: &str) -> String {
     Path::new(path).extension().and_then(|ext| ext.to_str()).unwrap_or("png").to_ascii_lowercase()
-}
-
-/// Reads an attribute by local name, ignoring any namespace prefix.
-fn attribute(element: &BytesStart<'_>, key: &str) -> String {
-    element
-        .attributes()
-        .flatten()
-        .find(|attr| attr.key.local_name().as_ref() == key)
-        .and_then(|attr| unescape(&attr.value).ok().map(|value| value.trim().to_owned()))
-        .unwrap_or_default()
 }
 
 /// What the current text run belongs to.
@@ -422,215 +412,6 @@ fn is_html_media_type(media_type: &str) -> bool {
     media_type == "application/xhtml+xml" || media_type == "text/html"
 }
 
-/// A document whose text belongs in the spine: XHTML/HTML.
-fn is_heading(tag: &str) -> bool {
-    matches!(tag, "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
-}
-
-/// Block elements whose close ends a paragraph.
-fn is_block(tag: &str) -> bool {
-    matches!(
-        tag,
-        "p" | "div"
-            | "li"
-            | "blockquote"
-            | "tr"
-            | "td"
-            | "th"
-            | "section"
-            | "article"
-            | "pre"
-            | "figure"
-            | "figcaption"
-            | "header"
-            | "footer"
-            | "aside"
-            | "main"
-            | "ul"
-            | "ol"
-            | "table"
-            | "body"
-            | "html"
-    )
-}
-
-/// Streaming XHTML → plain-text converter.
-///
-/// Style and script contents are dropped, block boundaries become paragraph
-/// breaks, and the first heading supplies the chapter title. Images become
-/// marker paragraphs (see [`IMAGE_PARAGRAPH_PREFIX`]) whose payload is the
-/// archive entry path resolved against `base_dir`. This never loads the
-/// document as a DOM: it is a single forward pass capped at a byte limit.
-fn html_to_chapter(html: &str, base_dir: &str) -> RawChapter {
-    let mut reader = Reader::from_str(html);
-    let mut buf = Vec::new();
-    let mut chapter = RawChapter::default();
-    let mut current = String::new();
-    let mut heading = String::new();
-    let mut in_heading = false;
-    // Tag whose contents we are skipping, if any.
-    let mut skip: Option<String> = None;
-    // Resolved target of the `<a href>` currently open, if it is internal.
-    let mut link_target: Option<String> = None;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(Event::Start(element)) => {
-                let tag = element.name().local_name().as_ref().to_string();
-                // EPUB cover pages are usually `<svg><image xlink:href/></svg>`;
-                // the svg skip must not swallow the one reference that matters.
-                if tag == "image" && skip.as_deref() == Some("svg") {
-                    push_image_marker(&mut chapter.paragraphs, base_dir, &element);
-                    continue;
-                }
-                if skip.is_some() {
-                    continue;
-                }
-                if is_skipped(&tag) {
-                    skip = Some(tag);
-                } else if tag == "img" || tag == "image" {
-                    flush_paragraph(&mut current, &mut chapter.paragraphs);
-                    push_image_marker(&mut chapter.paragraphs, base_dir, &element);
-                } else if is_heading(&tag) {
-                    flush_paragraph(&mut current, &mut chapter.paragraphs);
-                    heading.clear();
-                    in_heading = true;
-                } else if tag == "a" {
-                    let href = attribute(&element, "href");
-                    if is_internal_href(&href) {
-                        flush_paragraph(&mut current, &mut chapter.paragraphs);
-                        // Only the document path matters; chapter-level jumps.
-                        let mut target = resolve_href(base_dir, &href);
-                        if let Some(pos) = target.find('#') {
-                            target.truncate(pos);
-                        }
-                        link_target = Some(target);
-                    }
-                }
-            }
-            Ok(Event::Empty(element)) => {
-                let tag = element.name().local_name().as_ref().to_string();
-                if tag == "image" && skip.as_deref() == Some("svg") {
-                    push_image_marker(&mut chapter.paragraphs, base_dir, &element);
-                    continue;
-                }
-                if skip.is_some() {
-                    continue;
-                }
-                // A line break ends a paragraph but carries no text itself.
-                if tag == "br" {
-                    flush_paragraph(&mut current, &mut chapter.paragraphs);
-                } else if tag == "img" || tag == "image" {
-                    flush_paragraph(&mut current, &mut chapter.paragraphs);
-                    push_image_marker(&mut chapter.paragraphs, base_dir, &element);
-                }
-            }
-            Ok(Event::End(element)) => {
-                let tag = element.name().local_name().as_ref().to_string();
-                if let Some(skip_tag) = &skip {
-                    if *skip_tag == tag {
-                        skip = None;
-                    }
-                    continue;
-                }
-                if is_heading(&tag) {
-                    if in_heading {
-                        let text = take_heading(&mut heading);
-                        if !text.is_empty() {
-                            if chapter.title.is_none() {
-                                chapter.title = Some(text.clone());
-                            }
-                            chapter.paragraphs.push(text);
-                        }
-                        in_heading = false;
-                    }
-                } else if tag == "a" && link_target.is_some() {
-                    let text = take_normalised(&mut current);
-                    if let Some(target) = link_target.take()
-                        && !text.is_empty()
-                    {
-                        chapter.paragraphs.push(format!(
-                            "{LINK_PARAGRAPH_PREFIX}{target}{LINK_FIELD_SEPARATOR}{text}"
-                        ));
-                    }
-                } else if is_block(&tag) {
-                    flush_paragraph(&mut current, &mut chapter.paragraphs);
-                }
-            }
-            Ok(Event::Text(element)) => {
-                if skip.is_some() {
-                    continue;
-                }
-                let Ok(text) = unescape(&element) else { continue };
-                if in_heading {
-                    heading.push_str(&text);
-                } else {
-                    current.push_str(&text);
-                }
-            }
-            Ok(Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
-    }
-
-    flush_paragraph(&mut current, &mut chapter.paragraphs);
-    chapter
-}
-
-/// Elements whose contents are not prose and must not leak into paragraphs.
-fn is_skipped(tag: &str) -> bool {
-    matches!(tag, "style" | "script" | "head" | "svg" | "math")
-}
-
-/// True for hrefs that can resolve to another spine document: not empty, not
-/// a same-document fragment, and not an external scheme.
-fn is_internal_href(href: &str) -> bool {
-    let href = href.trim();
-    !href.is_empty()
-        && !href.starts_with('#')
-        && !href.to_ascii_lowercase().starts_with("http")
-        && !href.to_ascii_lowercase().starts_with("mailto:")
-}
-
-/// Records an `<img>`/`<image>` reference as an image marker paragraph.
-fn push_image_marker(paragraphs: &mut Vec<String>, base_dir: &str, element: &BytesStart<'_>) {
-    let mut src = attribute(element, "src");
-    if src.is_empty() {
-        // SVG `<image>` carries the reference on xlink:href.
-        src = attribute(element, "href");
-    }
-    if src.is_empty() {
-        return;
-    }
-    let entry = resolve_href(base_dir, &src);
-    if !entry.is_empty() {
-        paragraphs.push(format!("{IMAGE_PARAGRAPH_PREFIX}{entry}"));
-    }
-}
-
-/// Normalises and appends a buffered paragraph, dropping empty runs.
-fn flush_paragraph(current: &mut String, paragraphs: &mut Vec<String>) {
-    let text = take_normalised(current);
-    if !text.is_empty() {
-        paragraphs.push(text);
-    }
-}
-
-/// Trims and collapses the buffer, returning and clearing it.
-fn take_normalised(current: &mut String) -> String {
-    let text = current.split_whitespace().collect::<Vec<_>>().join(" ");
-    current.clear();
-    text
-}
-
-fn take_heading(heading: &mut String) -> String {
-    let text = heading.split_whitespace().collect::<Vec<_>>().join(" ");
-    heading.clear();
-    text
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -762,64 +543,6 @@ mod tests {
         let err = read_metadata(&path).expect_err("必须报错");
         assert!(err.to_string().starts_with("parse error:"), "{err}");
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn html_is_turned_into_paragraphs_with_a_heading_title() {
-        let html = r#"<html><head><style>.x{}</style><title>忽略</title></head><body>
-          <h1>第一章  引子</h1>
-          <p>第一段内容</p>
-          <p>第二段内容</p>
-          <script>var a = 1;</script>
-          <p>第三段</p>
-        </body></html>"#;
-
-        let chapter = html_to_chapter(html, "OEBPS/text");
-        assert_eq!(chapter.title.as_deref(), Some("第一章 引子"));
-        assert_eq!(chapter.paragraphs, ["第一章 引子", "第一段内容", "第二段内容", "第三段"]);
-    }
-
-    #[test]
-    fn an_image_becomes_a_marker_paragraph_with_a_resolved_entry() {
-        let html = r#"<html><body>
-          <p>图前文字</p>
-          <img src="../images/plot.png" alt=""/>
-          <p>图后文字</p>
-        </body></html>"#;
-
-        let chapter = html_to_chapter(html, "OEBPS/text");
-        assert_eq!(chapter.paragraphs, ["图前文字", "\u{FFFC}OEBPS/images/plot.png", "图后文字"]);
-    }
-
-    #[test]
-    fn an_image_inside_svg_becomes_a_marker_paragraph() {
-        let html = r#"<html xmlns="http://www.w3.org/1999/xhtml">
-          <body><svg viewBox="0 0 1 1"><image xlink:href="cover.jpg"/></svg></body>
-        </html>"#;
-
-        let chapter = html_to_chapter(html, "OEBPS");
-        assert_eq!(chapter.paragraphs, ["\u{FFFC}OEBPS/cover.jpg"]);
-    }
-
-    #[test]
-    fn an_internal_link_becomes_a_marker_paragraph_and_external_ones_do_not() {
-        let html = r##"<html><body>
-          <p><a href="ch3.xhtml">雕刻时光</a></p>
-          <p><a href="text/ch4.xhtml#p2">使命与命运</a></p>
-          <p><a href="https://example.com">外链</a></p>
-          <p><a href="#note">同文档</a></p>
-        </body></html>"##;
-
-        let chapter = html_to_chapter(html, "text");
-        assert_eq!(
-            chapter.paragraphs,
-            [
-                "\u{FFFB}text/ch3.xhtml\u{1F}雕刻时光",
-                "\u{FFFB}text/text/ch4.xhtml\u{1F}使命与命运",
-                "外链",
-                "同文档",
-            ]
-        );
     }
 
     #[test]

@@ -46,7 +46,11 @@ pub fn read_chapters(path: &Path, format: BookFormat) -> AppResult<Vec<RawChapte
         let heading = match format {
             BookFormat::Markdown => markdown_heading(trimmed),
             BookFormat::Text => text_heading(trimmed),
-            BookFormat::Epub => unreachable!("EPUB chapters are parsed separately"),
+            BookFormat::Epub
+            | BookFormat::Pdf
+            | BookFormat::Mobi
+            | BookFormat::Fb2
+            | BookFormat::Cbz => unreachable!("只有纯文本与 Markdown 走这条分章路径"),
         };
 
         if let Some(title) = heading {

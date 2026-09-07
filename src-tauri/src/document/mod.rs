@@ -4,9 +4,14 @@
 //! a few optional fields. Content parsing (chapters, encoding, word counts) is
 //! the reader engine's job and lands in Phase 3.
 
+pub mod cbz;
 pub mod epub;
+pub mod fb2;
 #[cfg(test)]
 pub mod fixture;
+pub mod html;
+pub mod mobi;
+pub mod pdf;
 pub mod plain;
 
 use std::path::Path;
@@ -31,8 +36,15 @@ pub const LINK_FIELD_SEPARATOR: char = '\u{1F}';
 
 /// Formats the library can hold today.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum BookFormat {
     Epub,
+    Pdf,
+    /// MOBI and its Kindle siblings (`.azw`, `.azw3` are the same container).
+    Mobi,
+    Fb2,
+    /// A comic book archive: a ZIP of page images.
+    Cbz,
     Markdown,
     #[serde(rename = "txt")]
     Text,
@@ -43,6 +55,10 @@ impl BookFormat {
     pub fn as_str(self) -> &'static str {
         match self {
             BookFormat::Epub => "epub",
+            BookFormat::Pdf => "pdf",
+            BookFormat::Mobi => "mobi",
+            BookFormat::Fb2 => "fb2",
+            BookFormat::Cbz => "cbz",
             BookFormat::Markdown => "markdown",
             BookFormat::Text => "txt",
         }
@@ -52,15 +68,35 @@ impl BookFormat {
     pub fn extension(self) -> &'static str {
         match self {
             BookFormat::Epub => "epub",
+            BookFormat::Pdf => "pdf",
+            BookFormat::Mobi => "mobi",
+            BookFormat::Fb2 => "fb2",
+            BookFormat::Cbz => "cbz",
             BookFormat::Markdown => "md",
             BookFormat::Text => "txt",
         }
     }
 
+    /// In-book assets live in a ZIP we can address by entry name.
+    pub fn is_zip_container(self) -> bool {
+        matches!(self, BookFormat::Epub | BookFormat::Cbz)
+    }
+
     pub fn from_path(path: &Path) -> Option<Self> {
+        // `.fb2.zip` is a common distribution form; `Path::extension` only
+        // reports the last component, so the full name has to be matched.
+        if let Some(name) = path.file_name().and_then(|name| name.to_str())
+            && name.to_ascii_lowercase().ends_with(".fb2.zip")
+        {
+            return Some(BookFormat::Fb2);
+        }
         let ext = path.extension()?.to_str()?.to_ascii_lowercase();
         match ext.as_str() {
             "epub" => Some(BookFormat::Epub),
+            "pdf" => Some(BookFormat::Pdf),
+            "mobi" | "azw" | "azw3" | "prc" => Some(BookFormat::Mobi),
+            "fb2" => Some(BookFormat::Fb2),
+            "cbz" => Some(BookFormat::Cbz),
             "md" | "markdown" => Some(BookFormat::Markdown),
             "txt" => Some(BookFormat::Text),
             _ => None,
@@ -106,6 +142,10 @@ pub struct BookMetadata {
 pub fn read_metadata(path: &Path, format: BookFormat) -> AppResult<BookMetadata> {
     let mut metadata = match format {
         BookFormat::Epub => epub::read_metadata(path)?,
+        BookFormat::Pdf => pdf::read_metadata(path)?,
+        BookFormat::Mobi => mobi::read_metadata(path)?,
+        BookFormat::Fb2 => fb2::read_metadata(path)?,
+        BookFormat::Cbz => cbz::read_metadata(path)?,
         BookFormat::Markdown | BookFormat::Text => plain::read_metadata(path, format)?,
     };
     if metadata.title.trim().is_empty() {
@@ -123,8 +163,44 @@ pub fn read_metadata(path: &Path, format: BookFormat) -> AppResult<BookMetadata>
 pub fn read_chapters(path: &Path, format: BookFormat) -> AppResult<Vec<RawChapter>> {
     match format {
         BookFormat::Epub => epub::read_chapters(path),
+        BookFormat::Pdf => pdf::read_chapters(path),
+        BookFormat::Mobi => mobi::read_chapters(path),
+        BookFormat::Fb2 => fb2::read_chapters(path),
+        BookFormat::Cbz => cbz::read_chapters(path),
         BookFormat::Markdown | BookFormat::Text => plain::read_chapters(path, format),
     }
+}
+
+/// Raw bytes of one in-book asset, addressed the way `read_chapters` named it.
+///
+/// ZIP containers (EPUB, CBZ) are addressed by entry name; FB2 keeps its images
+/// inline as base64, so its payloads are binary ids prefixed with `#`. Other
+/// formats have no in-book assets at all.
+pub fn read_asset(path: &Path, format: BookFormat, asset: &str) -> AppResult<Vec<u8>> {
+    if let Some(id) = asset.strip_prefix('#') {
+        return fb2::read_binary(path, id);
+    }
+    if !format.is_zip_container() {
+        return Err(AppError::Parse(format!("{} 没有内嵌资源", format.as_str())));
+    }
+    read_zip_entry(path, asset, MAX_ASSET_BYTES)
+}
+
+/// Refuse to buffer more than this for a single in-book asset.
+const MAX_ASSET_BYTES: u64 = 20 * 1024 * 1024;
+
+/// Reads one entry out of a ZIP-backed book, capped at `MAX_ASSET_BYTES`.
+pub fn read_zip_entry(path: &Path, entry: &str, limit: u64) -> AppResult<Vec<u8>> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path)?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|err| AppError::Parse(format!("无法打开容器：{err}")))?;
+    let entry =
+        archive.by_name(entry).map_err(|_| AppError::Parse(format!("容器中缺少资源：{entry}")))?;
+    let mut bytes = Vec::new();
+    entry.take(limit).read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// MIME type for a cover image extension, defaulting to an octet stream.
@@ -216,7 +292,15 @@ mod tests {
 
     #[test]
     fn format_round_trips_through_its_string_form() {
-        for format in [BookFormat::Epub, BookFormat::Markdown, BookFormat::Text] {
+        for format in [
+            BookFormat::Epub,
+            BookFormat::Pdf,
+            BookFormat::Mobi,
+            BookFormat::Fb2,
+            BookFormat::Cbz,
+            BookFormat::Markdown,
+            BookFormat::Text,
+        ] {
             assert_eq!(
                 BookFormat::from_path(Path::new(&format!("x.{}", format.extension()))),
                 Some(format)
@@ -228,13 +312,29 @@ mod tests {
     fn extension_matching_ignores_case_and_aliases() {
         assert_eq!(BookFormat::from_path(Path::new("a.EPUB")), Some(BookFormat::Epub));
         assert_eq!(BookFormat::from_path(Path::new("a.markdown")), Some(BookFormat::Markdown));
-        assert_eq!(BookFormat::from_path(Path::new("a.pdf")), None);
+        // Kindle and FictionBook aliases.
+        assert_eq!(BookFormat::from_path(Path::new("a.azw3")), Some(BookFormat::Mobi));
+        assert_eq!(BookFormat::from_path(Path::new("a.FB2")), Some(BookFormat::Fb2));
+        assert_eq!(
+            BookFormat::from_path(Path::new("a.fb2.zip")),
+            Some(BookFormat::Fb2),
+            "压缩的 FB2 也必须是 FB2"
+        );
+        assert_eq!(BookFormat::from_path(Path::new("a.docx")), None);
     }
 
     #[test]
     fn unsupported_formats_name_the_extension() {
-        let err = detect_format(Path::new("/tmp/book.pdf")).expect_err("pdf 必须被拒绝");
-        assert_eq!(err.to_string(), "unsupported format: pdf");
+        let err = detect_format(Path::new("/tmp/book.docx")).expect_err("docx 必须被拒绝");
+        assert_eq!(err.to_string(), "unsupported format: docx");
+    }
+
+    #[test]
+    fn only_zip_formats_expose_entry_addressed_assets() {
+        assert!(BookFormat::Epub.is_zip_container());
+        assert!(BookFormat::Cbz.is_zip_container());
+        assert!(!BookFormat::Pdf.is_zip_container());
+        assert!(!BookFormat::Fb2.is_zip_container());
     }
 
     #[test]

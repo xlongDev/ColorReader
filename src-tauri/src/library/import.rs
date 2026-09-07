@@ -379,11 +379,36 @@ mod tests {
     }
 
     #[test]
+    fn a_comic_archive_lands_with_one_chapter_per_page() {
+        let harness = Harness::new("import-cbz");
+        let bytes = fixture::png_bytes();
+        let source = fixture::write_zip(
+            &harness.dir,
+            "book.cbz",
+            &[("002.png", &bytes), ("001.png", &bytes), ("003.png", &bytes)],
+        );
+
+        let outcomes = harness.import(&[source]);
+        assert!(matches!(&outcomes[0], ImportOutcome::Imported { .. }), "{:?}", outcomes[0]);
+
+        let books = harness.shelve();
+        assert_eq!(books[0].format, crate::document::BookFormat::Cbz);
+        // No metadata block in a CBZ, so the file name is the title.
+        assert_eq!(books[0].title, "book");
+        let chapters = harness
+            .library
+            .with(|conn| crate::library::chapters::list(conn, &books[0].id))
+            .expect("chapters");
+        assert_eq!(chapters.len(), 3, "{chapters:?}");
+        assert_eq!(chapters[0].title, "第 1 页");
+    }
+
+    #[test]
     fn unsupported_formats_fail_without_stopping_the_batch() {
         let harness = Harness::new("import-bad");
         let good = epub(&harness.dir, "good.epub", "三体");
-        let bad = harness.dir.join("bad.pdf");
-        std::fs::write(&bad, b"%PDF").expect("write");
+        let bad = harness.dir.join("bad.doc");
+        std::fs::write(&bad, b"not a book").expect("write");
 
         let outcomes = harness.import(&[bad, good]);
         assert!(matches!(&outcomes[0], ImportOutcome::Failed { .. }), "{:?}", outcomes[0]);

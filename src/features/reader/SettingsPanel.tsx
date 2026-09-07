@@ -178,6 +178,27 @@ export function SettingsPanel() {
         />
       </Group>
 
+      <Group label="PDF 页面">
+        <div className="w-full min-w-0">
+          <Chips
+            options={[
+              { key: true, label: "铺满屏幕" },
+              { key: false, label: "页边留白" },
+            ]}
+            value={settings.pdfFill}
+            onChange={(value) => update({ pdfFill: value })}
+          />
+          <SliderRow
+            label="双页间距"
+            readout={`${Math.round(settings.pdfGap)} px`}
+            min={0}
+            max={48}
+            value={settings.pdfGap}
+            onChange={(value) => update({ pdfGap: value })}
+          />
+        </div>
+      </Group>
+
       <Group label="阅读背景">
         <div className="flex flex-wrap items-center gap-1.5">
           {READING_SURFACES.map((surface) => (
@@ -437,7 +458,7 @@ function SliderRow({
       <span className="text-text-3 shrink-0 text-[12px]">{label}</span>
       <input
         type="range"
-        aria-label={label === "速度" ? "自动滚动速度微调" : `${label}边距微调`}
+        aria-label={label === "速度" ? "自动滚动速度微调" : `${label}微调`}
         className="range min-w-0 flex-1"
         min={min}
         max={max}

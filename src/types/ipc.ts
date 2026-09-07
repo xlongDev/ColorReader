@@ -12,7 +12,7 @@ export interface SystemInfo {
 
 /** Mirrors `src-tauri/src/library/repository.rs`. */
 
-export type BookFormat = "epub" | "markdown" | "txt";
+export type BookFormat = "epub" | "pdf" | "mobi" | "fb2" | "cbz" | "markdown" | "txt";
 
 export type LibraryFilter = "all" | "recent" | "favorites";
 

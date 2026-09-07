@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime, onImportProgress } from "@/lib/ipc";
+import { renderFirstPagePng } from "@/lib/pdf";
 import type { BookQuery, BookSummary, ImportProgress } from "@/types/ipc";
 
 /** Shelf contents for one filter/sort/search combination. */
@@ -34,6 +35,33 @@ export function useLibraryStats() {
 function useInvalidateShelf() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries({ queryKey: ["books"] });
+}
+
+/** Book ids whose cover backfill already ran this session, so a failure or a
+    slow render never retries in a loop. */
+const coverAttempted = new Set<string>();
+
+/** A PDF's only cover is its first page, which Rust cannot rasterize — so the
+    shelf backfills covers by rendering page 1 with pdf.js and handing the PNG
+    to `book.cover_save`. Covers freshly imported PDFs too: they appear in the
+    list without one and the invalidated query picks the cover up. */
+export function usePdfCovers(books: BookSummary[]) {
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    if (!isDesktopRuntime) return;
+    const pending = books.filter(
+      (book) => book.format === "pdf" && !book.coverUrl && !coverAttempted.has(book.id),
+    );
+    for (const book of pending) {
+      coverAttempted.add(book.id);
+      renderFirstPagePng(book.id)
+        .then((bytes) => ipc.bookCoverSave(book.id, bytes))
+        .then(() => queryClient.invalidateQueries({ queryKey: ["books"] }))
+        .catch(() => {
+          // Scanned or damaged PDFs simply keep the placeholder cover.
+        });
+    }
+  }, [books, queryClient]);
 }
 
 /** Imports files by absolute path and refreshes the shelf when done.

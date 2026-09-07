@@ -49,6 +49,7 @@ import {
   useImportBooks,
   useImportProgress,
   useLibraryStats,
+  usePdfCovers,
   useSetFavorite,
 } from "@/hooks/useLibrary";
 import type { BookQuery, BookSummary, ImportOutcome, LibrarySort } from "@/types/ipc";
@@ -103,6 +104,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const deleteBook = useDeleteBook();
   const setFavorite = useSetFavorite();
   const progress = useImportProgress();
+  usePdfCovers(books.data ?? []);
 
   // Native dialog picks and window drops both funnel into the same mutation.
   // An encrypted pack cannot be opened without a password, so the batch is
@@ -533,14 +535,33 @@ function ContinueReadingCard({ book }: { book: BookSummary | undefined }) {
   );
 }
 
-/** Native open dialog, restricted to the formats Phase 2 understands. */
+/** Every extension `BookFormat::from_path` accepts; kept here so the dialog and
+    the Rust side never drift apart. */
+const BOOK_EXTENSIONS = [
+  "epub",
+  "pdf",
+  "mobi",
+  "azw",
+  "azw3",
+  "prc",
+  "fb2",
+  "cbz",
+  "txt",
+  "md",
+  "markdown",
+] as const;
+
+/** Native open dialog, restricted to the formats the library understands. */
 async function pickFiles(): Promise<string[]> {
   try {
     const picked = await open({
       multiple: true,
       title: "选择要导入的书籍",
       filters: [
-        { name: "书籍与书档", extensions: ["epub", "txt", "md", "markdown", ...PACK_EXTENSIONS] },
+        {
+          name: "书籍与书档",
+          extensions: [...BOOK_EXTENSIONS, ...PACK_EXTENSIONS],
+        },
       ],
     });
     if (picked === null) return [];

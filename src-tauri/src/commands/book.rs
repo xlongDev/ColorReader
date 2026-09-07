@@ -4,7 +4,6 @@
 //! in microseconds. Anything that hashes or unlinks files moves to a blocking
 //! task so the UI thread never waits on the disk.
 
-use std::io::Read;
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -47,14 +46,12 @@ pub fn book_images(
     state.library.with(|conn| crate::library::chapters::images(conn, &id))
 }
 
-/// Refuse to buffer more than this for a single in-book image.
-const MAX_ASSET_BYTES: u64 = 20 * 1024 * 1024;
-
-/// `book.asset` — raw bytes of one image inside a book's source EPUB.
+/// `book.asset` — raw bytes of one image inside a book's source file.
 ///
 /// Chapters reference images by archive entry path (see
-/// `IMAGE_PARAGRAPH_PREFIX`); the reader calls this lazily so a chapter with
-/// no images never touches the zip. Returns over the binary IPC channel.
+/// `IMAGE_PARAGRAPH_PREFIX`), or by `#<id>` for FB2's inlined binaries. The
+/// reader calls this lazily so a chapter with no images never touches the
+/// container. Returns over the binary IPC channel.
 #[tauri::command]
 pub async fn book_asset(
     state: State<'_, AppState>,
@@ -67,22 +64,63 @@ pub async fn book_asset(
             return Err(AppError::Parse("非法的资源路径".into()));
         }
         let (file_path, format) = library.with(|conn| library::repository::source(conn, &id))?;
-        if format != crate::document::BookFormat::Epub {
-            return Err(AppError::Parse("该书不是 EPUB，没有内嵌资源".into()));
-        }
-        let file = std::fs::File::open(file_path)?;
-        let mut archive = zip::ZipArchive::new(file)
-            .map_err(|err| AppError::Parse(format!("无法打开 EPUB 容器：{err}")))?;
-        let entry = archive
-            .by_name(&path)
-            .map_err(|_| AppError::Parse(format!("EPUB 缺少资源：{path}")))?;
-        let mut limited = entry.take(MAX_ASSET_BYTES);
-        let mut bytes = Vec::new();
-        limited.read_to_end(&mut bytes)?;
+        let bytes = crate::document::read_asset(std::path::Path::new(&file_path), format, &path)?;
         Ok(tauri::ipc::Response::new(bytes))
     })
     .await
     .map_err(|err| AppError::Message(format!("读取资源任务被中断：{err}")))?
+}
+
+/// `book.source_file` — the whole stored source file, for clients that render
+/// it themselves (the PDF reader hands the bytes to pdf.js). Returns over the
+/// binary IPC channel.
+#[tauri::command]
+pub async fn book_source_file(
+    state: State<'_, AppState>,
+    id: String,
+) -> AppResult<tauri::ipc::Response> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (file_path, _) = library.with(|conn| library::repository::source(conn, &id))?;
+        Ok(tauri::ipc::Response::new(std::fs::read(file_path)?))
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("读取书籍文件被中断：{err}")))?
+}
+
+/// `book.cover_save` — stores a PNG the frontend rendered for a book whose
+/// cover cannot be extracted on the Rust side (PDF first pages, drawn by
+/// pdf.js). The bytes must start with the PNG magic; anything else is a bug
+/// in the caller, not user input to decode.
+#[tauri::command]
+pub async fn book_cover_save(
+    state: State<'_, AppState>,
+    id: String,
+    bytes: Vec<u8>,
+) -> AppResult<()> {
+    const MAX_COVER_BYTES: usize = 12 * 1024 * 1024;
+    const PNG_MAGIC: [u8; 8] = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+
+    if bytes.len() > MAX_COVER_BYTES || !bytes.starts_with(&PNG_MAGIC) {
+        return Err(AppError::Parse("封面必须是 PNG 且小于 12 MB".into()));
+    }
+    let library = state.library.clone();
+    let layout = state.layout.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Only touch the disk for books the library actually knows.
+        library.with(|conn| library::repository::get(conn, &id))?;
+        let target = layout.covers_dir.join(format!("{id}.png"));
+        std::fs::write(&target, &bytes)?;
+        library
+            .with(|conn| {
+                library::repository::set_cover(conn, &id, target.to_string_lossy().as_ref())
+            })
+            .inspect_err(|_| {
+                let _ = std::fs::remove_file(&target);
+            })
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("保存封面任务被中断：{err}")))?
 }
 
 /// `book.import`

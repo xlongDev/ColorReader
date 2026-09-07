@@ -20,6 +20,25 @@ import { useResolvedTheme } from "@/hooks/useTheme";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
 
+// Sidebar content, shared verbatim by the docked pane and the fullscreen edge
+// overlay — the overlay is the same sidebar the user already has, just
+// summoned over the reading area.
+function sidebarBody(collapsed: boolean) {
+  return (
+    <>
+      {/* px-3 lands the mark's centre on the nav icons' centre line
+          (12 pane + 12 row + 11 = 35), collapsed and expanded alike. */}
+      <div className="flex items-center px-3 pt-1" data-tauri-drag-region>
+        <Wordmark compact={collapsed} />
+      </div>
+      <NavList />
+      <div className="mt-auto px-1">
+        <NavList.Footer />
+      </div>
+    </>
+  );
+}
+
 export function AppShell() {
   useHotkeys();
   useNavigationBridge();
@@ -53,6 +72,13 @@ export function AppShell() {
 
   const sidebarGone = sidebarHidden || readerFullscreen;
 
+  // Navigating out of the reader ends the immersive chrome even if the OS
+  // window is still fullscreen — the shell must never be left chrome-less.
+  const setReaderFullscreen = useChrome((s) => s.setReaderFullscreen);
+  useEffect(() => {
+    if (!reading && readerFullscreen) setReaderFullscreen(false);
+  }, [reading, readerFullscreen, setReaderFullscreen]);
+
   return (
     <div
       className="relative flex h-[100dvh] flex-col"
@@ -65,23 +91,50 @@ export function AppShell() {
       <div
         className={readerFullscreen ? "flex min-h-0 flex-1" : "flex min-h-0 flex-1 gap-3 px-3 pb-3"}
       >
-        <GlassSidebar hidden={sidebarGone}>
-          {/* px-3 lands the mark's centre on the nav icons' centre line
-              (12 pane + 12 row + 11 = 35), collapsed and expanded alike. */}
-          <div className="flex items-center px-3 pt-1" data-tauri-drag-region>
-            <Wordmark compact={collapsed} />
+        <GlassSidebar hidden={sidebarGone}>{sidebarBody(collapsed)}</GlassSidebar>
+        {readerFullscreen && !sidebarHidden && (
+          // Fullscreen: the sidebar docks off-canvas and slides in while the
+          // pointer rests on the top or bottom strip of the left edge — the
+          // middle band stays dead so the flip arrows keep working. It floats
+          // with the same rounded corners as the docked pane, in the opaque
+          // overlay material so it stays readable over bright pages on dark
+          // surfaces. Honours 隐藏侧边栏: hidden means hidden here too.
+          <div className="group/edge pointer-events-none absolute inset-y-0 left-0 z-50">
+            {/* Explicit width: an absolutely positioned container with only
+                absolute children is zero-width, and inset-x-0 strips inside it
+                would be zero-width too — the regression that killed the
+                summon gesture. */}
+            <div className="pointer-events-auto absolute top-0 left-0 h-[30%] w-1.5" aria-hidden />
+            <div
+              className="pointer-events-auto absolute bottom-0 left-0 h-[30%] w-1.5"
+              aria-hidden
+            />
+            <div className="pointer-events-auto absolute inset-y-0 left-0 my-3 flex -translate-x-full opacity-0 transition-all duration-200 ease-out group-hover/edge:translate-x-0 group-hover/edge:opacity-100 motion-reduce:transition-none">
+              <GlassSidebar overlay hidden={false}>
+                {sidebarBody(collapsed)}
+              </GlassSidebar>
+            </div>
           </div>
-          <NavList />
-          <div className="mt-auto px-1">
-            <NavList.Footer />
-          </div>
-        </GlassSidebar>
+        )}
         {sidebarHidden && !readerFullscreen && (
           <GlassIconButton
             label="显示侧边栏"
             size="sm"
             onClick={() => showSidebar(false)}
             className="self-center"
+          >
+            <CaretRight size={16} />
+          </GlassIconButton>
+        )}
+        {sidebarHidden && readerFullscreen && (
+          // Fullscreen re-summon: the docked caret would sit mid-edge where
+          // the flip arrow lives, so it docks into the quiet bottom-left
+          // corner instead, clear of the footer hud and the flip arrows.
+          <GlassIconButton
+            label="显示侧边栏"
+            size="sm"
+            onClick={() => showSidebar(false)}
+            className="glass-solid absolute bottom-10 left-3 z-30"
           >
             <CaretRight size={16} />
           </GlassIconButton>

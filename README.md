@@ -22,7 +22,7 @@
 | 设置页 + Rust 系统信息 IPC                     | ✅   | Phase 1  |
 | Error Boundary + 前端结构化日志                | ✅   | Phase 1  |
 | SQLite 书库（WAL + 自动 Migration）            | ✅   | Phase 2  |
-| EPUB / TXT / Markdown 导入（SHA-256 去重）     | ✅   | Phase 2  |
+| 七种格式导入（SHA-256 去重，见下表）           | ✅   | Phase 2  |
 | 元数据解析 + 封面提取（`colorreader://` 协议） | ✅   | Phase 2  |
 | 书库 UI（网格 / 搜索 / 排序 / 收藏 / 删除）    | ✅   | Phase 2  |
 | 拖拽导入 + 原生文件选择器                      | ✅   | Phase 2  |
@@ -42,7 +42,21 @@
 | 性能与代码分割（路由 lazy / vendor 分块）      | ✅   | Phase 13 |
 | 生产化（CI / 多平台打包 / E2E / Benchmark）    | ✅   | Phase 14 |
 
-Phase 2 交付物是**一个可用的书库**：把 EPUB / TXT / Markdown 文件拖进窗口或通过选择器导入，Rust 侧解析元数据与封面、写入 SQLite，前端以 TanStack Query 展示网格，支持搜索、排序、收藏与删除。
+### 支持的格式
+
+| 格式        | 扩展名                        | 正文来源                                       | 元数据               | 内嵌图片 |
+| ----------- | ----------------------------- | ---------------------------------------------- | -------------------- | -------- |
+| EPUB        | `.epub`                       | OPF spine 顺序                                 | Dublin Core / OPF    | ✅       |
+| PDF         | `.pdf`                        | pdf.js 固定版式渲染 + 逐页文本（检索/朗读/AI） | Info 字典 + 书签目录 | ✅       |
+| MOBI / AZW3 | `.mobi` `.azw` `.azw3` `.prc` | 单篇 HTML，按标题切章                          | EXTH（含 KF8 回退）  | 封面     |
+| FB2         | `.fb2` `.fb2.zip`             | `<body>` 的 `<section>`                        | `<title-info>`       | ✅       |
+| CBZ 漫画    | `.cbz`                        | 每页一张图                                     | 文件名               | ✅       |
+| Markdown    | `.md` `.markdown`             | ATX 标题切分                                   | 首个标题             | ❌       |
+| TXT         | `.txt`                        | `第N章` 标记切分                               | 文件名               | ❌       |
+
+PDF 按固定版式渲染（pdf.js，每一页所见即所得，字体与插图原样重现），书签目录由 pdf.js 解析文档 outline；封面自动取第 1 页；提取出的逐页文本供全文检索、朗读与 AI 使用。纯扫描件仍只有图片页，没有文字层可供检索。
+
+Phase 2 交付物是**一个可用的书库**：把上表的文件拖进窗口或通过选择器导入，Rust 侧解析元数据与封面、写入 SQLite，前端以 TanStack Query 展示网格，支持搜索、排序、收藏与删除。
 
 Phase 3 交付物是**一个可用的阅读器**：导入时一次性提取并落库章节正文（EPUB 走 spine 顺序，TXT/Markdown 按标题切分），阅读时按章节懒加载正文、段落虚拟化渲染，支持字号调节、`← →` 翻章与全局进度续读（按字数定位，续读不加载整本书）。
 

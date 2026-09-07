@@ -39,6 +39,10 @@ interface ReaderState {
   readingSpeed: number;
   /** Shows the "N / M 页" page indicator in paged layouts. */
   showPageNumbers: boolean;
+  /** PDF only: pages fill the window edge to edge, ignoring the prose margins. */
+  pdfFill: boolean;
+  /** PDF only: gutter between the two pages of a spread, in px (0 = seamless). */
+  pdfGap: number;
   /** Applies a partial settings patch in one call. */
   update: (
     patch: Partial<
@@ -142,6 +146,8 @@ export const useReaderSettings = create<ReaderState>()(
       autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
       readingSpeed: DEFAULT_READING_SPEED,
       showPageNumbers: false,
+      pdfFill: true,
+      pdfGap: 0,
       update: (patch) => set(patch),
       setReadingSpeed: (charsPerMinute) =>
         set({
