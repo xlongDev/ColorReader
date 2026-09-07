@@ -196,6 +196,26 @@ export function SettingsPanel() {
             value={settings.pdfGap}
             onChange={(value) => update({ pdfGap: value })}
           />
+          {/* Independent of the paper surface: night rendering can also be
+              asked for on light paper, and left off on dark paper. */}
+          <Chips
+            options={[
+              { key: false, label: "原色" },
+              { key: true, label: "夜间反色" },
+            ]}
+            value={settings.pdfNight}
+            onChange={(value) => update({ pdfNight: value })}
+          />
+          {settings.pdfNight && (
+            <Chips
+              options={[
+                { key: false, label: "图片保色" },
+                { key: true, label: "图片反色" },
+              ]}
+              value={settings.pdfInvertImages}
+              onChange={(value) => update({ pdfInvertImages: value })}
+            />
+          )}
         </div>
       </Group>
 

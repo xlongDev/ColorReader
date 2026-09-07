@@ -22,6 +22,9 @@ export function PdfScrollView({
   blockMargin,
   zoom = 1,
   animated = false,
+  nightFg,
+  nightBg,
+  invertImages,
   onLayout,
 }: {
   bookId: string;
@@ -32,6 +35,10 @@ export function PdfScrollView({
   zoom?: number;
   /** Eases the slot resize to match the button-driven zoom glide. */
   animated?: boolean;
+  /** Night axis, forwarded to every page; null renders the document's own colours. */
+  nightFg?: string | null;
+  nightBg?: string | null;
+  invertImages?: boolean;
   /** Reports the rendered slot height so the reader can map pages to scroll offsets. */
   onLayout: (slotHeight: number) => void;
 }) {
@@ -119,6 +126,9 @@ export function PdfScrollView({
                 fit="width"
                 zoom={zoom}
                 animated={animated}
+                nightFg={nightFg}
+                nightBg={nightBg}
+                invertImages={invertImages}
               />
             )}
           </div>

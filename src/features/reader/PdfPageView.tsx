@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/cn";
 import { loadDoc } from "@/lib/pdf";
 
+import { installNightContext } from "./pdfNightContext";
+
 /** One rendered PDF page. Fixed layout is the point: fonts, spacing and
     illustrations come out exactly as the document drew them, which text
     extraction can never reproduce. */
@@ -21,6 +23,9 @@ export function PdfPageView({
   fit,
   zoom = 1,
   animated = false,
+  nightFg,
+  nightBg,
+  invertImages = false,
 }: {
   bookId: string;
   pageNumber: number;
@@ -28,6 +33,14 @@ export function PdfPageView({
   zoom?: number;
   /** Eases the CSS resize; pinch zooming passes false to stay direct. */
   animated?: boolean;
+  /** Light end of the night axis, or null to render in the document's own
+   *  colours. Plain strings, never an object: an object here would give the
+   *  render effect a new dependency identity every render. */
+  nightFg?: string | null;
+  /** Dark end of the night axis. Doubles as the canvas ground colour. */
+  nightBg?: string | null;
+  /** Invert images too, for scanned PDFs that are one bright bitmap per page. */
+  invertImages?: boolean;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -39,6 +52,15 @@ export function PdfPageView({
   useEffect(() => {
     let cancelled = false;
     let frame = 0;
+    // pdf.js v6 ignores a handed-in `canvasContext` whenever `canvas` is set —
+    // it calls `canvas.getContext("2d")` itself — so the night wrapper goes on
+    // this one element instead. Still per-canvas, so the shelf's cover
+    // renderer in lib/pdf.ts keeps the document's real colours.
+    const element = canvasRef.current;
+    const restore =
+      element && nightFg && nightBg
+        ? installNightContext(element, nightFg, nightBg, invertImages)
+        : null;
 
     const render = async () => {
       setState("loading");
@@ -77,7 +99,14 @@ export function PdfPageView({
         canvas.style.height = `${fitted.h}px`;
 
         taskRef.current?.cancel();
-        const task = page.render({ canvas, canvasContext: context, viewport });
+        // `background` is the paper the page is painted on; without it pdf.js
+        // defaults to white and the whole page glares.
+        const task = page.render({
+          canvas,
+          canvasContext: context,
+          viewport,
+          ...(nightBg ? { background: nightBg } : {}),
+        });
         taskRef.current = task;
         await task.promise;
         if (!cancelled) setState("ready");
@@ -101,8 +130,9 @@ export function PdfPageView({
       cancelAnimationFrame(frame);
       observer.disconnect();
       taskRef.current?.cancel();
+      restore?.();
     };
-  }, [bookId, pageNumber, fit]);
+  }, [bookId, pageNumber, fit, nightFg, nightBg, invertImages]);
 
   return (
     <div ref={wrapRef} className="relative h-full w-full">

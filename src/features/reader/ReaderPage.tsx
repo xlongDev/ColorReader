@@ -326,7 +326,9 @@ function ReaderView({
     setReadingSpeed,
     showPageNumbers,
     pdfFill,
+    pdfNight: pdfNightOn,
     pdfGap,
+    pdfInvertImages,
   } = settings;
   const speechRate = settings.speechRate;
   const setSpeechRate = settings.setSpeechRate;
@@ -1147,6 +1149,13 @@ function ReaderView({
     background: surface.background,
     ...readerGlassVars(surface),
   } as CSSProperties;
+  // The night switch is independent of the paper surface: colours always come
+  // from the night palette, so a light theme can ask for a dark PDF too. On a
+  // dark surface this resolves to the active surface itself. `tint` is the
+  // solid stand-in for `background`, which may be a gradient the canvas
+  // cannot take.
+  const nightPalette = resolveSurface(settings.nightSurface, customSurface);
+  const pdfNight = pdfNightOn ? { fg: nightPalette.fg, bg: nightPalette.tint } : null;
   const fullscreenBonus = fullscreen ? FULLSCREEN_MARGIN_BONUS : 0;
   // 铺满屏幕: PDF pages meet the window edges like Preview; prose keeps the
   // user margins. Scroll slots and the spread padding both read from these.
@@ -1539,6 +1548,9 @@ function ReaderView({
                       fit="box"
                       zoom={pdfZoom}
                       animated={pdfZoomAnimated}
+                      nightFg={pdfNight?.fg ?? null}
+                      nightBg={pdfNight?.bg ?? null}
+                      invertImages={pdfInvertImages}
                     />
                   </Suspense>
                 </div>
@@ -1551,6 +1563,9 @@ function ReaderView({
                         fit="box"
                         zoom={pdfZoom}
                         animated={pdfZoomAnimated}
+                        nightFg={pdfNight?.fg ?? null}
+                        nightBg={pdfNight?.bg ?? null}
+                        invertImages={pdfInvertImages}
                       />
                     </Suspense>
                   </div>
@@ -1565,6 +1580,9 @@ function ReaderView({
                   blockMargin={blockMargin}
                   zoom={pdfZoom}
                   animated={pdfZoomAnimated}
+                  nightFg={pdfNight?.fg ?? null}
+                  nightBg={pdfNight?.bg ?? null}
+                  invertImages={pdfInvertImages}
                   onLayout={handlePdfLayout}
                 />
               </Suspense>

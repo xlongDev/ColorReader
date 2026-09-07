@@ -4,8 +4,6 @@
 
 跨平台桌面应用。Rust 负责文本引擎、索引与存储，React 负责交互与呈现，两者之间只走一层类型化的 Tauri IPC。
 
-参考产品能力基准：[ColorTxt](https://github.com/ssnangua/ColorTxt)（仅作为产品与 UX 参考，不复制其代码或架构）。
-
 ---
 
 ## 当前进度

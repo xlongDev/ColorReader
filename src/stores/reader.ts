@@ -41,8 +41,16 @@ interface ReaderState {
   showPageNumbers: boolean;
   /** PDF only: pages fill the window edge to edge, ignoring the prose margins. */
   pdfFill: boolean;
+  /** PDF only: render text and vectors on the night palette, independent of
+   *  the paper surface — a light theme can ask for a dark PDF and vice versa.
+   *  Colours come from the `nightSurface` setting. */
+  pdfNight: boolean;
   /** PDF only: gutter between the two pages of a spread, in px (0 = seamless). */
   pdfGap: number;
+  /** PDF only: invert images along with the text. Off keeps photographs in
+   *  their real colours; on rescues scanned books, whose pages are one bright
+   *  bitmap each and would otherwise glare on a dark surface. */
+  pdfInvertImages: boolean;
   /** Applies a partial settings patch in one call. */
   update: (
     patch: Partial<
@@ -147,7 +155,9 @@ export const useReaderSettings = create<ReaderState>()(
       readingSpeed: DEFAULT_READING_SPEED,
       showPageNumbers: false,
       pdfFill: true,
+      pdfNight: true,
       pdfGap: 0,
+      pdfInvertImages: false,
       update: (patch) => set(patch),
       setReadingSpeed: (charsPerMinute) =>
         set({
