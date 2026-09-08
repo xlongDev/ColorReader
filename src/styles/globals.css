@@ -510,3 +510,82 @@ input[type="range"].range::-moz-range-thumb {
   border: 2px solid var(--surface-3);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }
+
+/* pdf.js text layer: the selectable page. A faithful port of the official
+   `.textLayer` block from pdfjs-dist/web/pdf_viewer.css (v6) — NOT a hand
+   rolled subset. pdf.js sizes spans through the --total-scale-factor /
+   --font-height / --scale-x custom properties, overrides the container box
+   itself via setLayerDimensions (width: calc(var(--total-scale-factor) * …)),
+   and nests leaf spans inside .markedContent wrappers; missing any of these
+   rules leaves a collapsed 0×0 layer where every drag selects nothing.
+   --total-scale-factor itself is set inline per render by PdfPageView. */
+.pdf-text-layer {
+  color-scheme: only light;
+  text-align: initial;
+  overflow: clip;
+  opacity: 1;
+  line-height: 1;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  caret-color: CanvasText;
+  z-index: 0;
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+  --min-font-size: 1;
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdf-text-layer :is(span, br) {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+  user-select: text;
+}
+
+.pdf-text-layer .markedContent {
+  display: contents;
+}
+
+/* Leaf runs: pdf.js writes --font-height / --scale-x / --rotate inline per
+   span; the font size and transform here turn those into layout. */
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--total-scale-factor) * var(--min-font-size) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdf-text-layer ::selection {
+  /* Low alpha on purpose: pdf.js span boxes overlap slightly on mixed
+     CJK/latin runs, and overlapping selection boxes double-paint darker —
+     a hard colour turns every overlap into a visible patch. */
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: transparent;
+}
+
+.pdf-text-layer br::selection {
+  background: transparent;
+}
+
+.pdf-text-layer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  user-select: none;
+}
+
+/* Saved annotations painted through the CSS Custom Highlight API. One name
+   serves every mounted page; the ranges come and go from JS. */
+::highlight(pdf-notes) {
+  background-color: var(--accent-soft);
+}

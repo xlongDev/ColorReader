@@ -353,6 +353,17 @@ function ReaderView({
 
   const annotations = annotationsQuery.data;
   const bookmarks = bookmarksQuery.data;
+  // Saved annotations grouped by 0-based PDF page, memoised so the per-page
+  // text-layer paint effects only rerun when the query data changes.
+  const annotationsByPage = useMemo(() => {
+    const map = new Map<number, Annotation[]>();
+    for (const annotation of annotations ?? []) {
+      const list = map.get(annotation.chapterIdx) ?? [];
+      list.push(annotation);
+      map.set(annotation.chapterIdx, list);
+    }
+    return map;
+  }, [annotations]);
   // A PDF has no prose of its own: chapters are pages, and the fixed pages are
   // rendered by pdf.js. The extracted text still powers search, TTS and AI.
   const isPdf = format === "pdf";
@@ -365,6 +376,10 @@ function ReaderView({
     x: number;
     y: number;
     annotationId?: string;
+    /** The chapter (or PDF page, 0-based) the range belongs to; defaults to
+     *  the chapter on screen. PDF selections set it — a two-page spread can
+     *  surface a pill whose range lives on the other page. */
+    chapterIdx?: number;
   } | null>(null);
   // Quoted text for the AI drawer; `null` means "use the whole chapter".
   const [aiContext, setAiContext] = useState<string | null>(null);
@@ -1055,7 +1070,17 @@ function ReaderView({
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    const onMouseUp = () => {
+    const onMouseUp = (event: MouseEvent) => {
+      // A mouseup inside a PDF page's text layer belongs to that layer's own
+      // handler — but a collapsed click there is a dismissal, same as over
+      // prose: the layer's click handler only opens pills on annotation hits,
+      // so without this the old pill would linger over the new tap.
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-pdf-layer]")) {
+        const selection = window.getSelection();
+        if (!selection || selection.isCollapsed) setPending(null);
+        return;
+      }
       const selection = window.getSelection();
       if (!selection || !chapter.data) {
         setPending(null);
@@ -1075,7 +1100,12 @@ function ReaderView({
 
   const createHighlight = (range: TextRange) => {
     createAnnotation.mutate(
-      { chapterIdx, startChar: range.start, endChar: range.end, text: range.text },
+      {
+        chapterIdx: pending?.chapterIdx ?? chapterIdx,
+        startChar: range.start,
+        endChar: range.end,
+        text: range.text,
+      },
       {
         onSuccess: () => {
           window.getSelection()?.removeAllRanges();
@@ -1092,6 +1122,30 @@ function ReaderView({
     window.getSelection()?.removeAllRanges();
     setPending(null);
   };
+
+  /** PDF text-layer selection: same pill, page-local offsets. */
+  const onPdfSelection = useCallback((range: TextRange, rect: DOMRect, pageNumber: number) => {
+    setPending({
+      range,
+      x: rect.left + rect.width / 2,
+      y: rect.top,
+      chapterIdx: pageNumber - 1,
+    });
+  }, []);
+
+  /** Click on annotated text in the PDF: opens the pill in remove mode. */
+  const onPdfAnnotationClick = useCallback(
+    (annotation: Annotation, x: number, y: number, pageNumber: number) => {
+      setPending({
+        range: { start: annotation.startChar, end: annotation.endChar, text: annotation.text },
+        x,
+        y,
+        annotationId: annotation.id,
+        chapterIdx: pageNumber - 1,
+      });
+    },
+    [],
+  );
 
   /** Reveals a character offset of the chapter already on screen. */
   const focusOffset = useCallback(
@@ -1557,6 +1611,11 @@ function ReaderView({
                       nightFg={pdfNight?.fg ?? null}
                       nightBg={pdfNight?.bg ?? null}
                       invertImages={pdfInvertImages}
+                      annotations={annotationsByPage.get(chapterIdx)}
+                      onSelection={(range, rect) => onPdfSelection(range, rect, chapterIdx + 1)}
+                      onAnnotationClick={(annotation, x, y) =>
+                        onPdfAnnotationClick(annotation, x, y, chapterIdx + 1)
+                      }
                     />
                   </Suspense>
                 </div>
@@ -1572,6 +1631,11 @@ function ReaderView({
                         nightFg={pdfNight?.fg ?? null}
                         nightBg={pdfNight?.bg ?? null}
                         invertImages={pdfInvertImages}
+                        annotations={annotationsByPage.get(chapterIdx + 1)}
+                        onSelection={(range, rect) => onPdfSelection(range, rect, chapterIdx + 2)}
+                        onAnnotationClick={(annotation, x, y) =>
+                          onPdfAnnotationClick(annotation, x, y, chapterIdx + 2)
+                        }
                       />
                     </Suspense>
                   </div>
@@ -1589,6 +1653,9 @@ function ReaderView({
                   nightFg={pdfNight?.fg ?? null}
                   nightBg={pdfNight?.bg ?? null}
                   invertImages={pdfInvertImages}
+                  annotationsByPage={annotationsByPage}
+                  onSelection={onPdfSelection}
+                  onAnnotationClick={onPdfAnnotationClick}
                   onLayout={handlePdfLayout}
                 />
               </Suspense>
@@ -1814,7 +1881,9 @@ function ReaderView({
           className="fixed z-40 -translate-x-1/2"
           style={{ left: pending.x, top: pending.y - 44 }}
         >
-          <div className="glass-2 shadow-panel flex items-center overflow-hidden rounded-full">
+          {/* glass-solid, not glass-2: this pill floats over arbitrary page
+              content — a white PDF page washes a blurred glass out entirely. */}
+          <div className="glass-solid shadow-panel flex items-center overflow-hidden rounded-full">
             {pending.annotationId ? (
               <button
                 type="button"

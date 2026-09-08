@@ -2,14 +2,25 @@ import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { loadDoc } from "@/lib/pdf";
+import type { Annotation } from "@/types/ipc";
 
 import { installNightContext } from "./pdfNightContext";
+import {
+  clearPageHighlights,
+  layerOffsetAtPoint,
+  paintPageHighlights,
+  resolveLayerSelection,
+} from "./pdfTextSelection";
+import type { TextRange } from "./selection";
 
 /** One rendered PDF page. Fixed layout is the point: fonts, spacing and
     illustrations come out exactly as the document drew them, which text
     extraction can never reproduce. */
 
 type RenderState = "loading" | "ready" | "error";
+
+/** Stable empty default so the paint effect's deps stay identity-safe. */
+const EMPTY: Annotation[] = [];
 
 /**
  * Draws page `pageNumber` (1-based) into a canvas, sized to fill its wrapper.
@@ -26,6 +37,9 @@ export function PdfPageView({
   nightFg,
   nightBg,
   invertImages = false,
+  annotations = EMPTY,
+  onSelection,
+  onAnnotationClick,
 }: {
   bookId: string;
   pageNumber: number;
@@ -41,13 +55,23 @@ export function PdfPageView({
   nightBg?: string | null;
   /** Invert images too, for scanned PDFs that are one bright bitmap per page. */
   invertImages?: boolean;
+  /** This page's saved annotations; painted onto the text layer. */
+  annotations?: Annotation[];
+  /** A completed text-layer selection, with its viewport rect for the pill. */
+  onSelection?: (range: TextRange, rect: DOMRect) => void;
+  /** A click on text covered by an existing annotation. */
+  onAnnotationClick?: (annotation: Annotation, x: number, y: number) => void;
 }) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const layerRef = useRef<HTMLDivElement>(null);
   const taskRef = useRef<{ cancel: () => void } | null>(null);
+  const textTaskRef = useRef<{ cancel: () => void } | null>(null);
   const [state, setState] = useState<RenderState>("loading");
   /** Fitted CSS size at zoom 1; zoom rescales it in JSX. */
   const [base, setBase] = useState<{ w: number; h: number } | null>(null);
+  /** The text layer exists and matches the current page render. */
+  const [textReady, setTextReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -64,6 +88,8 @@ export function PdfPageView({
 
     const render = async () => {
       setState("loading");
+      setTextReady(false);
+      textTaskRef.current?.cancel();
       try {
         const doc = await loadDoc(bookId);
         const page = await doc.getPage(pageNumber);
@@ -109,11 +135,39 @@ export function PdfPageView({
         });
         taskRef.current = task;
         await task.promise;
-        if (!cancelled) setState("ready");
+
+        // The selectable text layer sits over the canvas at the page's CSS
+        // size (no dpr: it must line up with layout pixels, and pdf.js scales
+        // it internally by the real device pixel ratio). Rebuilt after every
+        // page render — page flips and wrapper resizes both land here.
+        const layer = layerRef.current;
+        if (layer) {
+          layer.replaceChildren();
+          // pdf.js v6 rewrites the layer box itself via setLayerDimensions:
+          // width: calc(var(--total-scale-factor) * pageWidth …). Without the
+          // variable the calc is invalid, the container collapses to 0×0 and
+          // nothing on the page is selectable. The viewer defines this as the
+          // viewport's CSS scale — exactly our `scale`.
+          layer.style.setProperty("--total-scale-factor", String(scale));
+          const { TextLayer } = await import("pdfjs-dist");
+          const textLayer = new TextLayer({
+            textContentSource: page.streamTextContent(),
+            container: layer,
+            viewport: page.getViewport({ scale: Math.max(scale, 0.01) }),
+          });
+          textTaskRef.current = textLayer;
+          await textLayer.render();
+        }
+        if (!cancelled) {
+          setTextReady(true);
+          setState("ready");
+        }
       } catch (error) {
         // A cancelled render is bookkeeping, not a failure.
         const name = (error as { name?: string }).name;
-        if (!cancelled && name !== "RenderingCancelledException") setState("error");
+        if (!cancelled && name !== "RenderingCancelledException" && name !== "AbortException") {
+          setState("error");
+        }
       }
     };
 
@@ -130,30 +184,108 @@ export function PdfPageView({
       cancelAnimationFrame(frame);
       observer.disconnect();
       taskRef.current?.cancel();
+      textTaskRef.current?.cancel();
+      clearPageHighlights(pageNumber);
       restore?.();
     };
   }, [bookId, pageNumber, fit, nightFg, nightBg, invertImages]);
+
+  // Paint this page's saved annotations onto its text layer whenever either
+  // side changes. `annotations` must arrive reference-stable (the parent
+  // groups by page inside a memo) or this repaints every render.
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer || !textReady) return;
+    if (annotations.length === 0) {
+      clearPageHighlights(pageNumber);
+      return;
+    }
+    paintPageHighlights(pageNumber, layer, annotations);
+    return () => clearPageHighlights(pageNumber);
+  }, [annotations, textReady, pageNumber]);
+
+  // Selection and annotation-click handling for the text layer, attached
+  // imperatively for the same reason the prose mouseup is: a selection
+  // surface is pointer behaviour, not a widget, and the layer stays a plain
+  // semantic div.
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer) return;
+    const onMouseUp = () => {
+      const selection = window.getSelection();
+      if (!selection || selection.isCollapsed) return;
+      const range = resolveLayerSelection(layer, selection);
+      if (!range) return;
+      onSelection?.(range, selection.getRangeAt(0).getBoundingClientRect());
+    };
+    const onClick = (event: MouseEvent) => {
+      // A collapsed click on annotated text opens its pill; during or right
+      // after a selection this must stay inert.
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed) return;
+      const offset = layerOffsetAtPoint(event.clientX, event.clientY, layer);
+      if (offset === null) return;
+      const hit = annotations.find(
+        (annotation) => offset >= annotation.startChar && offset < annotation.endChar,
+      );
+      if (hit) onAnnotationClick?.(hit, event.clientX, event.clientY);
+    };
+    layer.addEventListener("mouseup", onMouseUp);
+    layer.addEventListener("click", onClick);
+    return () => {
+      layer.removeEventListener("mouseup", onMouseUp);
+      layer.removeEventListener("click", onClick);
+    };
+  }, [annotations, onSelection, onAnnotationClick]);
 
   return (
     <div ref={wrapRef} className="relative h-full w-full">
       {/* ponytail: zoom is CSS-only over a dpr-capped bitmap, so >2x turns
           soft on non-retina screens; re-render at the zoomed scale if that
           ever bothers anyone. */}
-      <canvas
-        ref={canvasRef}
-        className={cn(
-          "border-hairline mx-auto block rounded-lg border",
-          animated && "transition-[width,height] duration-200 ease-out",
-        )}
+      {/* Canvas and text layer share one centred box so the layer always sits
+          exactly on the page, whatever the wrapper's width. The layer scales
+          with `zoom` via transform: rebuilding it per pinch frame would
+          thrash, and a transformed layer stays selectable and hittable. */}
+      <div
+        className="relative mx-auto"
         style={
           base
-            ? {
-                width: `${Math.round(base.w * zoom)}px`,
-                height: `${Math.round(base.h * zoom)}px`,
-              }
+            ? { width: `${Math.round(base.w * zoom)}px`, height: `${Math.round(base.h * zoom)}px` }
             : undefined
         }
-      />
+      >
+        <canvas
+          ref={canvasRef}
+          className={cn(
+            "border-hairline block rounded-lg border",
+            animated && "transition-[width,height] duration-200 ease-out",
+          )}
+          style={
+            base
+              ? {
+                  width: `${Math.round(base.w * zoom)}px`,
+                  height: `${Math.round(base.h * zoom)}px`,
+                }
+              : undefined
+          }
+        />
+        <div
+          data-pdf-layer=""
+          ref={layerRef}
+          className="pdf-text-layer absolute top-0 left-0"
+          style={
+            base
+              ? {
+                  width: `${base.w}px`,
+                  height: `${base.h}px`,
+                  transform: `scale(${zoom})`,
+                  transformOrigin: "0 0",
+                }
+              : undefined
+          }
+        />
+      </div>
       {state !== "ready" && (
         <div className="absolute inset-0 flex items-center justify-center">
           <p className="text-text-3 text-sm">

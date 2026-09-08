@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 
 import { cn } from "@/lib/cn";
 import { loadPageAspect } from "@/lib/pdf";
+import type { Annotation } from "@/types/ipc";
 
 import { PdfPageView } from "./PdfPageView";
+import type { TextRange } from "./selection";
 
 /** Assumed page height/width ratio until page 1 has been measured (A4-ish). */
 const FALLBACK_ASPECT = 297 / 210;
@@ -25,6 +27,9 @@ export function PdfScrollView({
   nightFg,
   nightBg,
   invertImages,
+  annotationsByPage,
+  onSelection,
+  onAnnotationClick,
   onLayout,
 }: {
   bookId: string;
@@ -39,6 +44,12 @@ export function PdfScrollView({
   nightFg?: string | null;
   nightBg?: string | null;
   invertImages?: boolean;
+  /** Saved annotations grouped by 0-based page. */
+  annotationsByPage?: Map<number, Annotation[]>;
+  /** A completed text-layer selection on some page. */
+  onSelection?: (range: TextRange, rect: DOMRect, pageNumber: number) => void;
+  /** A click on annotated text on some page. */
+  onAnnotationClick?: (annotation: Annotation, x: number, y: number, pageNumber: number) => void;
   /** Reports the rendered slot height so the reader can map pages to scroll offsets. */
   onLayout: (slotHeight: number) => void;
 }) {
@@ -129,6 +140,11 @@ export function PdfScrollView({
                 nightFg={nightFg}
                 nightBg={nightBg}
                 invertImages={invertImages}
+                annotations={annotationsByPage?.get(index)}
+                onSelection={(range, rect) => onSelection?.(range, rect, index + 1)}
+                onAnnotationClick={(annotation, x, y) =>
+                  onAnnotationClick?.(annotation, x, y, index + 1)
+                }
               />
             )}
           </div>
