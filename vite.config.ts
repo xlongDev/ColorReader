@@ -41,7 +41,14 @@ export default defineConfig({
   // the root base so bundled assets resolve the same way as always.
   base: process.env.PAGES_BASE ?? "/",
   resolve: {
-    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+    alias: {
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      // The bare specifier imports the vendored readest fork of foliate-js
+      // (MIT) instead of the npm package, so the paginator carries readest's
+      // background/page fixes. TS resolves the same specifiers through the
+      // ambient declarations in src/types/foliate-js.d.ts.
+      "foliate-js": fileURLToPath(new URL("./src/vendor/foliate-js", import.meta.url)),
+    },
   },
   clearScreen: false,
   envPrefix: ["VITE_", "TAURI_ENV_"],

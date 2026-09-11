@@ -72,12 +72,13 @@ export function usePdfOutline(bookId: string | null, enabled: boolean) {
   });
 }
 
-/** Records a reading position. */
+/** Records a reading position. `location` is an opaque CFI for foliate books;
+ *  leaving it out keeps whatever anchor is already stored. */
 export function useSetProgress(bookId: string | null) {
   return useMutation({
-    mutationFn: (progress: number) => {
+    mutationFn: ({ progress, location }: { progress: number; location?: string }) => {
       if (!bookId || !isDesktopRuntime) return Promise.resolve();
-      return ipc.readerSetProgress(bookId, progress);
+      return ipc.readerSetProgress(bookId, progress, location);
     },
   });
 }

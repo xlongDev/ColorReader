@@ -25,6 +25,7 @@ import {
   PAGE_TRANSITIONS,
   READING_SURFACES,
 } from "@/features/reader/theme";
+import { SPEECH_GRANULARITIES } from "@/features/reader/speech";
 
 /**
  * Reading typography and viewing preferences. Every control writes straight
@@ -59,6 +60,13 @@ export function SettingsPanel() {
           options={PAGE_TRANSITIONS}
           value={settings.pageTransition}
           onChange={(key) => update({ pageTransition: key })}
+        />
+      </Group>
+      <Group label="朗读高亮">
+        <Chips
+          options={SPEECH_GRANULARITIES}
+          value={settings.speechGranularity}
+          onChange={(key) => update({ speechGranularity: key })}
         />
       </Group>
 

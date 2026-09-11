@@ -197,6 +197,25 @@ Feature-oriented：`components/` 放可复用 UI，`features/` 放业务领域�
 
 禁止把 IPC 返回值塞进 Zustand，也禁止把所有业务状态塞进 Zustand。
 
+### 阅读渲染：两条通路
+
+| 通路                      | 格式                                    | 渲染                                                                     |
+| ------------------------- | --------------------------------------- | ------------------------------------------------------------------------ |
+| Document Model（默认）    | epub / pdf / fb2 / cbz / markdown / txt | Rust 抽取纯文本段落 → 段落索引 → FTS5 / 标注 / 朗读 / RAG 全基于段落索引 |
+| foliate-js（Kindle 专用） | mobi / azw / azw3（KF6 / KF7 / KF8）    | `makeBook()` + `<foliate-view>` 渲染原书 XHTML + CSS                     |
+
+Kindle 走 foliate 的原因：KF8 把正文拆成 skeleton + fragment，部首页壁纸、插图、
+字体与配色全在原书 CSS 里，抽成纯文本段落必然丢排版——这是反复修不好的根因，
+不是某个解析 bug。readest 采用同一分层（Rust 侧只做封面与哈希，解析交给
+foliate-js），本项目跟随。
+
+- 入口：`src/features/reader/FoliateBookView.tsx`，路由级 lazy，仅 Kindle 书加载。
+- 位置：foliate 的 CFI 是不透明字符串，与「章 idx + 段落 idx」模型不通约，
+  暂存 `localStorage: colorreader:foliate:<bookId>`，待进度表加 CFI 列后入库。
+- 未接入（后续阶段）：标注 / 划词 / 全文检索 / TTS / 字号与主题。
+- 协议：ColorReader 为 AGPL-3.0-or-later，foliate-js 为 MIT，
+  见 `THIRD-PARTY-NOTICES.md` 与 `THIRD-PARTY-foliate-js-LICENSE`。
+
 ### 命令系统
 
 命令注册表是**单一事实来源**，键盘、命令面板、菜单、右键菜单统一从这里取：

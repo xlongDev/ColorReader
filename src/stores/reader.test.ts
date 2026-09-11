@@ -1,21 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import { foldScrollDelta, updateReadingSpeed } from "@/stores/reader";
-import { SPEECH_RATES, nextSpeechRate } from "@/stores/reader";
-
-describe("nextSpeechRate", () => {
-  it("cycles through every rate and wraps around", () => {
-    let rate: number = SPEECH_RATES[0];
-    for (let step = 1; step <= SPEECH_RATES.length; step += 1) {
-      rate = nextSpeechRate(rate);
-      expect(rate).toBe(SPEECH_RATES[step % SPEECH_RATES.length]);
-    }
-  });
-
-  it("treats an unknown rate as the start of the cycle", () => {
-    expect(nextSpeechRate(3)).toBe(SPEECH_RATES[0]);
-  });
-});
 
 describe("foldScrollDelta", () => {
   it("keeps slow speeds moving by carrying sub-pixel steps across frames", () => {

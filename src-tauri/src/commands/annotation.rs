@@ -15,10 +15,20 @@ pub fn annotation_create(
     start_char: usize,
     end_char: usize,
     text: String,
+    // Opaque foliate anchor (a CFI) for Kindle books; absent otherwise.
+    cfi: Option<String>,
 ) -> AppResult<Annotation> {
-    state
-        .library
-        .with(|conn| annotations::create(conn, &book_id, chapter_idx, start_char, end_char, &text))
+    state.library.with(|conn| {
+        annotations::create(
+            conn,
+            &book_id,
+            chapter_idx,
+            start_char,
+            end_char,
+            &text,
+            cfi.as_deref(),
+        )
+    })
 }
 
 /// `annotation.list` — every highlight for a book, in reading order.

@@ -25,6 +25,12 @@ use crate::error::{AppError, AppResult};
 /// fetches the bytes on demand via `book_asset`.
 pub const IMAGE_PARAGRAPH_PREFIX: &str = "\u{FFFC}";
 
+/// Marks a paragraph that is a chapter-wide wallpaper (a Kindle CSS
+/// `background-image` bound to the page's `<body>` class). The rest of the
+/// string is the asset path, fetched like an image; the reader paints it
+/// behind the chapter's text instead of flowing it inline.
+pub const WALLPAPER_PARAGRAPH_PREFIX: &str = "\u{FFFA}";
+
 /// Marks a paragraph that is an in-book link (an EPUB table of contents
 /// entry). Payload is `<target>\u{1F}<text>`: the zip entry path resolved at
 /// parse time, rewritten to a chapter index once the whole spine is read
@@ -174,11 +180,15 @@ pub fn read_chapters(path: &Path, format: BookFormat) -> AppResult<Vec<RawChapte
 /// Raw bytes of one in-book asset, addressed the way `read_chapters` named it.
 ///
 /// ZIP containers (EPUB, CBZ) are addressed by entry name; FB2 keeps its images
-/// inline as base64, so its payloads are binary ids prefixed with `#`. Other
+/// inline as base64, so its payloads are binary ids prefixed with `#`; MOBI
+/// images are PDB records addressed by their `kindle:embed:` reference. Other
 /// formats have no in-book assets at all.
 pub fn read_asset(path: &Path, format: BookFormat, asset: &str) -> AppResult<Vec<u8>> {
     if let Some(id) = asset.strip_prefix('#') {
         return fb2::read_binary(path, id);
+    }
+    if format == BookFormat::Mobi {
+        return mobi::read_asset(path, asset);
     }
     if !format.is_zip_container() {
         return Err(AppError::Parse(format!("{} 没有内嵌资源", format.as_str())));

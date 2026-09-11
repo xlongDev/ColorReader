@@ -9,11 +9,18 @@
 //! Everything here is read straight out of the container: no external parser,
 //! no temporary files.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::path::Path;
 
-use super::html::{self, chapters_from_blocks};
-use super::{BookMetadata, CoverImage, RawChapter};
+use quick_xml::events::Event;
+use quick_xml::reader::Reader;
+
+use super::html::{self, chapter_from_blocks, chapters_from_blocks};
+use super::{
+    BookMetadata, CoverImage, LINK_FIELD_SEPARATOR, LINK_PARAGRAPH_PREFIX, RawChapter,
+    WALLPAPER_PARAGRAPH_PREFIX,
+};
 use crate::error::{AppError, AppResult};
 
 /// Size of the Palm database header, up to and including the record count.
@@ -37,6 +44,12 @@ const OFFSET_EXTH_FLAGS: usize = 128;
 const OFFSET_FULL_NAME: usize = 84;
 const OFFSET_FULL_NAME_LENGTH: usize = 88;
 const OFFSET_EXTRA_FLAGS: usize = 242;
+const OFFSET_INDX: usize = 244;
+const OFFSET_FRAG: usize = 248;
+const OFFSET_SKEL: usize = 252;
+
+/// Marker for "this record pointer is not set". Record 0 would be ambiguous.
+const ABSENT_RECORD: u32 = u32::MAX;
 
 const COMPRESSION_NONE: u16 = 1;
 const COMPRESSION_PALMDOC: u16 = 2;
@@ -72,19 +85,565 @@ pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
 }
 
 /// Extracts chapters from the (usually single) HTML document of the book.
+///
+/// The book's own table of contents wins over heading heuristics: KF8 ships an
+/// NCX index and MOBI6 a guide page full of `filepos` anchors. Both reduce to
+/// sorted byte offsets into the decoded text, which slice it into chapters;
+/// links inside the text are rewritten to jump to the chapter they land in.
 pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
     let records = read_records(path)?;
     let section = Section::parse(&records, 0)?;
     let section = section.preferred(&records).unwrap_or(section);
 
-    let html = section.text(&records)?;
-    let mut chapters = chapters_from_blocks(html::parse_html(&html, ""));
+    let raw_bytes = section.text(&records)?;
+    let raw = decode_text(&raw_bytes, section.encoding);
+
+    let toc = kf8_toc(&records, &section)
+        .map(|(items, positions)| (items, PosResolver::Kf8(positions)))
+        .or_else(|| mobi6_toc(&raw).map(|items| (items, PosResolver::Filepos)));
+
+    let mut chapters = Vec::new();
+    match toc {
+        Some((items, resolver)) if items.len() >= 2 => {
+            // A boundary starts a chapter; each slice keeps its markers so
+            // the TOC page's anchors turn into working in-book links.
+            let mut kept = Vec::new();
+            for (index, item) in items.iter().enumerate() {
+                let start = item.offset.min(raw_bytes.len());
+                let end = items[index + 1..]
+                    .iter()
+                    .map(|next| next.offset.min(raw_bytes.len()))
+                    .find(|end| *end > start)
+                    .unwrap_or(raw_bytes.len());
+                let text = decode_text(&raw_bytes[start..end], section.encoding);
+                let prepared = match &resolver {
+                    // Slicing shifts byte offsets, so MOBI6 filepos anchors
+                    // are rewritten per slice, not for the whole text.
+                    PosResolver::Filepos => link_filepos(&text),
+                    PosResolver::Kf8(_) => text,
+                };
+                let mut chapter =
+                    chapter_from_blocks(html::parse_html(&rewrite_recindex(&prepared), ""));
+                // The slice's `<body>` class paints its page (part-title art,
+                // the copyright page's paper); surface it as a wallpaper
+                // marker the reader renders behind the text.
+                let backgrounds = flow_backgrounds(&raw, start);
+                chapter.paragraphs.splice(0..0, backgrounds);
+                if !item.label.is_empty() {
+                    chapter.title = Some(item.label.clone());
+                }
+                if chapter.title.is_none() && chapter.paragraphs.is_empty() {
+                    continue;
+                }
+                chapters.push(chapter);
+                kept.push(index);
+            }
+
+            let resolver = &resolver;
+            // MOBI6 labels come from the anchor text on the TOC page, which
+            // only exists as link markers after parsing.
+            if matches!(resolver, PosResolver::Filepos) {
+                let mut titles: HashMap<usize, String> = HashMap::new();
+                for chapter in &chapters {
+                    for paragraph in &chapter.paragraphs {
+                        if let Some(payload) = paragraph.strip_prefix(LINK_PARAGRAPH_PREFIX)
+                            && let Some((target, text)) = payload.split_once(LINK_FIELD_SEPARATOR)
+                            && let Some(offset) = resolver.resolve(target)
+                        {
+                            titles.entry(offset).or_insert_with(|| text.to_string());
+                        }
+                    }
+                }
+                for (slot, &index) in kept.iter().enumerate() {
+                    if chapters[slot].title.is_none()
+                        && let Some(title) = titles.get(&items[index].offset)
+                    {
+                        chapters[slot].title = Some(title.clone());
+                    }
+                }
+            }
+
+            let boundaries: Vec<usize> = kept.iter().map(|&index| items[index].offset).collect();
+            resolve_links(&mut chapters, resolver, &boundaries);
+        }
+        _ => chapters = chapters_from_blocks(html::parse_html(&raw, "")),
+    }
+
     split_oversized(&mut chapters);
 
     if chapters.is_empty() {
         return Err(AppError::Parse("MOBI 正文里没有可读的文字".into()));
     }
     Ok(chapters)
+}
+
+/// Raw bytes of one image record, addressed by the reference stored in image
+/// paragraphs. Both spellings are 1-based and count from the resource pool
+/// named by record 0's resource start field — the shared pool that both the
+/// MOBI6 and KF8 parts of a combined file reference:
+///
+/// - `kindle:embed:NN` comes from link targets; ids are base 32.
+/// - `kindle:recindex:NNN` comes from `<img recindex>` attributes; ids are
+///   decimal, exactly the digits kindlegen writes into the attribute.
+pub fn read_asset(path: &Path, asset: &str) -> AppResult<Vec<u8>> {
+    let id = if let Some(id) = asset.strip_prefix("kindle:recindex:") {
+        id.split('?').next().and_then(|rest| rest.parse::<u32>().ok())
+    } else if let Some(id) = asset.strip_prefix("kindle:embed:") {
+        id.split('?').next().and_then(|rest| u32::from_str_radix(rest, 32).ok())
+    } else {
+        None
+    }
+    .filter(|id| *id > 0)
+    .ok_or_else(|| AppError::Parse(format!("无法识别的 MOBI 资源：{asset}")))?;
+    let records = read_records(path)?;
+    let index = resource_base(&records) + id as usize - 1;
+    let record =
+        records.get(index).ok_or_else(|| AppError::Parse(format!("MOBI 资源记录越界：{asset}")))?;
+    Ok(record.clone())
+}
+
+/// Renames Kindle's `recindex` image attribute into a `src` the shared HTML
+/// parser understands.
+///
+/// KF8 marks illustrations with `<img recindex="00047">`: a 1-based decimal
+/// record number into the shared resource pool, with no `src` at all. The
+/// parser only reads `src`/`href`, so the attribute is renamed in place to
+/// `src="kindle:recindex:00047"`. `lowrecindex` is a different attribute that
+/// contains the same letters, hence the alphanumeric boundary guard.
+fn rewrite_recindex(html: &str) -> Cow<'_, str> {
+    const NEEDLE: &str = "recindex=\"";
+    let mut out = String::new();
+    let mut rest = html;
+    while let Some(at) = rest.find(NEEDLE) {
+        if rest[..at].chars().next_back().is_some_and(|char| char.is_ascii_alphanumeric()) {
+            // Part of a longer attribute name; copy it verbatim.
+            out.push_str(&rest[..at + NEEDLE.len()]);
+            rest = &rest[at + NEEDLE.len()..];
+            continue;
+        }
+        let value_at = at + NEEDLE.len();
+        let Some(value_len) = rest[value_at..].find('"') else { break };
+        out.push_str(&rest[..at]);
+        out.push_str("src=\"kindle:recindex:");
+        out.push_str(&rest[value_at..value_at + value_len]);
+        out.push('"');
+        rest = &rest[value_at + value_len + 1..];
+    }
+    if out.is_empty() {
+        return Cow::Borrowed(html);
+    }
+    out.push_str(rest);
+    Cow::Owned(out)
+}
+
+/// The wallpaper marker for a slice, taken from its `<body>` class.
+///
+/// Kindle paints whole pages with `background-image: url(kindle:embed:N…)`
+/// inside a linked flow — no `<img>` anywhere in the document text, so the
+/// shared parser sees nothing. The wallpaper belongs to the page's own
+/// `<body class=…>` rule; other rules in the same stylesheet paint other
+/// pages (the copyright page, fonts), so collecting every url in sight pulled
+/// in a stranger's wallpaper and showed a near-white texture page that read
+/// as blank. KF8 assembles documents from skeleton fragments, which puts the
+/// `<body>` tag just before the slice, so the class is looked up in the raw
+/// text behind `slice_start`. Every slice gets its marker: part-title pages
+/// show the art alone, text pages (the copyright page) read off the paper.
+fn flow_backgrounds(raw: &str, slice_start: usize) -> Vec<String> {
+    const BODY_CLASS: &str = "<body class=\"";
+    const URL_PREFIX: &str = "url(kindle:embed:";
+    let Some(at) = raw[..slice_start].rfind(BODY_CLASS) else { return Vec::new() };
+    let from = at + BODY_CLASS.len();
+    let Some(class_len) = raw[from..].find('"') else { return Vec::new() };
+    let class = &raw[from..from + class_len];
+    // The class's declaration block: the first ".class" occurrence whose next
+    // character opens a block (".calibre3" must not match ".calibre31").
+    let mut cursor = 0usize;
+    let block = loop {
+        let Some(found) = raw[cursor..].find(&format!(".{class}")) else { return Vec::new() };
+        let after = cursor + found + class.len() + 1;
+        if raw[after..].trim_start().starts_with('{') {
+            let block = &raw[after..];
+            let Some(block_end) = block.find('}') else { return Vec::new() };
+            break &block[..block_end];
+        }
+        cursor = after;
+    };
+    let Some(found) = block.find(URL_PREFIX) else { return Vec::new() };
+    let rest = &block[found + URL_PREFIX.len()..];
+    let id: &str = rest.split(['?', ')']).next().unwrap_or("");
+    // Flows also reference fonts as bare `url(kindle:embed:N)` inside
+    // @font-face; real artwork always declares its mime.
+    let Some(mime) = rest
+        .split("mime=")
+        .nth(1)
+        .and_then(|tail| tail.split(')').next())
+        .filter(|mime| mime.starts_with("image/"))
+    else {
+        return Vec::new();
+    };
+    vec![format!("{WALLPAPER_PARAGRAPH_PREFIX}kindle:embed:{id}?mime={mime}")]
+}
+
+/// Where the shared image pool starts: record 0's resource start field.
+///
+/// KF8 headers repeat the field, but real-world dumps (z-library among them)
+/// fill their copy with garbage while cover offsets and `kindle:embed` ids
+/// keep counting from the first section's pool.
+fn resource_base(records: &[Vec<u8>]) -> usize {
+    records.first().map_or(0, |header| be_u32(header, OFFSET_FIRST_IMAGE) as usize)
+}
+
+/// One chapter boundary taken from the book's own table of contents.
+struct TocItem {
+    /// Byte offset into the decoded text.
+    offset: usize,
+    label: String,
+}
+
+/// Maps the text's Kindle link targets to byte offsets in the decoded text.
+enum PosResolver {
+    /// KF8 `kindle:pos:fid:X:off:Y`, through the fragment position table.
+    Kf8(HashMap<u32, usize>),
+    /// MOBI6 `kindle:filepos:N` — N already is the byte offset.
+    Filepos,
+}
+
+impl PosResolver {
+    fn resolve(&self, target: &str) -> Option<usize> {
+        match self {
+            Self::Kf8(positions) => {
+                let rest = target.strip_prefix("kindle:pos:fid:")?;
+                let (fid, off) = rest.split_once(":off:")?;
+                // Both halves are written in base 32 by Amazon's tooling.
+                let fid = u32::from_str_radix(fid, 32).ok()?;
+                let off = u32::from_str_radix(off, 32).ok()?;
+                positions.get(&fid).map(|base| base + off as usize)
+            }
+            Self::Filepos => {
+                target.strip_prefix("kindle:filepos:").and_then(|value| value.parse::<usize>().ok())
+            }
+        }
+    }
+}
+
+/// The KF8 table of contents: NCX entries positioned through the skeleton and
+/// fragment index tables. Returns chapter boundaries plus the fid → offset
+/// table that also resolves `kindle:pos:` links inside the text.
+///
+/// All record numbers involved are relative to the section's own record 0,
+/// which is how Amazon encodes the KF8 part of a combined file.
+fn kf8_toc(records: &[Vec<u8>], section: &Section) -> Option<(Vec<TocItem>, HashMap<u32, usize>)> {
+    let frag = read_index(records, section.record(section.frag)?)?;
+    let skel = read_index(records, section.record(section.skel)?)?;
+    let ncx = read_index(records, section.record(section.indx)?)?;
+
+    // A skeleton owns the next numFrag fragments in list order; fragment
+    // offsets count from the end of the skeleton's own text.
+    let mut positions: HashMap<u32, usize> = HashMap::new();
+    let mut fragments = frag.entries.iter();
+    for skeleton in &skel.entries {
+        let count = *skeleton.tags.get(&1)?.first()?;
+        let bounds = skeleton.tags.get(&6)?;
+        let base = *bounds.first()? as usize + *bounds.get(1)? as usize;
+        for _ in 0..count {
+            let fragment = fragments.next()?;
+            let fid = *fragment.tags.get(&4)?.first()?;
+            let offset = *fragment.tags.get(&6)?.first()? as usize;
+            positions.insert(fid, base + offset);
+        }
+    }
+
+    let mut items: Vec<TocItem> = Vec::new();
+    for entry in &ncx.entries {
+        let pos = entry.tags.get(&6)?;
+        let base = *positions.get(pos.first()?)?;
+        let label = entry
+            .tags
+            .get(&3)
+            .and_then(|values| values.first())
+            .and_then(|key| ncx.cncx.get(key))
+            .cloned()
+            .unwrap_or_default();
+        items.push(TocItem { offset: base + *pos.get(1)? as usize, label });
+    }
+    items.sort_by_key(|item| item.offset);
+    items.dedup_by(|a, b| a.offset == b.offset);
+    (items.len() >= 2).then_some((items, positions))
+}
+
+/// The MOBI6 table of contents: the guide's `toc` reference points at a page
+/// whose `filepos` anchors are the chapter boundaries. Labels arrive later,
+/// as the anchor text of the link markers the HTML parser produces.
+fn mobi6_toc(raw: &str) -> Option<Vec<TocItem>> {
+    let guide_start = raw.find("<guide")?;
+    let guide_end = guide_start + raw[guide_start..].find("</guide>")?;
+    let mut reader = Reader::from_str(&raw[guide_start..guide_end]);
+    let mut buf = Vec::new();
+    let mut references: Vec<(String, u64)> = Vec::new();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(element)) | Ok(Event::Empty(element)) => {
+                if element.name().local_name().as_ref() == "reference" {
+                    let kind = html::attribute(&element, "type");
+                    let filepos = html::attribute(&element, "filepos").parse().ok();
+                    if let Some(filepos) = filepos {
+                        references.push((kind, filepos));
+                    }
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+
+    let toc_pos = references
+        .iter()
+        .find(|(kind, _)| kind.to_ascii_lowercase().split_whitespace().any(|token| token == "toc"))?
+        .1;
+    // The TOC page ends where the next guide destination begins.
+    let toc_end = references
+        .iter()
+        .map(|(_, pos)| *pos)
+        .filter(|pos| *pos > toc_pos)
+        .min()
+        .unwrap_or(u64::MAX);
+    let toc_pos = toc_pos.min(raw.len() as u64) as usize;
+    let toc_end = toc_end.min(raw.len() as u64) as usize;
+    let page = raw.get(toc_pos..toc_end)?;
+    // Skip the guide itself: its own filepos attributes must not count as
+    // anchors.
+    let page = &page[page.find("</guide>").map_or(0, |at| at + "</guide>".len())..];
+
+    let mut found: Vec<usize> = Vec::new();
+    let bytes = page.as_bytes();
+    let mut at = 0usize;
+    while let Some(rel) = page[at..].find("filepos") {
+        let mut cursor = at + rel + "filepos".len();
+        while bytes.get(cursor).is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'=') {
+            cursor += 1;
+        }
+        if matches!(bytes.get(cursor), Some(b'"') | Some(b'\'')) {
+            cursor += 1;
+        }
+        let start = cursor;
+        while bytes.get(cursor).is_some_and(|byte| byte.is_ascii_digit()) {
+            cursor += 1;
+        }
+        if cursor > start
+            && let Ok(value) = page[start..cursor].parse()
+        {
+            found.push(value);
+        }
+        at = cursor;
+    }
+
+    found.sort_unstable();
+    found.dedup();
+    let items: Vec<TocItem> =
+        found.into_iter().map(|offset| TocItem { offset, label: String::new() }).collect();
+    (items.len() >= 2).then_some(items)
+}
+
+/// Rewrites MOBI6 `filepos` anchor attributes into internal links the shared
+/// HTML parser understands. Kindle anchors never carry a real href alongside,
+/// so the attribute name is replaced in place; anything unparseable stays.
+fn link_filepos(html: &str) -> String {
+    let bytes = html.as_bytes();
+    let mut out = String::with_capacity(html.len() + 64);
+    let mut at = 0usize;
+    while let Some(rel) = html[at..].find("filepos") {
+        let hit = at + rel;
+        out.push_str(&html[at..hit]);
+        let mut cursor = hit + "filepos".len();
+        while bytes.get(cursor).is_some_and(|byte| byte.is_ascii_whitespace() || *byte == b'=') {
+            cursor += 1;
+        }
+        let quoted = matches!(bytes.get(cursor), Some(b'"') | Some(b'\''));
+        if quoted {
+            cursor += 1;
+        }
+        let start = cursor;
+        while bytes.get(cursor).is_some_and(|byte| byte.is_ascii_digit()) {
+            cursor += 1;
+        }
+        if cursor == start {
+            out.push_str("filepos");
+            at = hit + "filepos".len();
+            continue;
+        }
+        out.push_str(&format!("href=\"kindle:filepos:{}\"", &html[start..cursor]));
+        at = cursor + usize::from(quoted);
+    }
+    out.push_str(&html[at..]);
+    out
+}
+
+/// Rewrites in-book link markers to chapter indices; anything the position
+/// tables cannot explain degrades to its plain text.
+fn resolve_links(chapters: &mut [RawChapter], resolver: &PosResolver, boundaries: &[usize]) {
+    for chapter in chapters {
+        for paragraph in &mut chapter.paragraphs {
+            let Some(payload) = paragraph.strip_prefix(LINK_PARAGRAPH_PREFIX) else { continue };
+            let Some((target, text)) = payload.split_once(LINK_FIELD_SEPARATOR) else { continue };
+            let resolved =
+                resolver.resolve(target).and_then(|offset| chapter_index(boundaries, offset));
+            *paragraph = match resolved {
+                Some(index) => {
+                    format!("{LINK_PARAGRAPH_PREFIX}{index}{LINK_FIELD_SEPARATOR}{text}")
+                }
+                None => text.to_string(),
+            };
+        }
+    }
+}
+
+/// The chapter holding `offset`: the last boundary at or before it.
+fn chapter_index(boundaries: &[usize], offset: usize) -> Option<usize> {
+    (!boundaries.is_empty())
+        .then(|| boundaries.partition_point(|&bound| bound <= offset).saturating_sub(1))
+}
+
+/// One MOBI index entry: the raw values of every tag present. (The entry
+/// name matters to frag insert offsets and NCX ordinals; neither is used.)
+struct IndexEntry {
+    tags: HashMap<u32, Vec<u32>>,
+}
+
+/// One INDX record chain: parsed entries plus the CNCX string pool.
+struct IndexData {
+    entries: Vec<IndexEntry>,
+    cncx: HashMap<u32, String>,
+}
+
+/// Parses an INDX chain: header record with the TAGX tag table, then the entry
+/// records, then the CNCX records holding shared strings (TOC labels and the
+/// like). Anything malformed aborts the chain; callers fall back.
+fn read_index(records: &[Vec<u8>], num: usize) -> Option<IndexData> {
+    let header = records.get(num)?;
+    if header.get(0..4) != Some(b"INDX") {
+        return None;
+    }
+    let header_len = be_u32(header, 4) as usize;
+    let record_count = be_u32(header, 24) as usize;
+    let encoding = be_u32(header, 28);
+    let cncx_count = be_u32(header, 52) as usize;
+
+    let tagx = header.get(header_len..)?;
+    if tagx.get(0..4) != Some(b"TAGX") {
+        return None;
+    }
+    let tagx_len = be_u32(tagx, 4) as usize;
+    let control_bytes = be_u32(tagx, 8) as usize;
+    let table: Vec<(u32, u32, u32, u32)> = (12..tagx_len)
+        .step_by(4)
+        .filter_map(|at| tagx.get(at..at + 4))
+        .map(|row| (u32::from(row[0]), u32::from(row[1]), u32::from(row[2]), u32::from(row[3])))
+        .collect();
+
+    // CNCX strings are keyed by byte position within their record, with each
+    // record adding a 0x10000 offset to the key space.
+    let mut cncx: HashMap<u32, String> = HashMap::new();
+    for index in 0..cncx_count {
+        let record = records.get(num + record_count + index + 1)?;
+        let mut cursor = 0usize;
+        while cursor < record.len() {
+            // The key is the position of the length byte itself.
+            let key = (index * 0x1_0000 + cursor) as u32;
+            let Some(length) = read_vwi(record, &mut cursor) else { break };
+            let Some(bytes) = record.get(cursor..cursor + length as usize) else { break };
+            cursor += length as usize;
+            cncx.insert(key, decode_text(bytes, encoding));
+        }
+    }
+
+    let mut entries = Vec::new();
+    for record_index in 0..record_count {
+        let Some(record) = records.get(num + 1 + record_index) else { break };
+        if record.get(0..4) != Some(b"INDX") {
+            break;
+        }
+        let idxt = be_u32(record, 20) as usize;
+        let entry_count = be_u32(record, 24) as usize;
+        for entry_index in 0..entry_count {
+            let at = idxt + 4 + entry_index * 2;
+            if at + 2 > record.len() {
+                break;
+            }
+            let offset = be_u16(record, at) as usize;
+            let Some(&name_len) = record.get(offset) else { break };
+            let name_len = name_len as usize;
+            // The entry name (an ordinal or insert offset) is not consumed
+            // by any chain we read; it only separates the control bytes.
+            let Some(_) = record.get(offset + 1..offset + 1 + name_len) else { break };
+            let start = offset + 1 + name_len;
+
+            // Control bytes flag which tags this entry carries; the table
+            // turns each flag into either fixed values or a byte-sliced blob.
+            let mut present: Vec<(u32, Option<u32>, Option<u32>, u32)> = Vec::new();
+            let mut cursor = start + control_bytes;
+            let mut control_slot = 0usize;
+            let mut broken = false;
+            for &(tag, values, mask, kind) in &table {
+                if kind & 1 != 0 {
+                    control_slot += 1;
+                    continue;
+                }
+                let Some(&byte) = record.get(start + control_slot) else {
+                    broken = true;
+                    break;
+                };
+                let value = u32::from(byte) & mask;
+                if value == mask {
+                    if mask.count_ones() > 1 {
+                        let bytes = read_vwi(record, &mut cursor)?;
+                        present.push((tag, None, Some(bytes), values));
+                    } else {
+                        present.push((tag, Some(1), None, values));
+                    }
+                } else {
+                    present.push((tag, Some(value >> mask.trailing_zeros()), None, values));
+                }
+            }
+            if broken {
+                break;
+            }
+
+            let mut tags: HashMap<u32, Vec<u32>> = HashMap::new();
+            for (tag, count, bytes, values) in present {
+                let mut list = Vec::new();
+                if let Some(count) = count {
+                    for _ in 0..count.saturating_mul(values) {
+                        list.push(read_vwi(record, &mut cursor)?);
+                    }
+                } else if let Some(bytes) = bytes {
+                    let mut used = 0usize;
+                    while used < bytes as usize {
+                        let before = cursor;
+                        list.push(read_vwi(record, &mut cursor)?);
+                        used += cursor - before;
+                    }
+                }
+                tags.insert(tag, list);
+            }
+            entries.push(IndexEntry { tags });
+        }
+    }
+
+    Some(IndexData { entries, cncx })
+}
+
+/// Forward variable-width integer: 7 bits per byte, high bit marks the last.
+fn read_vwi(data: &[u8], cursor: &mut usize) -> Option<u32> {
+    let mut value = 0u32;
+    loop {
+        let byte = *data.get(*cursor)?;
+        *cursor += 1;
+        value = (value << 7) | u32::from(byte & 0x7f);
+        if byte & 0x80 != 0 {
+            return Some(value);
+        }
+    }
 }
 
 /// Splits every chapter longer than [`MAX_CHAPTER_CHARS`] at a paragraph
@@ -171,6 +730,10 @@ struct Section {
     first_image: usize,
     huffman_index: usize,
     huffman_count: usize,
+    /// KF8 index chains, as section-relative record numbers.
+    indx: u32,
+    frag: u32,
+    skel: u32,
     exth: HashMap<u32, Vec<u8>>,
 }
 
@@ -198,6 +761,9 @@ impl Section {
             first_image: be_u32(header, OFFSET_FIRST_IMAGE) as usize,
             huffman_index: be_u32(header, OFFSET_HUFFMAN_INDEX) as usize,
             huffman_count: be_u32(header, OFFSET_HUFFMAN_COUNT) as usize,
+            indx: record_field(header, OFFSET_INDX),
+            frag: record_field(header, OFFSET_FRAG),
+            skel: record_field(header, OFFSET_SKEL),
             exth: HashMap::new(),
         };
 
@@ -257,6 +823,11 @@ impl Section {
         }
     }
 
+    /// Absolute record number for a section-relative KF8 index pointer.
+    fn record(&self, relative: u32) -> Option<usize> {
+        (relative != 0 && relative != ABSENT_RECORD).then(|| self.start + relative as usize)
+    }
+
     fn metadata(&self, records: &[Vec<u8>]) -> BookMetadata {
         let title =
             self.exth_text(EXTH_TITLE).or_else(|| self.full_name(records)).unwrap_or_default();
@@ -283,21 +854,28 @@ impl Section {
 
     /// The cover image, taken from the record EXTH 201/202 points at.
     ///
-    /// Producers disagree on whether the offset is absolute or relative to the
-    /// first image record, so both are tried and the one that sniffs as an
-    /// image wins.
+    /// Offsets count from the file's shared image pool (record 0's resource
+    /// start); some producers instead write offsets that only work against the
+    /// section's own copy of the field or as absolute record numbers, so all
+    /// three candidates are tried and the one that sniffs as an image wins.
     fn cover(&self, records: &[Vec<u8>]) -> Option<CoverImage> {
-        let offset = self.exth_u32(EXTH_COVER).or_else(|| self.exth_u32(EXTH_THUMB))? as usize;
-        [self.first_image + offset, offset]
+        let offset = self.exth_u32(EXTH_COVER).or_else(|| self.exth_u32(EXTH_THUMB))?;
+        if offset == ABSENT_RECORD {
+            return None;
+        }
+        let offset = offset as usize;
+        let base = resource_base(records);
+        [base + offset, self.first_image + offset, offset]
             .into_iter()
-            .filter_map(|index| records.get(index))
-            .find_map(|bytes| {
-                sniff_image(bytes).map(|extension| CoverImage { extension, bytes: bytes.clone() })
+            .filter(|index| *index < records.len())
+            .find_map(|index| {
+                sniff_image(&records[index])
+                    .map(|extension| CoverImage { extension, bytes: records[index].clone() })
             })
     }
 
-    /// Decodes every text record of the section into one HTML string.
-    fn text(&self, records: &[Vec<u8>]) -> AppResult<String> {
+    /// Decodes every text record of the section into one HTML byte buffer.
+    fn text(&self, records: &[Vec<u8>]) -> AppResult<Vec<u8>> {
         let mut huffdic = match self.compression {
             COMPRESSION_HUFFDIC => {
                 Some(HuffCdic::new(records, self.start, self.huffman_index, self.huffman_count)?)
@@ -325,8 +903,14 @@ impl Section {
         if html.is_empty() {
             return Err(AppError::Parse("MOBI 正文为空".into()));
         }
-        Ok(decode_text(&html, self.encoding))
+        Ok(html)
     }
+}
+
+/// A section-relative record pointer field; absent pointers are all-bits-set,
+/// and headers too short to carry the field report the same.
+fn record_field(header: &[u8], at: usize) -> u32 {
+    if header.len() >= at + 4 { be_u32(header, at) } else { ABSENT_RECORD }
 }
 
 /// Recognises the image containers MOBI embeds as records.
@@ -853,5 +1437,355 @@ mod tests {
         assert_eq!(sniff_image(b"\xff\xd8\xff\xe0"), Some("jpeg".into()));
         assert_eq!(sniff_image(b"GIF89a"), Some("gif".into()));
         assert_eq!(sniff_image(b"<html>"), None);
+    }
+
+    #[test]
+    fn recindex_becomes_a_src_and_lowrecindex_is_left_alone() {
+        let html = concat!(
+            "<p><img align=\"baseline\" recindex=\"00047\"></p>",
+            "<img lowrecindex=\"9\">",
+            "<img recindex=\"3\" href=\"kindle:filepos:45\">",
+        );
+        let expected = concat!(
+            "<p><img align=\"baseline\" src=\"kindle:recindex:00047\"></p>",
+            "<img lowrecindex=\"9\">",
+            "<img src=\"kindle:recindex:3\" href=\"kindle:filepos:45\">",
+        );
+        assert_eq!(rewrite_recindex(html), expected);
+        // Nothing to do: the input is returned untouched, no allocation.
+        assert_eq!(rewrite_recindex("<p>正文</p>"), Cow::Borrowed("<p>正文</p>"));
+    }
+
+    #[test]
+    fn a_rewritten_recindex_image_becomes_a_marker_paragraph() {
+        let blocks = html::parse_html(
+            &rewrite_recindex("<html><body><img align=\"baseline\" recindex=\"5\"></body></html>"),
+            "",
+        );
+        assert_eq!(blocks, [html::Block::Paragraph("\u{FFFC}kindle:recindex:5".into())]);
+    }
+
+    #[test]
+    fn body_class_picks_its_own_wallpaper_and_nothing_else() {
+        let raw = concat!(
+            "<style>.copy{background-image: url(kindle:embed:0006?mime=image/jpeg)}",
+            ".fen{background-image: url(kindle:embed:0005?mime=image/jpeg)}",
+            ".k1{border: 1px}</style>",
+            "<body class=\"copy\"></body></html>版权页",
+            "<body class=\"fen\"></body></html>",
+            "<div class=\"k\"><div class=\"k1\"><h1>第一部</h1></div></div>",
+        );
+        // The part page's body class is the one just before its slice; only
+        // that rule's wallpaper is surfaced, never a sibling page's.
+        let part_at = raw.find("<div class=\"k\"").expect("part slice");
+        assert_eq!(flow_backgrounds(raw, part_at), ["\u{FFFA}kindle:embed:0005?mime=image/jpeg"]);
+        // An offset inside the copyright page resolves to its own wallpaper.
+        let copy_at = raw.find("版权页").expect("copyright slice");
+        assert_eq!(flow_backgrounds(raw, copy_at), ["\u{FFFA}kindle:embed:0006?mime=image/jpeg"]);
+        // No body class in sight, no marker.
+        assert!(flow_backgrounds("<p>正文</p>", 0).is_empty());
+    }
+
+    #[test]
+    fn read_asset_resolves_recindex_against_the_shared_pool() {
+        let dir = fixture::temp_dir("mobi-asset");
+        let path = dir.join("book.mobi");
+        let mut header = mobi_header(&[]);
+        // The pool starts at record 2; recindex ids count from it, 1-based.
+        header[OFFSET_FIRST_IMAGE..OFFSET_FIRST_IMAGE + 4].copy_from_slice(&2u32.to_be_bytes());
+        std::fs::write(&path, build_pdb(&[&header, b"junk", b"\xff\xd8\xff\xe0jpeg"]))
+            .expect("write");
+
+        assert_eq!(
+            read_asset(&path, "kindle:recindex:1").expect("recindex"),
+            b"\xff\xd8\xff\xe0jpeg".to_vec()
+        );
+        assert!(read_asset(&path, "kindle:recindex:9").is_err());
+        assert!(read_asset(&path, "not-a-reference").is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // --- the book's own table of contents ---
+
+    /// Encodes a forward variable-width integer, high bit on the last byte.
+    fn write_vwi(out: &mut Vec<u8>, value: u32) {
+        let mut groups = [0u8; 5];
+        for (index, group) in groups.iter_mut().enumerate() {
+            *group = ((value >> (7 * (4 - index))) & 0x7f) as u8;
+        }
+        let first = groups.iter().position(|group| *group != 0).unwrap_or(4);
+        out.extend_from_slice(&groups[first..4]);
+        out.push(groups[4] | 0x80);
+    }
+
+    /// Builds INDX records: a header whose TAGX table declares tags
+    /// 1, 3, 4 (one value each) and 6 (two values), one control byte.
+    type EntrySet = Vec<(u32, Vec<u32>)>;
+
+    fn indx_chain(entry_sets: Vec<Vec<(&str, EntrySet)>>) -> Vec<Vec<u8>> {
+        let tags: [[u8; 4]; 5] =
+            [[1, 1, 1, 0], [3, 1, 2, 0], [4, 1, 4, 0], [6, 2, 8, 0], [0, 0, 0, 1]];
+        let mut first = vec![0u8; 192];
+        first[0..4].copy_from_slice(b"INDX");
+        first[4..8].copy_from_slice(&192u32.to_be_bytes());
+        first[24..28].copy_from_slice(&(entry_sets.len() as u32).to_be_bytes());
+        first[28..32].copy_from_slice(&65001u32.to_be_bytes());
+        let mut tagx = b"TAGX".to_vec();
+        tagx.extend_from_slice(&(12 + 4 * tags.len() as u32).to_be_bytes());
+        tagx.extend_from_slice(&1u32.to_be_bytes());
+        for row in tags {
+            tagx.extend_from_slice(&row);
+        }
+        first.extend_from_slice(&tagx);
+        let mut records = vec![first];
+
+        for entries in entry_sets {
+            let mut record = vec![0u8; 192];
+            record[0..4].copy_from_slice(b"INDX");
+            record[4..8].copy_from_slice(&192u32.to_be_bytes());
+            let mut offsets = Vec::new();
+            let mut body = Vec::new();
+            for (name, tag_values) in &entries {
+                offsets.push(192 + body.len());
+                body.push(name.len() as u8);
+                body.extend_from_slice(name.as_bytes());
+                // The control byte flags each present tag with its mask.
+                let mut control = 0u8;
+                for (tag, _) in tag_values {
+                    control |= match tag {
+                        1 => 1,
+                        3 => 2,
+                        4 => 4,
+                        6 => 8,
+                        _ => 0,
+                    };
+                }
+                body.push(control);
+                for (_, values) in tag_values {
+                    for value in values {
+                        write_vwi(&mut body, *value);
+                    }
+                }
+            }
+            record.extend_from_slice(&body);
+            let idxt = record.len() as u32;
+            record.extend_from_slice(&0u32.to_be_bytes());
+            for offset in &offsets {
+                record.extend_from_slice(&(*offset as u16).to_be_bytes());
+            }
+            record[20..24].copy_from_slice(&idxt.to_be_bytes());
+            record[24..28].copy_from_slice(&(entries.len() as u32).to_be_bytes());
+            records.push(record);
+        }
+        records
+    }
+
+    #[test]
+    fn variable_width_integers_round_trip() {
+        for value in [0u32, 1, 0x7f, 0x80, 0x3fff, 0x123456, u32::MAX] {
+            let mut bytes = Vec::new();
+            write_vwi(&mut bytes, value);
+            let mut cursor = 0usize;
+            assert_eq!(read_vwi(&bytes, &mut cursor), Some(value));
+            assert_eq!(cursor, bytes.len());
+        }
+    }
+
+    #[test]
+    fn an_indx_chain_parses_entries_and_tags() {
+        let records = indx_chain(vec![vec![
+            ("00", vec![(1, vec![7]), (4, vec![9]), (6, vec![100, 50])]),
+            ("01", vec![(1, vec![8]), (4, vec![10]), (6, vec![200, 3])]),
+        ]]);
+
+        let data = read_index(&records, 0).expect("index");
+        assert_eq!(data.entries.len(), 2);
+        assert_eq!(data.entries[0].tags[&1], [7]);
+        assert_eq!(data.entries[0].tags[&6], [100, 50]);
+        assert_eq!(data.entries[1].tags[&6], [200, 3]);
+    }
+
+    #[test]
+    fn kf8_positions_map_fids_through_skeletons_and_fragments() {
+        // Relative layout: the frag chain starts at record 1, the skeleton
+        // chain at 3, the NCX chain at 5 (each is a header + one entry record).
+        let mut records = vec![mobi_header(&[])];
+        records.extend(indx_chain(vec![vec![("10", vec![(4, vec![7]), (6, vec![10, 20])])]]));
+        records.extend(indx_chain(vec![vec![("SKEL", vec![(1, vec![1]), (6, vec![100, 50])])]]));
+        records.extend(indx_chain(vec![vec![
+            ("00", vec![(3, vec![0]), (6, vec![7, 5])]),
+            ("01", vec![(3, vec![1]), (6, vec![7, 20])]),
+        ]]));
+
+        let header = &mut records[0];
+        header.resize(256, 0);
+        header[OFFSET_FRAG..OFFSET_FRAG + 4].copy_from_slice(&1u32.to_be_bytes());
+        header[OFFSET_SKEL..OFFSET_SKEL + 4].copy_from_slice(&3u32.to_be_bytes());
+        header[OFFSET_INDX..OFFSET_INDX + 4].copy_from_slice(&5u32.to_be_bytes());
+
+        let section = Section::parse(&records, 0).expect("section");
+        let (items, positions) = kf8_toc(&records, &section).expect("toc");
+
+        // pos(fid 7) = skeleton end (100+50) + fragment offset 10 = 160.
+        assert_eq!(positions[&7], 160);
+        assert_eq!(items.iter().map(|item| item.offset).collect::<Vec<_>>(), [165, 180]);
+    }
+
+    #[test]
+    fn a_broken_index_chain_falls_back_to_none() {
+        let mut records = indx_chain(vec![vec![("SKEL", vec![(1, vec![1])])]]);
+        records[0].clear(); // smash the header record
+        assert!(read_index(&records, 0).is_none());
+    }
+
+    #[test]
+    fn kindle_link_targets_resolve_to_offsets() {
+        let mut positions = HashMap::new();
+        positions.insert(3u32, 160usize);
+        let resolver = PosResolver::Kf8(positions);
+        assert_eq!(resolver.resolve("kindle:pos:fid:3:off:5"), Some(165));
+        // fid and off are base 32.
+        assert_eq!(resolver.resolve("kindle:pos:fid:3:off:K"), Some(160 + 20));
+        assert_eq!(resolver.resolve("kindle:pos:fid:99:off:5"), None);
+        assert_eq!(resolver.resolve("https://example.com"), None);
+
+        let filepos = PosResolver::Filepos;
+        assert_eq!(filepos.resolve("kindle:filepos:1234"), Some(1234));
+        assert_eq!(filepos.resolve("kindle:pos:fid:3:off:5"), None);
+    }
+
+    #[test]
+    fn mobi6_boundaries_come_from_the_guide_toc_page() {
+        let mut raw = format!(
+            "<html><body>{}<guide><reference type=\"toc\" filepos=\"40\"/>\
+             <reference type=\"text\" filepos=\"999\"/></guide>ANCHORS",
+            "x".repeat(28)
+        );
+        let anchors_at = raw.find("ANCHORS").expect("anchor slot");
+        raw = raw.replace(
+            "ANCHORS",
+            &format!(
+                "<a filepos=\"{a}\">第一章</a> 和 <a filepos=\"{b}\">第二章</a>",
+                a = anchors_at,
+                b = anchors_at + 30
+            ),
+        );
+
+        let items = mobi6_toc(&raw).expect("toc");
+        assert_eq!(
+            items.iter().map(|item| item.offset).collect::<Vec<_>>(),
+            [anchors_at, anchors_at + 30]
+        );
+        assert!(items.iter().all(|item| item.label.is_empty()));
+    }
+
+    #[test]
+    fn a_guide_without_toc_yields_no_boundaries() {
+        let raw = "<html><guide><reference type=\"text\" filepos=\"40\"/></guide></html>";
+        assert!(mobi6_toc(raw).is_none());
+    }
+
+    #[test]
+    fn filepos_attributes_become_internal_links() {
+        assert_eq!(
+            link_filepos("<a filepos=\"120\">甲</a><img recindex=\"3\" filepos=45>"),
+            "<a href=\"kindle:filepos:120\">甲</a><img recindex=\"3\" href=\"kindle:filepos:45\">"
+        );
+        // A filepos without a number survives untouched.
+        assert_eq!(link_filepos("<a filepos>"), "<a filepos>");
+    }
+
+    #[test]
+    fn link_markers_resolve_to_chapter_indices() {
+        let boundaries = [40usize, 90, 160];
+        assert_eq!(chapter_index(&boundaries, 0), Some(0));
+        assert_eq!(chapter_index(&boundaries, 40), Some(0));
+        assert_eq!(chapter_index(&boundaries, 41), Some(0));
+        assert_eq!(chapter_index(&boundaries, 90), Some(1));
+        assert_eq!(chapter_index(&boundaries, 999), Some(2));
+
+        let mut chapters = vec![RawChapter {
+            title: None,
+            paragraphs: vec!["\u{FFFB}kindle:filepos:100\u{1F}跳转".into(), "正文".into()],
+        }];
+        resolve_links(&mut chapters, &PosResolver::Filepos, &boundaries);
+        assert_eq!(chapters[0].paragraphs[0], "\u{FFFB}1\u{1F}跳转");
+
+        // An unresolvable target degrades to its text.
+        let mut chapters = vec![RawChapter {
+            title: None,
+            paragraphs: vec!["\u{FFFB}kindle:pos:fid:8:off:1\u{1F}未知".into()],
+        }];
+        resolve_links(&mut chapters, &PosResolver::Filepos, &boundaries);
+        assert_eq!(chapters[0].paragraphs[0], "未知");
+    }
+
+    #[test]
+    fn embed_references_read_shared_pool_records() {
+        let dir = fixture::temp_dir("mobi-asset");
+        let path = dir.join("book.mobi");
+        let mut header = mobi_header(&[]);
+        header[OFFSET_FIRST_IMAGE..OFFSET_FIRST_IMAGE + 4].copy_from_slice(&1u32.to_be_bytes());
+        std::fs::write(&path, build_pdb(&[&header, b"not an image", b"\xff\xd8\xff\xe0-jpeg"]))
+            .expect("write");
+
+        assert_eq!(
+            read_asset(&path, "kindle:embed:0002?mime=image/jpeg").expect("asset"),
+            b"\xff\xd8\xff\xe0-jpeg".to_vec()
+        );
+        assert!(read_asset(&path, "kindle:embed:0009").is_err());
+        assert!(read_asset(&path, "garbage").is_err());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_cover_counts_from_the_shared_pool() {
+        let dir = fixture::temp_dir("mobi-cover");
+        let path = dir.join("book.mobi");
+        let mut header = mobi_header(&[
+            (EXTH_TITLE, "书"),
+            // Cover at offset 1 from the pool; the section's own pointer is a
+            // red herring that must not win.
+            (EXTH_COVER, "\u{1}"),
+        ]);
+        header[OFFSET_FIRST_IMAGE..OFFSET_FIRST_IMAGE + 4].copy_from_slice(&1u32.to_be_bytes());
+        std::fs::write(&path, build_pdb(&[&header, b"\xff\xd8\xff\xe0-cover", b"filler"]))
+            .expect("write");
+
+        let metadata = read_metadata(&path).expect("metadata");
+        let cover = metadata.cover.expect("封面必须被提取");
+        assert_eq!(cover.bytes, b"\xff\xd8\xff\xe0-cover".to_vec());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    #[ignore = "real-book probe: cargo test -p colorreader --lib mobi -- --ignored --nocapture"]
+    fn probe_real_book_wallpapers() {
+        let dir = "/Users/xiaolong/Downloads";
+        for name in ["金色梦乡 (伊坂幸太郎) (z-library.sk, 1lib.sk, z-lib.sk).mobi"] {
+            let path = std::path::Path::new(dir).join(name);
+            let chapters = read_chapters(&path).expect("chapters");
+            for (idx, chapter) in chapters.iter().enumerate().take(24) {
+                let wallpaper = chapter
+                    .paragraphs
+                    .iter()
+                    .find(|p| p.starts_with(WALLPAPER_PARAGRAPH_PREFIX))
+                    .map(|p| p[WALLPAPER_PARAGRAPH_PREFIX.len()..].to_string());
+                let head: String = chapter
+                    .paragraphs
+                    .iter()
+                    .filter(|p| !p.starts_with(WALLPAPER_PARAGRAPH_PREFIX))
+                    .map(|p| p.chars().take(12).collect::<String>())
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" | ");
+                println!(
+                    "{idx:>3} title={:?} wallpaper={:?} head={head:?}",
+                    chapter.title, wallpaper
+                );
+            }
+        }
     }
 }

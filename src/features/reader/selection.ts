@@ -91,6 +91,8 @@ export interface Segment {
   /** The annotation covering this run, if any. Search matches highlight
    *  without owning an annotation, so they stay undefined here. */
   annotationId?: string;
+  /** True for the run the read-aloud voice is on right now. */
+  tts?: boolean;
 }
 
 /** A `[start, end)` run inside one paragraph's own text. */
@@ -100,18 +102,28 @@ export type LocalRange = readonly [number, number];
 export interface MarkRange {
   range: LocalRange;
   id?: string;
+  /** A transient read-aloud run rather than a saved mark. */
+  tts?: boolean;
 }
 
 /**
  * Splits `text` into runs, marking the parts covered by `ranges`. Highlights
  * never overlap in practice, but a midpoint test keeps the sweep correct even
  * when two of them touch.
+ *
+ * A read-aloud run wins the midpoint test over an annotation: the voice's
+ * position is transient and must stay visible when it reads across a mark.
  */
 export function segmentText(text: string, ranges: readonly MarkRange[]): Segment[] {
   if (text.length === 0) return [];
   const clamp = (value: number) => Math.min(Math.max(value, 0), text.length);
   const clamped = ranges
-    .map(({ range: [start, end], id }) => ({ start: clamp(start), end: clamp(end), id }))
+    .map(({ range: [start, end], id, tts }) => ({
+      start: clamp(start),
+      end: clamp(end),
+      id,
+      tts: tts === true,
+    }))
     .filter(({ start, end }) => start < end);
   if (clamped.length === 0) return [{ text, highlighted: false }];
 
@@ -128,11 +140,18 @@ export function segmentText(text: string, ranges: readonly MarkRange[]): Segment
     const to = points[i + 1]!;
     if (to <= from) continue;
     const mid = (from + to) >> 1;
-    const owner = clamped.find(({ start, end }) => mid >= start && mid < end);
+    const marked = clamped.find(({ start, end, tts }) => !tts && mid >= start && mid < end);
+    // An annotation run keeps its ink and its click target even while the voice
+    // reads across it, so the id is resolved independently of the wash.
+    const annotationId = clamped.find(
+      ({ start, end, id, tts }) => !tts && id !== undefined && mid >= start && mid < end,
+    )?.id;
+    const spoken = clamped.some(({ start, end, tts }) => tts && mid >= start && mid < end);
     segments.push({
       text: text.slice(from, to),
-      highlighted: owner !== undefined,
-      ...(owner?.id !== undefined ? { annotationId: owner.id } : {}),
+      highlighted: marked !== undefined,
+      ...(annotationId !== undefined ? { annotationId } : {}),
+      ...(spoken ? { tts: true } : {}),
     });
   }
   return segments;
@@ -156,13 +175,15 @@ export function matchRanges(text: string, query: string): LocalRange[] {
 
 /**
  * Segments for one paragraph: this chapter's annotations plus, while a search
- * is open, every occurrence of `query`.
+ * is open, every occurrence of `query`, plus — when the voice is reading this
+ * paragraph — the run it is on.
  */
 export function highlightSegments(
   paragraphs: string[],
   idx: number,
   annotations: Annotation[],
   query: string,
+  speech?: { start: number; end: number },
 ): Segment[] {
   const text = paragraphs[idx] ?? "";
   if (text.length === 0) return [];
@@ -174,6 +195,7 @@ export function highlightSegments(
   if (query.trim().length > 0) {
     ranges.push(...matchRanges(text, query).map((range) => ({ range })));
   }
+  if (speech) ranges.push({ range: [speech.start, speech.end], tts: true });
   return segmentText(text, ranges);
 }
 

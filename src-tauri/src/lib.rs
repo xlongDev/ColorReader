@@ -8,6 +8,7 @@ mod error;
 mod library;
 mod resource;
 mod state;
+mod tts;
 
 use std::fs;
 use std::time::Instant;
@@ -79,6 +80,8 @@ pub fn run() -> tauri::Result<()> {
             commands::sync::sync_set_config,
             commands::sync::sync_test,
             commands::sync::sync_now,
+            commands::tts::tts_edge_voices,
+            commands::tts::tts_edge_speak,
         ])
         .setup({
             let registry = registry.clone();

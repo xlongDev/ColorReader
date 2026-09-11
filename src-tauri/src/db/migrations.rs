@@ -335,6 +335,29 @@ CREATE INDEX books_sort_title ON books (sort_title COLLATE NOCASE);
 CREATE INDEX books_favorite ON books (added_at DESC) WHERE favorite = 1;
 "#,
     },
+    Migration {
+        version: 11,
+        name: "annotations_cfi_and_book_location",
+        // Two anchors our (chapter, offset) model cannot express.
+        //
+        // `annotations.cfi` is an EPUB CFI for books rendered by foliate
+        // (MOBI/AZW3). Their sections are the container's own, and they do not
+        // line up with the chapter indices the importer extracts, so a Kindle
+        // highlight can only be re-located inside the reading engine that owns
+        // the document. `chapter_idx` still holds the foliate section index and
+        // `start_char`/`end_char` the in-section offsets, which keeps list
+        // ordering and the delete path working; only re-anchoring needs the CFI.
+        //
+        // `books.location` is the opaque last-position string of the same
+        // engines (a CFI today). It replaces the reader's localStorage parking
+        // spot so a reading position survives a cache clear and rides along
+        // with the library row. Both columns are nullable: every other format
+        // keeps using (chapter, fraction) and never sets either.
+        sql: r#"
+ALTER TABLE annotations ADD COLUMN cfi TEXT;
+ALTER TABLE books ADD COLUMN location TEXT;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.
@@ -450,7 +473,7 @@ mod tests {
         )
         .expect("link");
 
-        assert_eq!(migrate(&mut conn).expect("migrate"), 10);
+        assert_eq!(migrate(&mut conn).expect("migrate"), 11);
 
         let title: String = conn
             .query_row("SELECT title FROM books WHERE id = 'b'", [], |row| row.get(0))

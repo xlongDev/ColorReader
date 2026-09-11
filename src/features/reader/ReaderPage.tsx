@@ -10,6 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
+import type {
+  FoliateHandle,
+  FoliateLocation,
+  FoliateSelection,
+  FoliateTocEntry,
+} from "./FoliateBookView";
 import {
   ArrowsOut,
   ArrowsIn,
@@ -30,7 +36,6 @@ import {
   Pause,
   Plus,
   SpeakerHigh,
-  Stop,
   Trash,
   X,
 } from "@phosphor-icons/react";
@@ -51,11 +56,23 @@ import { SettingsPanel } from "@/features/reader/SettingsPanel";
 import { TocPanel } from "@/features/reader/TocPanel";
 import {
   highlightSegments,
+  joinedText,
   paragraphAt,
+  paragraphStart,
   resolveSelection,
   type TextRange,
 } from "@/features/reader/selection";
-import { useTts } from "@/features/reader/tts";
+import { useSpeechVoices, useTts } from "@/features/reader/tts";
+import { TtsPlayer, type SleepChoice, type SleepTimer } from "@/features/reader/TtsPlayer";
+import { defaultVoice } from "@/features/reader/voice";
+import {
+  cursorAt,
+  speechUnits,
+  wordSpanAt,
+  type SpeechSource,
+  type SpeechUnit,
+} from "@/features/reader/speech";
+import { FoliateSearchPanel } from "./FoliateSearchPanel";
 import {
   resolveFont,
   resolveSurface,
@@ -108,6 +125,8 @@ const PdfPageView = lazy(() =>
 const PdfScrollView = lazy(() =>
   import("@/features/reader/PdfScrollView").then((module) => ({ default: module.PdfScrollView })),
 );
+/** foliate-js (MOBI/AZW3 rendering engine) is only fetched for Kindle books. */
+const FoliateBookView = lazy(() => import("@/features/reader/FoliateBookView"));
 
 /** How long to wait after scrolling stops before persisting the position. */
 const SAVE_DELAY_MS = 600;
@@ -126,6 +145,10 @@ const IMAGE_PARAGRAPH_PREFIX = "￼";
     time by the document parser. */
 const LINK_PARAGRAPH_PREFIX = "￻";
 const LINK_FIELD_SEPARATOR = "\u{1F}";
+
+/** A paragraph starting with this marker is the chapter's wallpaper (a Kindle
+    CSS page background): painted behind the text, never flowed inline. */
+const WALLPAPER_PARAGRAPH_PREFIX = "\u{FFFA}";
 
 /** Lightbox zoom bounds and wheel/button step. */
 const MIN_ZOOM = 1;
@@ -151,16 +174,45 @@ function parseLinkParagraph(paragraph: string): { idx: number; text: string } | 
   return Number.isFinite(idx) && text ? { idx, text } : null;
 }
 
-/** Paragraph list for the voice: image placeholders speak as nothing, link
-    entries speak as their visible text. */
-function speakable(paragraphs: string[]): string[] {
-  return paragraphs.map((paragraph) => {
-    if (paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX)) return "";
+/** Read-aloud sources for a chapter: image placeholders say nothing at all,
+    link entries speak their visible text. */
+function speechSources(paragraphs: string[]): SpeechSource[] {
+  const out: SpeechSource[] = [];
+  paragraphs.forEach((paragraph, index) => {
+    if (paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX)) return;
     if (paragraph.startsWith(LINK_PARAGRAPH_PREFIX)) {
-      return paragraph.split(LINK_FIELD_SEPARATOR)[1] ?? "";
+      const text = paragraph.split(LINK_FIELD_SEPARATOR)[1] ?? "";
+      if (text.trim() !== "") out.push({ index, text });
+      return;
     }
-    return paragraph;
+    if (paragraph.trim() !== "") out.push({ index, text: paragraph });
   });
+  return out;
+}
+
+/** True for a paragraph that renders as running text — the only kind the
+    read-aloud wash can be drawn on. */
+function isProseParagraph(paragraph: string | undefined): paragraph is string {
+  return (
+    paragraph !== undefined &&
+    paragraph.trim() !== "" &&
+    !paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX) &&
+    !paragraph.startsWith(LINK_PARAGRAPH_PREFIX)
+  );
+}
+
+/**
+ * Index of the first utterance at or after `offset` in the chapter's joined
+ * text — the sentence "read from here" lands on. Falls back to the top when
+ * the offset is past the last unit, so the voice always starts somewhere.
+ */
+function unitAtOffset(queue: readonly SpeechUnit[], paragraphs: string[], offset: number): number {
+  const paragraph = paragraphAt(paragraphs, offset);
+  const local = offset - paragraphStart(paragraphs, paragraph);
+  const at = queue.findIndex(
+    (unit) => unit.source > paragraph || (unit.source === paragraph && unit.end > local),
+  );
+  return at < 0 ? 0 : at;
 }
 
 /** Which side panel is open. Only one at a time, so they never stack. */
@@ -235,10 +287,12 @@ function alignTail(
 
 /**
  * Performs one in-chapter page flip, honouring the page-transition setting:
- * "slide" keeps the native smooth scroll (a horizontal slide already), "fade"
- * and "paper" jump to the target page instantly and animate the new page in
- * via WAAPI — imperative, so a flip never re-renders or remounts the chapter —
- * and "none" jumps with no animation. Reduced motion always jumps instantly.
+ * "slide" and "pan" keep the native smooth scroll (the same clipped horizontal
+ * slide the MOBI path uses via foliate's native pan, and the EPUB prose path
+ * via `scrollTo`); "fade", "paper" and the two peels jump to the target page
+ * instantly and animate the new page in via WAAPI — imperative, so a flip never
+ * re-renders or remounts the chapter — and "none" jumps with no animation.
+ * Reduced motion always jumps instantly.
  */
 function flipPage(
   el: HTMLElement,
@@ -248,7 +302,7 @@ function flipPage(
   /** `null` while motion preference is undetermined; treated as no reduction. */
   reduced: boolean | null,
 ) {
-  if (reduced || mode === "slide") {
+  if (reduced || mode === "slide" || mode === "pan") {
     el.scrollTo({ left, behavior: "smooth" });
     return;
   }
@@ -257,28 +311,48 @@ function flipPage(
     return;
   }
   el.scrollTo({ left, behavior: "auto" });
-  el.animate(
+  // The prose path animates the incoming page, so the peel is mirrored: the
+  // page settles out of the crease fold instead of folding away. `grabTop`
+  // mirrors the crease axis for the top-right variant.
+  const grabTop = mode === "peel-tr";
+  const axis = grabTop ? "0.667" : "-0.667";
+  const frames: Keyframe[] =
     mode === "fade"
       ? [{ opacity: 0 }, { opacity: 1 }]
-      : [
-          {
-            opacity: 0,
-            transform: `perspective(1200px) rotateY(${dir === 1 ? -10 : 10}deg)`,
-            transformOrigin: dir === 1 ? "left center" : "right center",
-          },
-          { opacity: 1, transform: "perspective(1200px) rotateY(0deg)" },
-        ],
-    { duration: mode === "paper" ? 400 : 300, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
-  );
+      : mode === "peel-br" || mode === "peel-tr"
+        ? [
+            {
+              opacity: 0,
+              transform: `perspective(1400px) translate3d(6%, ${grabTop ? "-6" : "6"}%, 0) rotate3d(1, ${axis}, 0, ${grabTop ? "12" : "-12"}deg)`,
+            },
+            {
+              opacity: 1,
+              transform: `perspective(1400px) translate3d(0, 0, 0) rotate3d(1, ${axis}, 0, 0deg)`,
+            },
+          ]
+        : [
+            {
+              opacity: 0,
+              transform: `perspective(1200px) rotateY(${dir === 1 ? -10 : 10}deg)`,
+              transformOrigin: dir === 1 ? "left center" : "right center",
+            },
+            { opacity: 1, transform: "perspective(1200px) rotateY(0deg)" },
+          ];
+  const duration = mode === "paper" ? 400 : mode === "peel-br" || mode === "peel-tr" ? 420 : 300;
+  el.animate(frames, { duration, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
 }
 
 interface ReaderViewProps {
   bookId: string;
   title: string;
+  /** Cover on the `colorreader` resource protocol, for the TTS player card. */
+  coverUrl: string | null;
   /** How the book is stored; PDF renders its fixed pages instead of prose. */
   format: BookFormat;
   chapters: ChapterMeta[];
   initialProgress: number;
+  /** Stored reading anchor for foliate books (a CFI); `null` for the rest. */
+  initialCfi: string | null;
   /** Chapter given in the URL, or `null` to resume the saved position. */
   initialChapter: number | null;
   /** Search term carried over from a result, highlighted in the chapter. */
@@ -296,9 +370,11 @@ interface ReaderViewProps {
 function ReaderView({
   bookId,
   title,
+  coverUrl,
   format,
   chapters,
   initialProgress,
+  initialCfi,
   initialChapter,
   initialQuery,
   initialOffset,
@@ -331,7 +407,8 @@ function ReaderView({
     pdfInvertImages,
   } = settings;
   const speechRate = settings.speechRate;
-  const setSpeechRate = settings.setSpeechRate;
+  const speechVoiceURI = settings.speechVoiceURI;
+  const speechGranularity = settings.speechGranularity;
   const reduce = useReducedMotion();
   const annotationsQuery = useAnnotations(bookId);
   const createAnnotation = useCreateAnnotation(bookId);
@@ -343,13 +420,39 @@ function ReaderView({
   // on them individually never re-fire when speech state changes.
   const {
     status: speechStatus,
-    paragraph: speechParagraph,
+    unit: speechUnit,
+    boundary: speechBoundary,
+    error: speechError,
     play,
     stop,
     pause,
     resume,
     setRate,
-  } = useTts();
+    setVoice,
+  } = useTts({ trackBoundary: speechGranularity === "word" });
+
+  // The voice actually used, resolved rather than stored: with nothing saved the
+  // answer is the reader's default — Yunjian, which only the Edge service has —
+  // and when that service is unreachable it degrades to a voice the platform
+  // owns instead of going silent.
+  const { voices: speechVoices } = useSpeechVoices();
+  const effectiveVoice = useMemo(
+    () => speechVoiceURI ?? defaultVoice(speechVoices, null)?.uri ?? null,
+    [speechVoiceURI, speechVoices],
+  );
+
+  // Player surfaces. The sleep timer is the parent's business — it owns the
+  // voice, so it is what has to stop it; the card only draws the countdown.
+  const [playerOpen, setPlayerOpen] = useState(false);
+  const [sleep, setSleep] = useState<SleepTimer>(null);
+  // Mirrored into a ref: `onChapterEnd` is a dependency of the position effect
+  // below, and a fresh identity there would re-apply the pending scroll — which
+  // would yank the page back to the top of the chapter the moment a timer is
+  // armed.
+  const sleepRef = useRef<SleepTimer>(null);
+  useEffect(() => {
+    sleepRef.current = sleep;
+  }, [sleep]);
 
   const annotations = annotationsQuery.data;
   const bookmarks = bookmarksQuery.data;
@@ -367,6 +470,19 @@ function ReaderView({
   // A PDF has no prose of its own: chapters are pages, and the fixed pages are
   // rendered by pdf.js. The extracted text still powers search, TTS and AI.
   const isPdf = format === "pdf";
+  // Kindle containers render through foliate-js: for KF8 the book's own
+  // XHTML + CSS is the only faithful rendering — wallpapers, part-title
+  // plates and inline art survive, which a text extraction cannot do.
+  const isMobi = format === "mobi";
+  // A foliate position is a CFI, an opaque string our (chapter, fraction)
+  // progress model cannot express. It rides in `books.location`; the
+  // localStorage key it used to park in is read once as a fallback and
+  // cleared the moment the database has the value.
+  const mobiCfiKey = `colorreader:foliate:${bookId}`;
+  const startCfi = useMemo(
+    () => (isMobi ? (initialCfi ?? localStorage.getItem(mobiCfiKey)) : null),
+    [initialCfi, isMobi, mobiCfiKey],
+  );
   const outlineQuery = usePdfOutline(bookId, isPdf);
   const outline = outlineQuery.data ?? [];
   const [panel, setPanel] = useState<Panel>("none");
@@ -380,6 +496,9 @@ function ReaderView({
      *  the chapter on screen. PDF selections set it — a two-page spread can
      *  surface a pill whose range lives on the other page. */
     chapterIdx?: number;
+    /** The foliate CFI of this range. Kindle sections do not line up with
+     *  our chapter indices, so a mobi highlight is anchored by this instead. */
+    cfi?: string;
   } | null>(null);
   // Quoted text for the AI drawer; `null` means "use the whole chapter".
   const [aiContext, setAiContext] = useState<string | null>(null);
@@ -407,6 +526,37 @@ function ReaderView({
   const [fraction, setFraction] = useState(start.fraction);
   /** Direction of the last chapter switch, drives the page transition. */
   const [nav, setNav] = useState<1 | -1>(1);
+  // The book's own table of contents, handed over by foliate once the file is
+  // open. Kindle sections do not line up with the chapters our importer
+  // extracts, so the TOC panel switches to this list while reading a mobi.
+  const [foliateToc, setFoliateToc] = useState<FoliateTocEntry[]>([]);
+  const [mobiSectionLabel, setMobiSectionLabel] = useState("");
+  /** Section page counter from foliate; feeds the same indicator as
+   *  `pageInfo` (separate state because this one is declared earlier). */
+  const [mobiPage, setMobiPage] = useState<{ page: number; pages: number } | null>(null);
+  // Declared after the state it reports into (React Compiler forbids a
+  // callback capturing a setter that is still initializing).
+  const rememberMobiLocation = useCallback(
+    (location: FoliateLocation) => {
+      // foliate reports true whole-book progress; our chapter-index estimate
+      // (51 chapters of uneven length) drifts badly on Kindle files.
+      setDisplayProgress(location.fraction);
+      setMobiSectionLabel(location.label);
+      // The section page counter feeds the same "N / M 页" indicator the
+      // prose pager drives; null in the scroll layout clears it.
+      setMobiPage(location.page && { page: location.page.current, pages: location.page.total });
+      if (location.cfi === "") return;
+      const cfi = location.cfi;
+      if (mobiSaveRef.current !== null) window.clearTimeout(mobiSaveRef.current);
+      mobiSaveRef.current = window.setTimeout(() => {
+        // The CFI goes to the database, where it survives a cache clear and
+        // travels with the library row; the old parking spot is retired.
+        setProgress({ progress: location.fraction, location: cfi });
+        localStorage.removeItem(mobiCfiKey);
+      }, SAVE_DELAY_MS);
+    },
+    [mobiCfiKey, setProgress],
+  );
 
   /** Continuous scroll vs paged single/double spread. */
   const paged = layoutMode !== "scroll";
@@ -425,12 +575,18 @@ function ReaderView({
   const pinnedRef = useRef<number | null>(null);
   const pinReleaseRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The foliate view for Kindle formats, driven imperatively (see flip /
+  // stepChapter): paging and sections never touch our chapter index.
+  const mobiRef = useRef<FoliateHandle | null>(null);
   // Fraction to apply once the current chapter body has rendered. Starts at the
   // saved position, then is reset to the top of the chapter on navigation.
   const pendingScroll = useRef<number>(start.fraction);
   // Offset of a search hit to reveal instead of the scroll fraction.
   const pendingFocus = useRef<number | null>(initialOffset);
   const debounceRef = useRef<number | null>(null);
+  // Pending debounce of the Kindle position save (a CFI, so it only ever
+  // carries the latest one — a page-turn storm must not queue a write each).
+  const mobiSaveRef = useRef<number | null>(null);
   // Latest position along the active axis, read outside the scroll handler.
   const fractionRef = useRef<number>(start.fraction);
   // Mirror of the layout mode so scroll-dependent callbacks never go stale;
@@ -503,8 +659,63 @@ function ReaderView({
   );
 
   const chapter = useChapter(bookId, chapterIdx);
+  // Wallpaper markers (Kindle CSS page backgrounds) are page decoration, not
+  // content: blank them once here so TTS, search, selection and highlighting
+  // never see an asset path, while every paragraph index stays stable for
+  // annotation anchoring. The path itself rides along for the page painter.
+  const chapterData = useMemo(() => {
+    const data = chapter.data;
+    if (!data) return data;
+    const marker = data.paragraphs.find((paragraph) =>
+      paragraph.startsWith(WALLPAPER_PARAGRAPH_PREFIX),
+    );
+    return {
+      ...data,
+      wallpaper: marker ? marker.slice(WALLPAPER_PARAGRAPH_PREFIX.length) : null,
+      paragraphs: data.paragraphs.map((paragraph) =>
+        paragraph.startsWith(WALLPAPER_PARAGRAPH_PREFIX) ? "" : paragraph,
+      ),
+    };
+  }, [chapter.data]);
+  const wallpaperPath = chapterData?.wallpaper ?? null;
   const bookImagesQuery = useBookImages(bookId);
   const bookImages = bookImagesQuery.data ?? [];
+
+  // Read-aloud units for the prose path: the chapter split by the reader's
+  // highlight granularity. The Kindle path builds its own from foliate's
+  // blocks, whose text lives in another document.
+  const speechQueue = useMemo(
+    () =>
+      isMobi ? [] : speechUnits(speechSources(chapterData?.paragraphs ?? []), speechGranularity),
+    [isMobi, chapterData, speechGranularity],
+  );
+  // 「朗读此处」 can start the voice inside a sentence: the first utterance is
+  // spoken from the selected character on, so the wash has to begin where the
+  // voice does instead of at the sentence's opening character.
+  const [speechTrim, setSpeechTrim] = useState<{ unit: number; trim: number } | null>(null);
+  // What the wash covers: the unit the voice is on, narrowed to the word the
+  // engine last reported. An engine that never fires `boundary` — a real risk
+  // for Chinese voices — simply keeps the whole sentence. `unit.text` is the
+  // raw slice, so the engine's offset is already paragraph-local.
+  const speechSpan = useMemo(() => {
+    if (speechUnit === null) return null;
+    const unit = speechQueue[speechUnit];
+    if (!unit) return null;
+    const head = speechTrim?.unit === speechUnit ? speechTrim.trim : 0;
+    if (speechGranularity !== "word" || speechBoundary?.unit !== speechUnit) {
+      return { source: unit.source, start: unit.start + head, end: unit.end };
+    }
+    const span = wordSpanAt(unit.text, speechBoundary.charIndex, speechBoundary.charLength);
+    return {
+      source: unit.source,
+      start: unit.start + head + span.start,
+      end: unit.start + head + span.end,
+    };
+  }, [speechUnit, speechQueue, speechGranularity, speechBoundary, speechTrim]);
+  // Kindle units exactly as foliate handed them out, so the follow effect can
+  // resolve a unit index back to a block and a range inside the section. State
+  // rather than a ref: the player renders their text as it comes in.
+  const [mobiUnits, setMobiUnits] = useState<SpeechUnit[]>([]);
 
   // Set when the voice rolls off the end of a chapter, consumed by the
   // position effect below once the next chapter has rendered.
@@ -535,7 +746,7 @@ function ReaderView({
       pendingScroll.current = 0;
       if (!isPdf) fractionRef.current = 0;
       const progress = globalProgress(chapters, clamped, 0);
-      setProgress(progress);
+      setProgress({ progress });
       setDisplayProgress(progress);
       setFraction(0);
       setAutoScrolling(false);
@@ -563,11 +774,18 @@ function ReaderView({
   );
 
   const onChapterEnd = useCallback(() => {
+    // A "read to the end of the chapter" timer ends the session here.
+    if (sleepRef.current?.kind === "chapter") {
+      sleepRef.current = null;
+      setSleep(null);
+      stop();
+      return;
+    }
     if (chapterIdx < chapters.length - 1) {
       autoAdvance.current = true;
       goTo(chapterIdx + 1);
     }
-  }, [chapterIdx, chapters.length, goTo]);
+  }, [chapterIdx, chapters.length, goTo, stop]);
 
   // Set when the voice rolls off the end of a chapter, consumed by the
   // position effect below once the next chapter has rendered.
@@ -583,10 +801,16 @@ function ReaderView({
       pendingFocus.current = null;
       const frac = pendingScroll.current;
       pendingScroll.current = 0;
-      const paragraphs = chapter.data?.paragraphs ?? [];
+      const paragraphs = chapterData?.paragraphs ?? [];
       const continueSpeech = autoAdvance.current;
       autoAdvance.current = false;
-      if (continueSpeech) play(speakable(paragraphs), 0, onChapterEnd);
+      if (continueSpeech) {
+        play(
+          speechQueue.map((unit) => unit.text),
+          0,
+          onChapterEnd,
+        );
+      }
       if (focus !== null) {
         const target = paragraphAt(paragraphs, focus);
         el.querySelector(`[data-para-idx="${target}"]`)?.scrollIntoView({ block: "center" });
@@ -594,7 +818,7 @@ function ReaderView({
       }
       applyPosition(el, frac, layoutModeRef.current, marginRef.current);
     },
-    [chapter.data, onChapterEnd, play],
+    [chapterData, onChapterEnd, play, speechQueue],
   );
 
   // Apply the pending position once the chapter body has rendered: a search hit
@@ -602,7 +826,7 @@ function ReaderView({
   // Auto-advance rides along: the voice restarts at paragraph zero of the new
   // chapter inside the same frame the body appears.
   useEffect(() => {
-    if (chapter.data == null) return;
+    if (chapterData == null) return;
     const el = scrollRef.current;
     if (!el) return;
     const frame = requestAnimationFrame(() => {
@@ -610,7 +834,7 @@ function ReaderView({
       applyPending(el);
     });
     return () => cancelAnimationFrame(frame);
-  }, [chapter.data, applyPending]);
+  }, [chapterData, applyPending]);
 
   // Switching layout mode re-anchors the same reading position on the new axis.
   useEffect(() => {
@@ -720,6 +944,18 @@ function ReaderView({
   /** Flips one page in a paged layout; rolls into the neighbouring chapter at the edges. */
   const flip = useCallback(
     (dir: 1 | -1) => {
+      if (isMobi) {
+        // At the first/last page of the current section, roll explicitly into
+        // the neighbouring section (foliate's implicit next()/prev() cross only
+        // when its scroll probe reports the page edge, which is fragile);
+        // otherwise turn the page normally. This makes "last page + next ->
+        // next chapter" deterministic for keyboard paging.
+        const handle = mobiRef.current;
+        if (!handle) return;
+        if (handle.atEdge(dir)) handle.section(dir);
+        else handle.flip(dir);
+        return;
+      }
       const el = scrollRef.current;
       if (!el) return;
       if (isPdf) {
@@ -751,7 +987,25 @@ function ReaderView({
       const target = (Math.round(pos / pitch) + dir * page) * pitch;
       flipPage(el, Math.max(0, Math.min(target, max)), pageTransition, dir, reduce);
     },
-    [chapterIdx, goTo, isPdf, pageTransition, reduce],
+    [chapterIdx, goTo, isPdf, isMobi, pageTransition, reduce],
+  );
+  // The auto page turn reads `flip` from a timer; a ref keeps that timer from
+  // restarting (and losing its place) every time `flip` is rebuilt.
+  const flipRef = useRef(flip);
+  useEffect(() => {
+    flipRef.current = flip;
+  }, [flip]);
+
+  /** Chapter step; foliate's sections replace our chapter index for Kindle. */
+  const stepChapter = useCallback(
+    (dir: 1 | -1) => {
+      if (isMobi) {
+        mobiRef.current?.section(dir);
+        return;
+      }
+      goTo(chapterIdx + dir);
+    },
+    [chapterIdx, goTo, isMobi],
   );
 
   // Trackpad pinch (macOS wheel events with ctrlKey set) zooms the PDF pages;
@@ -910,40 +1164,55 @@ function ReaderView({
         void toggleFullscreen();
         return;
       }
+      // Don't hijack typing in any text field (search panel, etc.): a focused
+      // input must keep its native caret/selection behaviour, and keys reaching
+      // `window` from inside the book's iframe carry a `null` target so they are
+      // never mistaken for an editable field here.
+      const editing =
+        event.target instanceof HTMLElement &&
+        (event.target.isContentEditable ||
+          event.target.tagName === "INPUT" ||
+          event.target.tagName === "TEXTAREA" ||
+          event.target.tagName === "SELECT");
+      if (editing) return;
       if (paged && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
         flip(event.key === "ArrowRight" ? 1 : -1);
+        event.preventDefault();
         return;
       }
-      if (event.key === "ArrowRight") goTo(chapterIdx + 1);
-      if (event.key === "ArrowLeft") goTo(chapterIdx - 1);
+      if (event.key === "ArrowRight") {
+        stepChapter(1);
+        event.preventDefault();
+      }
+      if (event.key === "ArrowLeft") {
+        stepChapter(-1);
+        event.preventDefault();
+      }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
-    chapterIdx,
     bookImages.length,
     flip,
     fullscreen,
-    goTo,
     lightboxIdx,
     panel,
     paged,
+    stepChapter,
     toggleFullscreen,
   ]);
 
-  // Auto-scroll: advances the viewport down the scroll layout until it runs
-  // out. Paged layouts move in whole flipped pages, so auto-scroll only runs
-  // in the scroll layout and a running session stops when the layout changes.
-  // Sub-pixel per-frame steps are folded across frames (see `foldScrollDelta`),
-  // otherwise slow speeds on high-refresh displays round away to no movement.
+  // Auto-scroll, scroll layout: advances the viewport down the flow until it
+  // runs out. Sub-pixel per-frame steps are folded across frames (see
+  // `foldScrollDelta`), otherwise slow speeds on high-refresh displays round
+  // away to no movement. Paged layouts are handled by the auto page turn below.
   useEffect(() => {
-    if (!autoScrolling) return;
+    if (!autoScrolling || layoutMode !== "scroll") return;
     let raf = 0;
     let last = performance.now();
     let carry = 0;
     const step = (now: number) => {
-      const el = scrollRef.current;
-      if (!el || layoutModeRef.current !== "scroll") {
+      if (layoutModeRef.current !== "scroll") {
         setAutoScrolling(false);
         return;
       }
@@ -951,6 +1220,27 @@ function ReaderView({
       last = now;
       const fold = foldScrollDelta(autoScrollSpeed, dt, carry);
       carry = fold.carry;
+      if (isMobi) {
+        // foliate owns the scrollport; the sub-pixel remainder rides its
+        // composited transform so slow speeds still creep forward.
+        const handle = mobiRef.current;
+        if (!handle) {
+          setAutoScrolling(false);
+          return;
+        }
+        if (fold.delta !== 0) handle.scrollByPx(fold.delta, fold.carry);
+        if (handle.bookEnd()) {
+          setAutoScrolling(false);
+          return;
+        }
+        raf = requestAnimationFrame(step);
+        return;
+      }
+      const el = scrollRef.current;
+      if (!el) {
+        setAutoScrolling(false);
+        return;
+      }
       if (fold.delta !== 0) el.scrollTop += fold.delta;
       const max = el.scrollHeight - el.clientHeight;
       if (el.scrollTop >= max - 1) {
@@ -961,21 +1251,213 @@ function ReaderView({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [autoScrolling, autoScrollSpeed]);
+  }, [autoScrolling, autoScrollSpeed, isMobi, layoutMode]);
 
-  // The hook reads the rate from a ref, so a change lands on the next paragraph.
+  // Auto-scroll, paged layouts: there is no continuous scrollport to nudge, so
+  // the same control turns a page at a time — one screenful per interval at the
+  // chosen reading speed. Without this the button sat permanently disabled
+  // (the default layout is paged) and the feature read as broken.
+  useEffect(() => {
+    if (!autoScrolling || layoutMode === "scroll") return;
+    const span = scrollRef.current?.[isMobi ? "clientHeight" : "clientWidth"] ?? 0;
+    const interval = Math.min(
+      20_000,
+      Math.max(900, ((span || 800) / Math.max(autoScrollSpeed, 1)) * 1000),
+    );
+    const id = window.setInterval(() => {
+      // Kindle: stop at the last page of the last section instead of turning
+      // in place forever.
+      if (isMobi && mobiRef.current?.bookEnd()) {
+        setAutoScrolling(false);
+        return;
+      }
+      flipRef.current(1);
+    }, interval);
+    return () => window.clearInterval(id);
+  }, [autoScrolling, autoScrollSpeed, isMobi, layoutMode]);
+
+  // The hook reads the rate and the voice out of refs, so both land on the next
+  // unit — the engine has already committed the one being spoken.
   useEffect(() => {
     setRate(speechRate);
   }, [speechRate, setRate]);
 
+  useEffect(() => {
+    setVoice(effectiveVoice);
+  }, [effectiveVoice, setVoice]);
+
+  // An armed sleep timer is a plain timeout: the card renders the countdown
+  // from the same deadline, so there is nothing to tick here.
+  useEffect(() => {
+    if (sleep?.kind !== "minutes") return;
+    const id = window.setTimeout(
+      () => {
+        stop();
+        setSleep(null);
+      },
+      Math.max(sleep.endsAt - Date.now(), 0),
+    );
+    return () => window.clearTimeout(id);
+  }, [sleep, stop]);
+
+  const chooseSleep = (choice: SleepChoice) => {
+    if (choice === "off") {
+      setSleep(null);
+      return;
+    }
+    if (choice === "chapter") {
+      setSleep({ kind: "chapter" });
+      return;
+    }
+    setSleep({ kind: "minutes", minutes: choice, endsAt: Date.now() + choice * 60_000 });
+  };
+
   // Follow the voice: `nearest` only scrolls when the paragraph is fully out
   // of view, so skimming ahead is never yanked back.
   useEffect(() => {
-    if (speechParagraph === null) return;
-    scrollRef.current
-      ?.querySelector(`[data-para-idx="${speechParagraph}"]`)
-      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  }, [speechParagraph]);
+    if (!isMobi) {
+      if (speechUnit === null) return;
+      const source = speechQueue[speechUnit]?.source;
+      if (source === undefined) return;
+      scrollRef.current
+        ?.querySelector(`[data-para-idx="${source}"]`)
+        ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      return;
+    }
+    // Kindle: the read-aloud units are the section's own text blocks, and the
+    // paginator both scrolls to one and washes it, so the line being read is
+    // always visible. `null` means the voice stopped — drop the wash.
+    if (speechUnit === null) {
+      mobiRef.current?.clearTts();
+      return;
+    }
+    const unit = mobiUnits[speechUnit];
+    if (unit) mobiRef.current?.focusUnit(unit);
+  }, [isMobi, speechUnit, speechQueue, mobiUnits]);
+
+  // Word-level narrowing: several of these land inside one sentence, so they
+  // only re-wash the run — scrolling again for every word would jitter.
+  useEffect(() => {
+    if (!isMobi || speechGranularity !== "word") return;
+    if (speechUnit === null || speechBoundary?.unit !== speechUnit) return;
+    const unit = mobiUnits[speechUnit];
+    if (!unit) return;
+    const span = wordSpanAt(unit.text, speechBoundary.charIndex, speechBoundary.charLength);
+    mobiRef.current?.paintSpan(unit, {
+      start: unit.start + span.start,
+      end: unit.start + span.end,
+    });
+  }, [isMobi, speechGranularity, speechUnit, speechBoundary, mobiUnits]);
+
+  /**
+   * Read-aloud for Kindle books: one section at a time. foliate owns the
+   * scrollport and the block list, so a finished section hands the voice to
+   * the next one — there is no continuous chapter to walk like in prose.
+   *
+   * `fromSelection` starts at the sentence the reader picked instead of at the
+   * first block on screen. `onFinish` is passed in rather than closed over so
+   * the transport can reuse the section roll-over without capturing a stale
+   * section.
+   */
+  const readMobiOnwards = (onFinish: () => void, fromSelection = false) => {
+    const handle = mobiRef.current;
+    if (!handle) return;
+    const reading = fromSelection ? handle.readFromSelection() : handle.readFrom();
+    void reading.then((units) => {
+      // Empty means the book ran out; `stop` leaves the voice where it ended.
+      if (units.length === 0 || handle.bookEnd()) {
+        stop();
+        return;
+      }
+      setMobiUnits(units);
+      play(
+        units.map((unit) => unit.text),
+        0,
+        onFinish,
+      );
+    });
+  };
+
+  /** The Kindle roll-over: finish this section, hand the voice to the next. */
+  const continueMobi = () => {
+    const handle = mobiRef.current;
+    if (!handle || handle.bookEnd()) {
+      stop();
+      return;
+    }
+    handle.section(1);
+    readMobiOnwards(continueMobi);
+  };
+
+  /** The queue the voice is walking: prose units, or the Kindle section's. */
+  const activeUnits = isMobi ? mobiUnits : speechQueue;
+
+  /** Jumps the voice to a unit — a transport step, or the scrubber. */
+  const seekSpeech = (index: number) => {
+    if (activeUnits.length === 0) return;
+    const at = Math.max(0, Math.min(index, activeUnits.length - 1));
+    // A transport jump always lands on an utterance boundary, so any head
+    // trim left over from 「朗读此处」 no longer applies.
+    setSpeechTrim(null);
+    play(
+      activeUnits.map((unit) => unit.text),
+      at,
+      isMobi ? continueMobi : onChapterEnd,
+    );
+  };
+
+  /** One utterance. */
+  const stepSpeech = (dir: 1 | -1) => {
+    if (speechUnit === null) return;
+    seekSpeech(speechUnit + dir);
+  };
+
+  /** One paragraph: the neighbouring run of units from a different block. */
+  const skipSpeech = (dir: 1 | -1) => {
+    if (speechUnit === null || activeUnits.length === 0) return;
+    const source = activeUnits[speechUnit]?.source;
+    if (dir === 1) {
+      const next = activeUnits.findIndex((unit, at) => at > speechUnit && unit.source !== source);
+      if (next >= 0) seekSpeech(next);
+      return;
+    }
+    // Rewind to this block's own first unit, then to the start of the one
+    // before it — the usual "previous track" behaviour.
+    let head = speechUnit;
+    while (head > 0 && activeUnits[head - 1]!.source === source) head -= 1;
+    if (head === 0) return;
+    const previous = activeUnits[head - 1]!.source;
+    let target = head - 1;
+    while (target > 0 && activeUnits[target - 1]!.source === previous) target -= 1;
+    seekSpeech(target);
+  };
+
+  /**
+   * Where the voice starts when the reader taps read-aloud: the paragraph on
+   * screen, not the top of the chapter. A scrolled pane and a page column both
+   * put the visible paragraph inside the scrollport's box, so one hit test
+   * covers either layout. A PDF has no paragraph elements — its chapter *is*
+   * the page on screen, so starting at zero is already the right page.
+   */
+  const unitAtView = (): number => {
+    const el = scrollRef.current;
+    const paragraphs = chapterData?.paragraphs ?? [];
+    const pane = el?.getBoundingClientRect();
+    if (!el || !pane) return 0;
+    for (const node of el.querySelectorAll<HTMLElement>("[data-para-idx]")) {
+      const box = node.getBoundingClientRect();
+      if (
+        box.bottom > pane.top + 4 &&
+        box.top < pane.bottom &&
+        box.right > pane.left &&
+        box.left < pane.right
+      ) {
+        const idx = Number(node.dataset.paraIdx);
+        return unitAtOffset(speechQueue, paragraphs, paragraphStart(paragraphs, idx));
+      }
+    }
+    return 0;
+  };
 
   const toggleSpeech = () => {
     if (speechStatus === "playing") {
@@ -986,14 +1468,55 @@ function ReaderView({
       resume();
       return;
     }
-    const paragraphs = chapter.data?.paragraphs;
-    if (paragraphs) play(speakable(paragraphs), 0, onChapterEnd);
+    if (isMobi) {
+      readMobiOnwards(continueMobi);
+      return;
+    }
+    if (speechQueue.length > 0) {
+      setSpeechTrim(null);
+      play(
+        speechQueue.map((unit) => unit.text),
+        unitAtView(),
+        onChapterEnd,
+      );
+    }
+  };
+
+  /**
+   * 「朗读此处」: the voice picks up at the character the reader selected and
+   * reads on from there, rather than restarting the chapter or restarting the
+   * sentence the selection sits in.
+   */
+  const speakFromSelection = (range: TextRange) => {
+    if (isMobi) {
+      readMobiOnwards(continueMobi, true);
+      return;
+    }
+    const paragraphs = chapterData?.paragraphs ?? [];
+    // A PDF selection is measured against pdf.js's text layer, not the prose
+    // we speak; locate the quoted text in the extracted page instead.
+    const offset = isPdf ? Math.max(joinedText(paragraphs).indexOf(range.text), 0) : range.start;
+    if (speechQueue.length === 0) return;
+    const paragraph = paragraphAt(paragraphs, offset);
+    const { index, trim } = cursorAt(
+      speechQueue,
+      paragraph,
+      offset - paragraphStart(paragraphs, paragraph),
+    );
+    if (index < 0) return;
+    setSpeechTrim(trim > 0 ? { unit: index, trim } : null);
+    play(
+      speechQueue.map((unit) => unit.text),
+      index,
+      onChapterEnd,
+      trim,
+    );
   };
 
   const saveProgress = useCallback(
     (frac: number) => {
       const progress = globalProgress(chapters, chapterIdx, frac);
-      setProgress(progress);
+      setProgress({ progress });
       // Every save marks the end of one reading session: fold it into the
       // sustained speed estimate that powers the remaining-time labels.
       const charsNow = progress * totalChars(chapters);
@@ -1043,7 +1566,11 @@ function ReaderView({
   // Recompute the page indicator when the setting or layout flips without a
   // scroll event; chapter switches and resizes re-report through `onScroll`.
   useEffect(() => {
-    if (!paged || !showPageNumbers) return;
+    // Kindle books are paginated by foliate inside their own scrollport, so
+    // this host has no horizontal overflow to measure — running the formula
+    // anyway reported a bogus "1 / 1", which then shadowed foliate's real
+    // counter in the indicator.
+    if (!paged || !showPageNumbers || isMobi) return;
     const el = scrollRef.current;
     if (!el) return;
     const pageMargin = marginX + (fullscreen ? FULLSCREEN_MARGIN_BONUS : 0);
@@ -1054,12 +1581,13 @@ function ReaderView({
       page: Math.round(el.scrollLeft / pitch) + 1,
       pages: Math.round(max / pitch) + 1,
     });
-  }, [fullscreen, layoutMode, marginX, paged, showPageNumbers]);
+  }, [fullscreen, isMobi, layoutMode, marginX, paged, showPageNumbers]);
 
   // Flush a pending save on unmount.
   useEffect(() => {
     return () => {
       if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
+      if (mobiSaveRef.current !== null) window.clearTimeout(mobiSaveRef.current);
     };
   }, []);
 
@@ -1082,11 +1610,11 @@ function ReaderView({
         return;
       }
       const selection = window.getSelection();
-      if (!selection || !chapter.data) {
+      if (!selection || !chapterData) {
         setPending(null);
         return;
       }
-      const range = resolveSelection(selection, chapter.data.paragraphs);
+      const range = resolveSelection(selection, chapterData.paragraphs);
       if (!range) {
         setPending(null);
         return;
@@ -1096,7 +1624,7 @@ function ReaderView({
     };
     el.addEventListener("mouseup", onMouseUp);
     return () => el.removeEventListener("mouseup", onMouseUp);
-  }, [chapter.data]);
+  }, [chapterData]);
 
   const createHighlight = (range: TextRange) => {
     createAnnotation.mutate(
@@ -1105,6 +1633,7 @@ function ReaderView({
         startChar: range.start,
         endChar: range.end,
         text: range.text,
+        ...(pending?.cfi !== undefined ? { cfi: pending.cfi } : {}),
       },
       {
         onSuccess: () => {
@@ -1147,16 +1676,52 @@ function ReaderView({
     [],
   );
 
+  /**
+   * Kindle selection: foliate hands back a CFI, the only anchor that survives
+   * a section change — the (chapter, offset) pair the prose path stores means
+   * nothing here, because foliate's sections are the container's own.
+   */
+  const onFoliateSelection = useCallback((selection: FoliateSelection | null) => {
+    if (!selection) {
+      setPending(null);
+      return;
+    }
+    setPending({
+      range: { start: selection.startChar, end: selection.endChar, text: selection.text },
+      x: selection.x,
+      y: selection.y,
+      chapterIdx: selection.section,
+      cfi: selection.cfi,
+    });
+  }, []);
+
+  /** Click on a painted Kindle highlight: reopen the pill in remove mode. */
+  const onFoliateAnnotationClick = useCallback(
+    (cfi: string, x: number, y: number) => {
+      const annotation = (annotations ?? []).find((item) => item.cfi === cfi);
+      if (!annotation) return;
+      setPending({
+        range: { start: annotation.startChar, end: annotation.endChar, text: annotation.text },
+        x,
+        y,
+        annotationId: annotation.id,
+        chapterIdx: annotation.chapterIdx,
+        cfi,
+      });
+    },
+    [annotations],
+  );
+
   /** Reveals a character offset of the chapter already on screen. */
   const focusOffset = useCallback(
     (offset: number) => {
-      const paragraphs = chapter.data?.paragraphs;
+      const paragraphs = chapterData?.paragraphs;
       const el = scrollRef.current;
       if (!paragraphs || !el) return;
       const target = paragraphAt(paragraphs, offset);
       el.querySelector(`[data-para-idx="${target}"]`)?.scrollIntoView({ block: "center" });
     },
-    [chapter.data],
+    [chapterData],
   );
 
   const pickHit = useCallback(
@@ -1192,7 +1757,7 @@ function ReaderView({
   );
 
   const total = chapters.length;
-  const chapterTitle = chapter.data?.title ?? "";
+  const chapterTitle = chapterData?.title ?? "";
   // Each appearance keeps its own reading surface: a dark shell starts on the
   // night palette, and both stay user-changeable in the settings panel.
   const appTheme = useResolvedTheme();
@@ -1220,6 +1785,49 @@ function ReaderView({
   // user margins. Scroll slots and the spread padding both read from these.
   const margin = isPdf && pdfFill ? 0 : marginX + fullscreenBonus;
   const blockMargin = isPdf && pdfFill ? 0 : marginY + fullscreenBonus;
+
+  // Typography and palette handed to the foliate renderer: the book keeps its
+  // own CSS, the injected stylesheet wins over it for the reading settings.
+  const foliateStyle = useMemo(
+    () => ({
+      fontSize,
+      fontFamily: resolveFont(settings.fontFamily),
+      lineHeight: LINE_HEIGHTS[lineHeightIdx] ?? 1.7,
+      paraGap: PARA_GAPS[paraGapIdx] ?? 0.9,
+      indent,
+      fg: surface.fg,
+      bg: surface.tint,
+      // Same trigger as the PDF night path: the reading surface decides, not
+      // the shell theme (surfaces are absolute).
+      dark: surface.mode === "dark",
+    }),
+    [
+      fontSize,
+      lineHeightIdx,
+      paraGapIdx,
+      indent,
+      settings.fontFamily,
+      surface.fg,
+      surface.mode,
+      surface.tint,
+    ],
+  );
+  // The TOC panel reads chapters; Kindle books are driven by foliate's own
+  // TOC, so the entries are reshaped into the same shape (with nesting depth).
+  const mobiChapters = useMemo(
+    () =>
+      foliateToc.map((entry, idx) => ({
+        idx,
+        title: entry.label,
+        chars: 0,
+        depth: entry.depth,
+      })),
+    [foliateToc],
+  );
+  const mobiTocIdx = useMemo(() => {
+    const at = foliateToc.findIndex((entry) => entry.label === mobiSectionLabel);
+    return at;
+  }, [foliateToc, mobiSectionLabel]);
 
   /** Column width for the paged layouts; `undefined` keeps flow layout. */
   const columnWidth = useMemo(() => {
@@ -1283,7 +1891,9 @@ function ReaderView({
     fontSize: `${fontSize}px`,
     fontFamily: resolveFont(settings.fontFamily),
     lineHeight: LINE_HEIGHTS[lineHeightIdx],
-    color: surface.fg,
+    // Wallpaper chapters read off the book's own paper art (light in both
+    // themes), so the ink stays dark there instead of following the surface.
+    color: wallpaperPath ? "#3f3629" : surface.fg,
     paddingInline: margin,
     paddingBlock: blockMargin,
     ...(columnWidth !== undefined
@@ -1306,11 +1916,14 @@ function ReaderView({
   };
 
   // Split the chapter into paragraph segments, wrapping the parts covered by an
-  // annotation or a search match in a highlight. Keys are built here (outside
-  // the JSX map) so the render lists never use a raw index key.
+  // annotation, a search match or the reading voice in a highlight. Keys are
+  // built here (outside the JSX map) so the render lists never use a raw index
+  // key. Only the paragraph the voice is on gets the extra cut, so a word-level
+  // wash re-renders one paragraph, not the chapter.
   const renderedParagraphs = useMemo(() => {
-    const paragraphs = chapter.data?.paragraphs ?? [];
+    const paragraphs = chapterData?.paragraphs ?? [];
     const chapterAnnotations = (annotations ?? []).filter((a) => a.chapterIdx === chapterIdx);
+    const wash = speechSpan && isProseParagraph(paragraphs[speechSpan.source]) ? speechSpan : null;
     return paragraphs.map((paragraph, idx) => ({
       idx,
       key: `${chapterIdx}-${idx}`,
@@ -1321,22 +1934,53 @@ function ReaderView({
       // A link marker renders as a tappable entry that jumps to the target
       // chapter (in-book tables of contents).
       link: paragraph.startsWith(LINK_PARAGRAPH_PREFIX) ? parseLinkParagraph(paragraph) : null,
-      segments: highlightSegments(paragraphs, idx, chapterAnnotations, search).map(
-        (segment, position) => ({
-          key: `${chapterIdx}-${idx}-${position}`,
-          text: segment.text,
-          highlighted: segment.highlighted,
-          annotationId: segment.annotationId,
-        }),
-      ),
+      segments: highlightSegments(
+        paragraphs,
+        idx,
+        chapterAnnotations,
+        search,
+        wash?.source === idx ? wash : undefined,
+      ).map((segment, position) => ({
+        key: `${chapterIdx}-${idx}-${position}`,
+        text: segment.text,
+        highlighted: segment.highlighted,
+        annotationId: segment.annotationId,
+        tts: segment.tts,
+      })),
     }));
-  }, [chapter.data, chapterIdx, annotations, search]);
+  }, [chapterData, chapterIdx, annotations, search, speechSpan]);
+
+  // A plate chapter is a part-title page: the chapter's own wallpaper plus at
+  // most a short heading, no running text. Kindle paints these pages with a
+  // full-page CSS background; the multicol prose path would split the title
+  // and the art across columns, so they get a dedicated page-shaped view.
+  const plate = useMemo(() => {
+    if (!wallpaperPath) return null;
+    const text = (chapterData?.paragraphs ?? []).filter((paragraph) => paragraph !== "").join("\n");
+    return text.length <= 30 ? { imagePath: wallpaperPath, title: text } : null;
+  }, [chapterData, wallpaperPath]);
+
+  // The wallpaper behind a text page (the copyright page's paper) loads once
+  // per chapter; plates draw the art themselves, so skip the double fetch.
+  // Kindle books paint their own paper inside the foliate view — the
+  // extracted wallpaper would only layer underneath it.
+  const wallpaperUrl = useAssetUrl(bookId, plate || isMobi ? null : wallpaperPath);
 
   // Reader chrome button: same anatomy as the sidebar's glass buttons, but
   // fill and hairline come from the re-rooted reading-surface tokens — the
   // fill is a wash of the paper colour (--glass-btn), so the circles read as
   // liquid glass over the page without darkening it like an ink fill would.
   const chromeBtn = "bg-(--glass-btn) border-hairline-strong shadow-glass";
+  // Kindle sections replace the imported chapter list while reading, but only
+  // when foliate actually found a TOC — an old MOBI6 has none.
+  const useMobiToc = isMobi && foliateToc.length > 0;
+  const headerIndex = useMobiToc
+    ? mobiTocIdx + 1
+    : isPdf && !paged && pdfScrollPage !== null
+      ? pdfScrollPage
+      : chapterIdx + 1;
+  const headerTotal = useMobiToc ? foliateToc.length : total;
+  const headerChapter = useMobiToc ? mobiSectionLabel : chapterTitle;
 
   // Shared header bar: rendered in flow normally, and dropped from the top
   // edge on hover while in fullscreen — where it also gets a surface-tinted
@@ -1354,9 +1998,8 @@ function ReaderView({
       <div className="min-w-0 flex-1">
         <p className="text-text-1 truncate text-sm font-medium">{title}</p>
         <p className="text-text-3 truncate text-xs">
-          第 {isPdf && !paged && pdfScrollPage !== null ? pdfScrollPage : chapterIdx + 1} / {total}{" "}
-          {isPdf ? "页" : "章"}
-          {!isPdf && chapterTitle && ` · ${chapterTitle}`}
+          第 {headerIndex} / {headerTotal} {isPdf ? "页" : "章"}
+          {!isPdf && headerChapter && ` · ${headerChapter}`}
         </p>
       </div>
       <div className="flex items-center gap-1">
@@ -1494,7 +2137,7 @@ function ReaderView({
             ? "继续朗读"
             : speechStatus === "playing"
               ? "暂停朗读"
-              : "朗读本章"
+              : "从当前位置朗读"
         }
         size="sm"
         className={chromeBtn}
@@ -1502,24 +2145,26 @@ function ReaderView({
       >
         {speechStatus === "playing" ? <Pause size={16} /> : <SpeakerHigh size={16} />}
       </GlassIconButton>
-      {speechStatus !== "idle" && (
-        <GlassIconButton label="停止朗读" size="sm" className={chromeBtn} onClick={stop}>
-          <Stop size={16} />
-        </GlassIconButton>
-      )}
       <GlassIconButton
-        label={`语速 ${speechRate} 倍，点击切换`}
+        label="朗读播放器"
         size="sm"
         className={chromeBtn}
-        onClick={() => setSpeechRate(speechRate)}
+        onClick={() => setPlayerOpen((open) => !open)}
       >
-        <span className="text-[11px] font-semibold">{speechRate}×</span>
+        <span className="text-[11px] font-semibold tabular-nums">{speechRate}×</span>
       </GlassIconButton>
       <GlassIconButton
-        label={paged ? "自动滚动仅支持滚动排版" : autoScrolling ? "暂停自动滚动" : "开始自动滚动"}
+        label={
+          paged
+            ? autoScrolling
+              ? "暂停自动翻页"
+              : "开始自动翻页"
+            : autoScrolling
+              ? "暂停自动滚动"
+              : "开始自动滚动"
+        }
         size="sm"
         className={chromeBtn}
-        disabled={paged}
         onClick={() => setAutoScrolling((on) => !on)}
       >
         {autoScrolling ? <Pause size={16} /> : <ArrowDown size={16} />}
@@ -1527,7 +2172,7 @@ function ReaderView({
       <GlassButton
         variant="subtle"
         size="sm"
-        onClick={() => goTo(chapterIdx - 1)}
+        onClick={() => stepChapter(-1)}
         disabled={chapterIdx === 0}
       >
         <CaretLeft size={14} /> 上一章
@@ -1540,7 +2185,7 @@ function ReaderView({
       <GlassButton
         variant="subtle"
         size="sm"
-        onClick={() => goTo(chapterIdx + 1)}
+        onClick={() => stepChapter(1)}
         disabled={chapterIdx >= total - 1}
       >
         下一章 <CaretRight size={14} />
@@ -1576,15 +2221,31 @@ function ReaderView({
           onScroll={onScroll}
           className={cn(
             "min-h-0 flex-1",
-            paged
-              ? isPdf && pdfZoom !== 1
-                ? "relative overflow-auto"
-                : "relative overflow-x-auto overflow-y-hidden"
-              : isPdf && pdfZoom !== 1
-                ? "overflow-auto"
-                : "overflow-y-auto",
+            // foliate owns its own scrolling and paging; giving the host a
+            // scroll container of its own would double-clip the pages.
+            isMobi
+              ? "relative overflow-hidden"
+              : paged
+                ? isPdf && pdfZoom !== 1
+                  ? "relative overflow-auto"
+                  : "relative overflow-x-auto overflow-y-hidden"
+                : isPdf && pdfZoom !== 1
+                  ? "overflow-auto"
+                  : "overflow-y-auto",
           )}
-          style={{ background: surface.background }}
+          // A chapter wallpaper (Kindle CSS page paper) paints the viewport
+          // itself: the background stays put while pages slide over it, so
+          // every page of the chapter reads as the same sheet of paper.
+          style={{
+            background: surface.background,
+            ...(wallpaperUrl
+              ? {
+                  backgroundImage: `url(${wallpaperUrl})`,
+                  backgroundSize: "cover",
+                  backgroundPosition: "center",
+                }
+              : {}),
+          }}
         >
           {isPdf ? (
             // One page per chapter, drawn by pdf.js: fixed layout, real fonts
@@ -1660,6 +2321,62 @@ function ReaderView({
                 />
               </Suspense>
             )
+          ) : isMobi ? (
+            <Suspense fallback={<p className="text-text-3 p-6 text-sm">正在打开 Kindle 书籍…</p>}>
+              <FoliateBookView
+                ref={mobiRef}
+                bookId={bookId}
+                startCfi={startCfi}
+                layout={layoutMode}
+                transition={pageTransition}
+                marginX={margin}
+                marginY={blockMargin}
+                style={foliateStyle}
+                speechGranularity={speechGranularity}
+                annotations={annotations}
+                onSelect={onFoliateSelection}
+                onAnnotationClick={onFoliateAnnotationClick}
+                onLocationChange={rememberMobiLocation}
+                onTocLoaded={setFoliateToc}
+              />
+            </Suspense>
+          ) : paged && plate ? (
+            // Part-title page: full-bleed wallpaper with the heading in a
+            // centred plate, the way the book's own stylesheet paints it.
+            // Outside the multicol article — a page-sized image inside a
+            // column layout spills columns and reads as blank pages.
+            <div
+              key={chapterIdx}
+              className={cn("mx-auto h-full w-full", transitionClass)}
+              style={{ paddingInline: margin, paddingBlock: blockMargin }}
+            >
+              <div className="border-hairline relative h-full w-full overflow-hidden rounded-2xl">
+                <ChapterImage
+                  bookId={bookId}
+                  path={plate.imagePath}
+                  plate
+                  onOpen={() => {
+                    const imageNo = bookImages.findIndex(
+                      (image) => image.chapterIdx === chapterIdx,
+                    );
+                    if (imageNo >= 0) setLightboxIdx(imageNo);
+                  }}
+                />
+                {plate.title !== "" && (
+                  // The book paints its part titles straight onto the art
+                  // (ink on paper, no box); a light halo keeps the glyphs
+                  // readable where the watercolour runs pale.
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <p
+                      className="text-center text-lg font-medium tracking-[0.3em] whitespace-pre-line"
+                      style={{ color: "#5a4632", textShadow: "0 1px 10px rgba(255,255,255,0.65)" }}
+                    >
+                      {plate.title}
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
           ) : (
             <article
               key={chapterIdx}
@@ -1703,10 +2420,7 @@ function ReaderView({
                     <p
                       key={key}
                       data-para-idx={idx}
-                      className={cn(
-                        "text-justify text-pretty",
-                        speechParagraph === idx && "bg-accent-soft -mx-2 rounded-lg px-2",
-                      )}
+                      className="text-justify text-pretty"
                       style={{
                         marginBottom: `${PARA_GAPS[paraGapIdx]}em`,
                         textIndent: indent ? "2em" : undefined,
@@ -1718,7 +2432,16 @@ function ReaderView({
                       }}
                     >
                       {segments.map((segment) =>
-                        segment.highlighted ? (
+                        segment.tts ? (
+                          // The reading voice's own run. Same ink as a saved
+                          // mark — one wash, both reading paths.
+                          <mark
+                            key={segment.key}
+                            className="bg-accent-soft rounded-[2px] text-inherit"
+                          >
+                            {segment.text}
+                          </mark>
+                        ) : segment.highlighted ? (
                           segment.annotationId ? (
                             // An annotation-backed run opens the same pill a
                             // fresh selection gets, with removal in place of
@@ -1785,12 +2508,12 @@ function ReaderView({
 
         {/* Page indicator (settings-gated) and a hairline progress rail that
             surfaces on activity and fades out after 2s of stillness. */}
-        {paged && showPageNumbers && pageInfo && (
+        {paged && showPageNumbers && (isMobi ? mobiPage : pageInfo) && (
           <p
             className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 text-xs tabular-nums opacity-70"
             style={{ color: surface.fg }}
           >
-            {pageInfo.page} / {pageInfo.pages} 页
+            {(isMobi ? mobiPage : pageInfo)!.page} / {(isMobi ? mobiPage : pageInfo)!.pages} 页
           </p>
         )}
         {/* Quiet progress rail in the text colour: a barely-there track that
@@ -1840,6 +2563,34 @@ function ReaderView({
             </button>
           </>
         )}
+
+        {/* Read-aloud: the pill while a session runs, the card on demand.
+            Anchored inside the reading viewport rather than the window, so it
+            clears the footer in the windowed chrome and still lands near the
+            bottom edge in fullscreen. Neither takes a modal: the page stays
+            readable under it, which is the point of reading along. */}
+        <TtsPlayer
+          open={playerOpen}
+          onOpenChange={setPlayerOpen}
+          title={title}
+          coverUrl={coverUrl}
+          chapter={headerChapter}
+          units={activeUnits}
+          index={speechUnit}
+          status={speechStatus}
+          error={speechError}
+          rate={speechRate}
+          onRate={(value) => settings.update({ speechRate: value })}
+          voiceUri={effectiveVoice}
+          onVoice={(uri) => settings.update({ speechVoiceURI: uri })}
+          sleep={sleep}
+          onSleep={chooseSleep}
+          onToggle={toggleSpeech}
+          onStop={stop}
+          onStep={stepSpeech}
+          onSkip={skipSpeech}
+          onSeek={seekSpeech}
+        />
       </div>
 
       {!fullscreen ? (
@@ -1913,6 +2664,17 @@ function ReaderView({
             </button>
             <button
               type="button"
+              onClick={() => {
+                speakFromSelection(pending.range);
+                window.getSelection()?.removeAllRanges();
+                setPending(null);
+              }}
+              className="text-text-1 hover:text-accent border-hairline px-3 py-1.5 text-xs font-medium transition-colors"
+            >
+              朗读此处
+            </button>
+            <button
+              type="button"
               aria-label="取消"
               onClick={() => {
                 window.getSelection()?.removeAllRanges();
@@ -1946,19 +2708,27 @@ function ReaderView({
                         : "AI 助手"
             }
             onClose={() => {
-              if (panel === "search") setSearch("");
+              if (panel === "search") {
+                setSearch("");
+                // Drop the match highlights foliate painted into the pages.
+                if (isMobi) mobiRef.current?.clearSearch();
+              }
               setPanel("none");
             }}
           >
             {panel === "toc" && (
               <TocPanel
-                chapters={chapters}
+                chapters={useMobiToc ? mobiChapters : chapters}
                 outline={outline}
-                currentIdx={chapterIdx}
+                currentIdx={useMobiToc ? mobiTocIdx : chapterIdx}
                 bookmarks={bookmarks ?? []}
                 busy={createBookmark.isPending || deleteBookmark.isPending}
                 onJump={(idx) => {
                   setPanel("none");
+                  if (useMobiToc) {
+                    mobiRef.current?.goToEntry(idx);
+                    return;
+                  }
                   goTo(idx);
                 }}
                 onJumpBookmark={(bookmark: Bookmark) => {
@@ -1975,17 +2745,34 @@ function ReaderView({
                 annotations={annotations ?? []}
                 busy={deleteAnnotation.isPending}
                 onDelete={(id) => deleteAnnotation.mutate(id)}
+                onJump={
+                  isMobi
+                    ? (annotation) => {
+                        setPanel("none");
+                        if (annotation.cfi) mobiRef.current?.goToCfi(annotation.cfi);
+                      }
+                    : undefined
+                }
               />
             )}
-            {panel === "search" && (
-              <SearchPanel
-                bookId={bookId}
-                onPick={(hit, needle) => {
-                  setSearch(needle);
-                  pickHit(hit);
-                }}
-              />
-            )}
+            {panel === "search" &&
+              (isMobi ? (
+                <FoliateSearchPanel
+                  onSearch={(query) => mobiRef.current?.search(query) ?? Promise.resolve([])}
+                  onPick={(cfi) => {
+                    setPanel("none");
+                    mobiRef.current?.goToCfi(cfi);
+                  }}
+                />
+              ) : (
+                <SearchPanel
+                  bookId={bookId}
+                  onPick={(hit, needle) => {
+                    setSearch(needle);
+                    pickHit(hit);
+                  }}
+                />
+              ))}
             {panel === "graph" && (
               <GraphPanel
                 bookId={bookId}
@@ -2001,7 +2788,7 @@ function ReaderView({
                 selection={aiContext}
                 onClearSelection={() => setAiContext(null)}
                 chapterTitle={chapterTitle || `第 ${chapterIdx + 1} 章`}
-                paragraphs={chapter.data?.paragraphs ?? []}
+                paragraphs={chapterData?.paragraphs ?? []}
                 onJump={jumpToCitation}
               />
             )}
@@ -2441,12 +3228,45 @@ function AskAiPanel({
 
 /** MIME for an asset path extension; the webview only renders these. */
 function assetMime(path: string): string {
+  // Kindle image references declare their type inline: kindle:embed:…?mime=image/jpeg
+  const declared = /[?&]mime=([\w/+.-]+)/.exec(path)?.[1];
+  if (declared?.startsWith("image/")) return declared;
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   if (ext === "png") return "image/png";
   if (ext === "gif") return "image/gif";
   if (ext === "webp") return "image/webp";
   if (ext === "svg") return "image/svg+xml";
   return "image/jpeg";
+}
+
+/**
+ * Blob URL for one in-book asset, fetched lazily from the source file. A null
+ * path (no asset for this chapter) never touches the archive.
+ */
+function useAssetUrl(bookId: string, path: string | null): string | null {
+  // Landed result keyed by its path: a null path never enters the effect, and
+  // the render-time key check drops a stale URL the tick a path changes.
+  const [loaded, setLoaded] = useState<{ path: string; url: string } | null>(null);
+  useEffect(() => {
+    if (!path) return;
+    let alive = true;
+    let url: string | null = null;
+    ipc
+      .bookAsset(bookId, path)
+      .then((buffer) => {
+        if (!alive) return;
+        const bytes =
+          buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : Uint8Array.from(buffer);
+        url = URL.createObjectURL(new Blob([bytes], { type: assetMime(path) }));
+        setLoaded({ path, url });
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [bookId, path]);
+  return loaded && loaded.path === path ? loaded.url : null;
 }
 
 /**
@@ -2458,10 +3278,13 @@ function ChapterImage({
   bookId,
   path,
   onOpen,
+  plate = false,
 }: {
   bookId: string;
   path: string;
   onOpen: (src: string) => void;
+  /** Full-bleed wallpaper form for part-title pages: covers the page box. */
+  plate?: boolean;
 }) {
   const [src, setSrc] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
@@ -2499,12 +3322,19 @@ function ChapterImage({
       type="button"
       aria-label="查看图片"
       onClick={() => onOpen(src)}
-      className="cursor-zoom-in transition-opacity hover:opacity-90"
+      className={cn(
+        "transition-opacity hover:opacity-90",
+        plate ? "block h-full w-full cursor-zoom-in" : "cursor-zoom-in",
+      )}
     >
       <img
         src={src}
         alt=""
-        className="border-hairline mx-auto max-w-full rounded-lg border"
+        className={
+          plate
+            ? "h-full w-full object-cover"
+            : "border-hairline mx-auto max-w-full rounded-lg border"
+        }
         draggable={false}
       />
     </button>
@@ -2566,10 +3396,17 @@ function AnnotationList({
   annotations,
   busy,
   onDelete,
+  onJump,
 }: {
   annotations: Annotation[];
   busy: boolean;
   onDelete: (id: string) => void;
+  /**
+   * Makes a row navigate to its highlight. Kindle books need it: their
+   * highlights are anchored by CFI and the list cannot scroll a chapter that
+   * was never on screen. Prose rows already sit in the chapter on screen.
+   */
+  onJump?: (annotation: Annotation) => void;
 }) {
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -2585,7 +3422,12 @@ function AnnotationList({
               className="border-hairline border-b pb-3 last:border-0 last:pb-0"
             >
               <div className="flex items-start justify-between gap-2">
-                <p className="text-text-3 text-xs">第 {annotation.chapterIdx + 1} 章</p>
+                {/* Kindle sections are the container's own, so the index this
+                    list groups by is a section, not an imported chapter. */}
+                <p className="text-text-3 text-xs">
+                  第 {annotation.chapterIdx + 1}
+                  {onJump ? " 节" : " 章"}
+                </p>
                 <button
                   type="button"
                   aria-label="删除标注"
@@ -2596,7 +3438,17 @@ function AnnotationList({
                   <Trash size={14} />
                 </button>
               </div>
-              <p className="text-text-1 mt-1 text-[13px] leading-relaxed">{annotation.text}</p>
+              {onJump ? (
+                <button
+                  type="button"
+                  onClick={() => onJump(annotation)}
+                  className="hover:bg-surface-1 -mx-1 mt-1 block w-full rounded-md px-1 py-0.5 text-left transition-colors"
+                >
+                  <p className="text-text-1 text-[13px] leading-relaxed">{annotation.text}</p>
+                </button>
+              ) : (
+                <p className="text-text-1 mt-1 text-[13px] leading-relaxed">{annotation.text}</p>
+              )}
             </li>
           ))}
         </ul>
@@ -2684,9 +3536,11 @@ export function ReaderPage() {
     <ReaderView
       bookId={bookId}
       title={bookSummary.title}
+      coverUrl={bookSummary.coverUrl}
       format={bookSummary.format}
       chapters={chapters}
       initialProgress={bookSummary.progress}
+      initialCfi={bookSummary.location}
       initialChapter={initialChapter}
       initialQuery={initialQuery}
       initialOffset={initialOffset}

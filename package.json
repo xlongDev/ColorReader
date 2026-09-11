@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "description": "AI native, local first, high performance ebook reader",
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

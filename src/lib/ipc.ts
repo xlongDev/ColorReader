@@ -12,6 +12,8 @@ import type {
   Bookmark,
   ChapterContent,
   ChapterMeta,
+  EdgeClip,
+  EdgeVoice,
   GraphProgress,
   GraphStatus,
   GraphView,
@@ -115,8 +117,10 @@ export const ipc = {
     return invoke<ChapterContent>("reader_chapter", { bookId, idx });
   },
 
-  readerSetProgress(bookId: string, progress: number): Promise<void> {
-    return invoke<void>("reader_set_progress", { bookId, progress });
+  /** `location` is an opaque CFI for foliate books; omitting it keeps the
+   *  stored anchor (the prose path has none). */
+  readerSetProgress(bookId: string, progress: number, location?: string): Promise<void> {
+    return invoke<void>("reader_set_progress", { bookId, progress, location });
   },
 
   annotationCreate(input: NewAnnotation): Promise<Annotation> {
@@ -126,6 +130,7 @@ export const ipc = {
       startChar: input.startChar,
       endChar: input.endChar,
       text: input.text,
+      cfi: input.cfi ?? null,
     });
   },
 
@@ -255,6 +260,20 @@ export const ipc = {
 
   syncNow(config: SyncConfig): Promise<SyncChange[]> {
     return invoke<SyncChange[]>("sync_now", { config });
+  },
+
+  /**
+   * Edge TTS voices. The renderer holds no client for this service: the
+   * handshake needs headers a webview will not let script set, so the request
+   * is made in Rust and only the catalogue crosses the boundary.
+   */
+  ttsEdgeVoices(): Promise<EdgeVoice[]> {
+    return invoke<EdgeVoice[]>("tts_edge_voices");
+  },
+
+  /** One utterance of Edge speech: base64 MP3 plus its word timings. */
+  ttsEdgeSpeak(text: string, voice: string, rate: number): Promise<EdgeClip> {
+    return invoke<EdgeClip>("tts_edge_speak", { text, voice, rate });
   },
 } as const;
 

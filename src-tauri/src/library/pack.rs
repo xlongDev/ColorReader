@@ -157,7 +157,7 @@ pub fn apply_reading(conn: &Connection, book_id: &str, reading: &Reading) -> App
     // Skipped at zero: recording progress also stamps `last_read_at`, which
     // would drop an unread book onto the "recently read" shelf.
     if reading.progress > 0.0 {
-        repository::set_progress(conn, book_id, reading.progress)?;
+        repository::set_progress(conn, book_id, reading.progress, None)?;
     }
     repository::set_favorite(conn, book_id, reading.favorite)?;
 
@@ -170,6 +170,7 @@ pub fn apply_reading(conn: &Connection, book_id: &str, reading: &Reading) -> App
                 packed.start_char,
                 packed.end_char,
                 &packed.text,
+                None,
             )?;
         }
     }
@@ -431,9 +432,9 @@ mod tests {
         harness
             .library
             .with(|conn| {
-                repository::set_progress(conn, &id, 0.25)?;
+                repository::set_progress(conn, &id, 0.25, None)?;
                 repository::set_favorite(conn, &id, true)?;
-                annotations::create(conn, &id, 0, 1, 3, "你好")?;
+                annotations::create(conn, &id, 0, 1, 3, "你好", None)?;
                 Ok(())
             })
             .expect("seed reading state");

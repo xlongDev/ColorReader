@@ -447,6 +447,13 @@ select {
   max-height: max(160px, calc(var(--page-h, 100vh) - 2 * var(--page-block, 3rem) - 4rem));
 }
 
+/* The last block's bottom margin can spill past the column bottom by a hair,
+   minting one almost-blank trailing page (the paragraph's margin is inline
+   styled, hence !important). */
+.paged-prose > :last-child {
+  margin-bottom: 0 !important;
+}
+
 /* -- keep the macOS overlay traffic lights clear -------------------- */
 [data-tauri-drag-region] {
   -webkit-user-select: none;

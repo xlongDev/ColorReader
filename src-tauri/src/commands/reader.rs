@@ -35,11 +35,18 @@ pub fn reader_chapter(
 }
 
 /// `reader.setProgress` — records a 0..1 reading position.
+///
+/// `location` is an opaque anchor for engines that cannot resume from the
+/// fraction alone (a CFI for foliate-rendered Kindle books). `None` keeps the
+/// stored anchor, so the prose path never clears a Kindle position.
 #[tauri::command]
 pub fn reader_set_progress(
     state: State<'_, AppState>,
     book_id: String,
     progress: f64,
+    location: Option<String>,
 ) -> AppResult<()> {
-    state.library.with(|conn| repository::set_progress(conn, &book_id, progress))
+    state
+        .library
+        .with(|conn| repository::set_progress(conn, &book_id, progress, location.as_deref()))
 }

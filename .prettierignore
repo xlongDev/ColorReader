@@ -8,3 +8,5 @@ coverage
 
 # vendored pdf.js wasm image decoders, keep verbatim
 public/pdfjs
+# vendored readest foliate-js fork (MIT), keep verbatim
+src/vendor

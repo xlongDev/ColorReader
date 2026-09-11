@@ -4,7 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>ColorReader</title>
-    <meta name="color-scheme" content="dark light" />
+    <!-- NOTE: no <meta name="color-scheme"> here on purpose. Under system dark
+         it flips every frame's used color scheme, and WebKit then paints
+         transparent-root iframe canvases opaque, which hides the reader's
+         #background wallpaper layer behind an opaque white sheet. -->
     <script>
       // Apply the persisted theme before paint to avoid a flash of the wrong background.
       // Mirrors the logic in src/stores/settings.ts; keep in sync.

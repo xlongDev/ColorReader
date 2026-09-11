@@ -25,7 +25,8 @@ export function TocPanel({
   onDeleteBookmark,
   onAddBookmark,
 }: {
-  chapters: ChapterMeta[];
+  /** `depth` is optional: foliate-driven books supply a nested TOC. */
+  chapters: (ChapterMeta & { depth?: number })[];
   outline: PdfOutlineItem[];
   currentIdx: number;
   bookmarks: Bookmark[];
@@ -152,13 +153,18 @@ export function TocPanel({
                     ref={current ? currentRef : undefined}
                     type="button"
                     onClick={() => onJump(chapter.idx)}
+                    // A Kindle TOC is nested; our chapter list is flat, so
+                    // depth only ever shows up for foliate-driven books.
+                    style={
+                      chapter.depth ? { paddingInlineStart: `${chapter.depth * 12}px` } : undefined
+                    }
                     className={cn(
                       "hover:bg-surface-1 text-text-2 hover:text-text-1 flex w-full items-baseline gap-2 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors",
                       current && "bg-accent-soft text-accent",
                     )}
                   >
                     <span className="text-text-3 w-9 shrink-0 text-right text-[11px] tabular-nums">
-                      {chapter.idx + 1}
+                      {chapter.depth ? "" : chapter.idx + 1}
                     </span>
                     <span className="min-w-0 flex-1 truncate">
                       {chapter.title || `第 ${chapter.idx + 1} 章`}

@@ -41,6 +41,11 @@ export interface BookSummary {
   lastReadAt: number | null;
   /** 0..1 */
   progress: number;
+  /**
+   * Opaque last-position anchor for engines a fraction cannot resume — a CFI
+   * for foliate-rendered Kindle books. `null` for every other format.
+   */
+  location: string | null;
   favorite: boolean;
   authors: string[];
   tags: string[];
@@ -97,6 +102,13 @@ export interface Annotation {
   startChar: number;
   endChar: number;
   text: string;
+  /**
+   * Re-anchoring key for foliate-rendered books (a CFI). Kindle sections do
+   * not line up with the importer's chapter indices, so a mobi highlight can
+   * only be re-located inside the engine that owns the document. `null` for
+   * every format the (chapter, offset) pair already locates.
+   */
+  cfi: string | null;
   createdAt: number;
 }
 
@@ -107,6 +119,7 @@ export interface NewAnnotation {
   startChar: number;
   endChar: number;
   text: string;
+  cfi?: string;
 }
 
 /** Mirrors `src-tauri/src/library/bookmarks.rs`. */
@@ -346,4 +359,31 @@ export interface SyncChange {
   title: string;
   /** 0..1 reading position that was kept or applied. */
   progress: number;
+}
+
+/** Mirrors `src-tauri/src/tts.rs` — the Edge read-aloud service. */
+
+/** One voice the service offers. */
+export interface EdgeVoice {
+  /** The service's id, e.g. `zh-CN-YunjianNeural`. */
+  shortName: string;
+  /** Display name, e.g. `Yunjian`. */
+  name: string;
+  /** BCP-47 locale, e.g. `zh-CN`. */
+  locale: string;
+  /** What the voice is styled for: `Novel`, `News`, `Dialect`. */
+  categories: string;
+}
+
+/** One word inside a clip, `at` seconds from its start. */
+export interface EdgeWord {
+  at: number;
+  text: string;
+}
+
+/** One utterance of Edge speech. */
+export interface EdgeClip {
+  /** 24 kHz mono MP3, base64. */
+  audio: string;
+  words: EdgeWord[];
 }

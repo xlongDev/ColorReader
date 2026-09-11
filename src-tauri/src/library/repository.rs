@@ -53,6 +53,10 @@ pub struct BookSummary {
     pub last_read_at: Option<i64>,
     /// 0..1.
     pub progress: f64,
+    /// Opaque last-position anchor for engines that cannot resume from a
+    /// fraction (a CFI for foliate-rendered Kindle books); `None` for every
+    /// other format, which restarts from `progress` alone.
+    pub location: Option<String>,
     pub favorite: bool,
     pub authors: Vec<String>,
     pub tags: Vec<String>,
@@ -159,7 +163,7 @@ pub fn cover_path(conn: &Connection, id: &str) -> AppResult<Option<PathBuf>> {
 
 const SELECT_COLUMNS: &str = "b.id, b.title, b.subtitle, b.description, b.language, b.publisher, \
      b.format, b.file_size, b.cover_path, b.added_at, b.updated_at, b.last_read_at, b.progress, \
-     b.favorite";
+     b.location, b.favorite";
 
 /// Loads the shelf for the given query.
 pub fn list(conn: &Connection, query: &BookQuery) -> AppResult<Vec<BookSummary>> {
@@ -235,6 +239,7 @@ fn summary_from_row(row: &rusqlite::Row<'_>) -> AppResult<BookSummary> {
         updated_at: row.get("updated_at")?,
         last_read_at: row.get("last_read_at")?,
         progress: row.get("progress")?,
+        location: row.get("location")?,
         favorite: row.get::<_, i64>("favorite")? != 0,
         authors: Vec::new(),
         tags: Vec::new(),
@@ -434,11 +439,23 @@ pub fn set_cover(conn: &Connection, id: &str, cover_path: &str) -> AppResult<()>
 }
 
 /// Records a reading position, clamped to `0..=1`, and bumps `last_read_at`.
-pub fn set_progress(conn: &Connection, id: &str, progress: f64) -> AppResult<()> {
+///
+/// `location` is the opaque anchor of an engine that cannot resume from a
+/// fraction alone (a CFI for foliate). `None` leaves the stored anchor alone —
+/// the prose path never has one and must not clear the Kindle one.
+pub fn set_progress(
+    conn: &Connection,
+    id: &str,
+    progress: f64,
+    location: Option<&str>,
+) -> AppResult<()> {
     let progress = progress.clamp(0.0, 1.0);
     let changed = conn.execute(
-        "UPDATE books SET progress = ?1, last_read_at = ?2, updated_at = ?2 WHERE id = ?3",
-        params![progress, super::now_seconds(), id],
+        "UPDATE books \
+         SET progress = ?1, last_read_at = ?2, updated_at = ?2, \
+             location = COALESCE(?3, location) \
+         WHERE id = ?4",
+        params![progress, super::now_seconds(), location, id],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));

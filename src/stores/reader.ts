@@ -2,15 +2,21 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import type { LayoutMode, PageTransition } from "@/features/reader/theme";
+import type { SpeechGranularity } from "@/features/reader/speech";
 
 /** Reading typography and viewing preferences, persisted across sessions. */
 interface ReaderState {
   /** Body font size in px. */
   fontSize: number;
   setFontSize: (size: number) => void;
-  /** Speech rate for read-aloud, a Web Speech `utterance.rate` value. */
+  /** Speech rate for read-aloud, a Web Speech `utterance.rate` value. Set from
+   *  the player's speed view through `update`. */
   speechRate: number;
-  setSpeechRate: (rate: number) => void;
+  /** Chosen read-aloud voice, a `SpeechSynthesisVoice.voiceURI`; `null` keeps
+   *  the default pick (Yunjian), resolved at speak time. */
+  speechVoiceURI: string | null;
+  /** How much of the page the voice washes: sentence, word or paragraph. */
+  speechGranularity: SpeechGranularity;
   /** Body typeface, a key into `FONT_STACKS`. */
   fontFamily: string;
   /** Index into `LINE_HEIGHTS`. */
@@ -52,20 +58,13 @@ interface ReaderState {
    *  bitmap each and would otherwise glare on a dark surface. */
   pdfInvertImages: boolean;
   /** Applies a partial settings patch in one call. */
-  update: (
-    patch: Partial<
-      Omit<ReaderState, "update" | "setFontSize" | "setSpeechRate" | "setReadingSpeed">
-    >,
-  ) => void;
+  update: (patch: Partial<Omit<ReaderState, "update" | "setFontSize" | "setReadingSpeed">>) => void;
   setReadingSpeed: (charsPerMinute: number) => void;
 }
 
 /** Inclusive bounds for the font size stepper. */
 export const MIN_FONT_SIZE = 15;
 export const MAX_FONT_SIZE = 26;
-
-/** Rates the read-aloud button cycles through, in order. */
-export const SPEECH_RATES = [1, 1.25, 1.5, 2, 0.75] as const;
 
 /** Line height presets, index-selectable in reading settings. */
 export const LINE_HEIGHTS = [1.6, 1.8, 2.0, 2.2] as const;
@@ -113,12 +112,6 @@ const MAX_READING_SPEED = 1500;
 /** Initial chars-per-minute assumption before enough reading is measured. */
 const DEFAULT_READING_SPEED = 300;
 
-/** Next rate in the cycle; `rate` falls back to index 0 when not listed. */
-export function nextSpeechRate(rate: number): number {
-  const index = SPEECH_RATES.indexOf(rate as (typeof SPEECH_RATES)[number]);
-  return SPEECH_RATES[(index + 1) % SPEECH_RATES.length] ?? 1;
-}
-
 /**
  * Folds one scrolling session into the sustained speed estimate: an EWMA over
  * chars-per-minute samples, with implausible sessions (too short, too long, no
@@ -139,7 +132,8 @@ export const useReaderSettings = create<ReaderState>()(
       setFontSize: (size) =>
         set({ fontSize: Math.min(Math.max(size, MIN_FONT_SIZE), MAX_FONT_SIZE) }),
       speechRate: 1,
-      setSpeechRate: (rate) => set({ speechRate: nextSpeechRate(rate) }),
+      speechVoiceURI: null,
+      speechGranularity: "sentence",
       fontFamily: "system",
       lineHeightIdx: 1,
       paraGapIdx: 1,
@@ -169,10 +163,14 @@ export const useReaderSettings = create<ReaderState>()(
     }),
     {
       name: "colorreader.reader",
-      version: 3,
+      version: 5,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are
       // continuous px now and the scale was rebased (old 特宽 = new 标准).
+      // v4: `pan` was briefly removed then restored; coerce any orphaned
+      //   stored `pan` → `slide` (both resolve to the same native pan path).
+      // v5: the single `peel` was split into two corner-grab variants;
+      //   coerce stored `peel` → `peel-br` (the bottom-right grab).
       migrate: (persisted) => {
         const state = persisted as Partial<ReaderState> & {
           autoScrollIdx?: number;
@@ -186,6 +184,8 @@ export const useReaderSettings = create<ReaderState>()(
           next.marginX = MARGIN_X_PRESETS[state.marginIdx ?? 1] ?? DEFAULT_MARGIN_X;
           next.marginY = DEFAULT_MARGIN_Y;
         }
+        if ((next.pageTransition as string) === "pan") next.pageTransition = "slide";
+        if ((next.pageTransition as string) === "peel") next.pageTransition = "peel-br";
         return next;
       },
     },
