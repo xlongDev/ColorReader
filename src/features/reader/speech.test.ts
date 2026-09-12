@@ -9,28 +9,39 @@ import {
   speechUnits,
   unitAtChar,
   unitsFromOffset,
+  washSpan,
   wordCues,
   wordSpanAt,
+  type SpeechUnit,
 } from "./speech";
 
+/** One utterance, two sentences long. */
+const UNIT: SpeechUnit = {
+  text: "Hello world. Second run.",
+  source: 0,
+  start: 0,
+  end: 24,
+};
+
 describe("speechUnits", () => {
-  it("speaks one unit per paragraph at paragraph granularity", () => {
-    const units = speechUnits(
-      [
-        { index: 0, text: "第一段。" },
-        { index: 3, text: "第二段。" },
-      ],
-      "paragraph",
-    );
+  it("cuts every block into sentences, whatever the highlight level", () => {
+    // The reader's highlight level does not recut the queue: it decides how
+    // much of the text the wash covers, and a recut would move the unit the
+    // voice is holding out from under it.
+    const units = speechUnits([
+      { index: 0, text: "第一句。第二句。" },
+      { index: 3, text: "第三句。" },
+    ]);
     expect(units).toEqual([
-      { text: "第一段。", source: 0, start: 0, end: 4 },
-      { text: "第二段。", source: 3, start: 0, end: 4 },
+      { text: "第一句。", source: 0, start: 0, end: 4 },
+      { text: "第二句。", source: 0, start: 4, end: 8 },
+      { text: "第三句。", source: 3, start: 0, end: 4 },
     ]);
   });
 
   it("keeps sentence offsets sliceable out of the raw text", () => {
     const text = "他觉得今天很冷。于是他关上了窗。窗外下着雨。";
-    const units = speechUnits([{ index: 1, text }], "sentence");
+    const units = speechUnits([{ index: 1, text }]);
     expect(units.length).toBeGreaterThan(1);
     expect(units.map((unit) => unit.source)).toEqual(units.map(() => 1));
     for (const unit of units) {
@@ -45,29 +56,19 @@ describe("speechUnits", () => {
     );
   });
 
-  it("queues whole sentences for the word setting too: the engine reports the word", () => {
-    const text = "他说了一句话。然后是第二句。";
-    const sentences = speechUnits([{ index: 0, text }], "sentence");
-    const words = speechUnits([{ index: 0, text }], "word");
-    expect(words).toEqual(sentences);
-  });
-
   it("drops empty and whitespace-only blocks", () => {
-    const units = speechUnits(
-      [
-        { index: 0, text: "   " },
-        { index: 1, text: "" },
-        { index: 2, text: "有字。" },
-      ],
-      "sentence",
-    );
+    const units = speechUnits([
+      { index: 0, text: "   " },
+      { index: 1, text: "" },
+      { index: 2, text: "有字。" },
+    ]);
     expect(units).toHaveLength(1);
     expect(units[0]?.source).toBe(2);
   });
 
   it("trims the indentation HTML pretty-printing leaves in front of a run", () => {
     const text = "  一行 文字  ";
-    const units = speechUnits([{ index: 0, text }], "sentence");
+    const units = speechUnits([{ index: 0, text }]);
     expect(units.length).toBeGreaterThan(0);
     for (const unit of units) {
       expect(unit.text).toBe(text.slice(unit.start, unit.end));
@@ -110,13 +111,10 @@ describe("segmentText with a read-aloud run", () => {
 
 describe("the read-aloud clock", () => {
   it("counts characters already spoken and the queue's whole length", () => {
-    const units = speechUnits(
-      [
-        { index: 0, text: "一二三。" },
-        { index: 1, text: "四五六。" },
-      ],
-      "paragraph",
-    );
+    const units = speechUnits([
+      { index: 0, text: "一二三。" },
+      { index: 1, text: "四五六。" },
+    ]);
     expect(queuePosition(units, 1)).toEqual({ spoken: 4, total: 8 });
     expect(queuePosition(units, null)).toEqual({ spoken: 0, total: 8 });
   });
@@ -126,13 +124,10 @@ describe("the read-aloud clock", () => {
   });
 
   it("maps a scrubber position back onto the utterance covering it", () => {
-    const units = speechUnits(
-      [
-        { index: 0, text: "一二三。" },
-        { index: 1, text: "四五六。" },
-      ],
-      "paragraph",
-    );
+    const units = speechUnits([
+      { index: 0, text: "一二三。" },
+      { index: 1, text: "四五六。" },
+    ]);
     expect(unitAtChar(units, 0)).toBe(0);
     expect(unitAtChar(units, 3)).toBe(0);
     expect(unitAtChar(units, 4)).toBe(1);
@@ -148,14 +143,56 @@ describe("the read-aloud clock", () => {
   });
 });
 
+describe("washSpan", () => {
+  it("washes the whole utterance at sentence granularity", () => {
+    expect(washSpan(0, UNIT, null, "sentence")).toEqual({ start: 0, end: 24 });
+  });
+
+  it("measures the wash in the block's own coordinates", () => {
+    // A unit in the middle of its block: the wash has to carry the block-local
+    // start, since that is what the page paints against.
+    const inner: SpeechUnit = { text: "Second run.", source: 0, start: 13, end: 24 };
+    expect(washSpan(0, inner, null, "sentence")).toEqual({ start: 13, end: 24 });
+  });
+
+  it("washes nothing at word granularity until the engine reports", () => {
+    // The whole point: no sentence-wide wash that snaps down onto a word.
+    expect(washSpan(0, UNIT, null, "word")).toBeNull();
+    expect(washSpan(0, UNIT, { unit: 1, charIndex: 0, charLength: 5 }, "word")).toBeNull();
+  });
+
+  it("narrows to the reported word", () => {
+    const span = washSpan(0, UNIT, { unit: 0, charIndex: 6, charLength: 5 }, "word");
+    expect(span).toEqual({ start: 6, end: 11 });
+  });
+
+  it("reads the engine's offsets against the trimmed utterance", () => {
+    // 「朗读此处」 cut 6 characters off the head; the engine counts from there.
+    const span = washSpan(0, UNIT, { unit: 0, charIndex: 0, charLength: 5 }, "word", 6);
+    expect(span).toEqual({ start: 6, end: 11 });
+  });
+
+  it("washes the whole block at paragraph level, from its own zero", () => {
+    const inner: SpeechUnit = { text: "Second run.", source: 0, start: 13, end: 24 };
+    expect(washSpan(0, inner, null, "paragraph", 0, 60)).toEqual({ start: 0, end: 60 });
+    // Level first: the head trim 「朗读此处」 left is not where the wash starts.
+    expect(washSpan(0, inner, null, "paragraph", 6, 60)).toEqual({ start: 0, end: 60 });
+    // With no block given, the utterance's own end stands in.
+    expect(washSpan(0, UNIT, null, "paragraph")).toEqual({ start: 0, end: 24 });
+  });
+
+  it("takes a whole-utterance report as the word position", () => {
+    // The blind-voice fallback: the engine hands its whole text over.
+    const span = washSpan(0, UNIT, { unit: 0, charIndex: 0, charLength: 24 }, "word");
+    expect(span).toEqual({ start: 0, end: 24 });
+  });
+});
+
 describe("cursorAt", () => {
-  const units = speechUnits(
-    [
-      { index: 0, text: "第一句。第二句。" },
-      { index: 1, text: "第三句。" },
-    ],
-    "sentence",
-  );
+  const units = speechUnits([
+    { index: 0, text: "第一句。第二句。" },
+    { index: 1, text: "第三句。" },
+  ]);
 
   it("lands on the utterance holding the offset", () => {
     expect(cursorAt(units, 0, 0)).toEqual({ index: 0, trim: 0 });
@@ -173,7 +210,7 @@ describe("cursorAt", () => {
 });
 
 describe("unitsFromOffset", () => {
-  const units = speechUnits([{ index: 0, text: "第一句。第二句。" }], "sentence");
+  const units = speechUnits([{ index: 0, text: "第一句。第二句。" }]);
 
   it("trims the first utterance to the reader's own position", () => {
     const queue = unitsFromOffset(units, 0, 5);

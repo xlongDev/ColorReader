@@ -64,11 +64,11 @@ import {
 } from "@/features/reader/selection";
 import { useSpeechVoices, useTts } from "@/features/reader/tts";
 import { TtsPlayer, type SleepChoice, type SleepTimer } from "@/features/reader/TtsPlayer";
-import { defaultVoice } from "@/features/reader/voice";
+import { defaultVoice, engineOf } from "@/features/reader/voice";
 import {
   cursorAt,
   speechUnits,
-  wordSpanAt,
+  washSpan,
   type SpeechSource,
   type SpeechUnit,
 } from "@/features/reader/speech";
@@ -347,6 +347,8 @@ interface ReaderViewProps {
   title: string;
   /** Cover on the `colorreader` resource protocol, for the TTS player card. */
   coverUrl: string | null;
+  /** Book's own language tag, for the TTS voice picker's language lead. */
+  bookLanguage: string | null;
   /** How the book is stored; PDF renders its fixed pages instead of prose. */
   format: BookFormat;
   chapters: ChapterMeta[];
@@ -371,6 +373,7 @@ function ReaderView({
   bookId,
   title,
   coverUrl,
+  bookLanguage,
   format,
   chapters,
   initialProgress,
@@ -429,6 +432,7 @@ function ReaderView({
     resume,
     setRate,
     setVoice,
+    boundaryAt,
   } = useTts({ trackBoundary: speechGranularity === "word" });
 
   // The voice actually used, resolved rather than stored: with nothing saved the
@@ -681,37 +685,59 @@ function ReaderView({
   const bookImagesQuery = useBookImages(bookId);
   const bookImages = bookImagesQuery.data ?? [];
 
-  // Read-aloud units for the prose path: the chapter split by the reader's
-  // highlight granularity. The Kindle path builds its own from foliate's
-  // blocks, whose text lives in another document.
+  // Read-aloud units for the prose path: the chapter split into sentences. The
+  // Kindle path builds its own from foliate's blocks, whose text lives in
+  // another document. The reader's highlight level is not part of the cut (see
+  // `speechUnits`), so changing it never recuts the queue under the voice.
   const speechQueue = useMemo(
-    () =>
-      isMobi ? [] : speechUnits(speechSources(chapterData?.paragraphs ?? []), speechGranularity),
-    [isMobi, chapterData, speechGranularity],
+    () => (isMobi ? [] : speechUnits(speechSources(chapterData?.paragraphs ?? []))),
+    [isMobi, chapterData],
   );
   // 「朗读此处」 can start the voice inside a sentence: the first utterance is
   // spoken from the selected character on, so the wash has to begin where the
   // voice does instead of at the sentence's opening character.
   const [speechTrim, setSpeechTrim] = useState<{ unit: number; trim: number } | null>(null);
-  // What the wash covers: the unit the voice is on, narrowed to the word the
-  // engine last reported. An engine that never fires `boundary` — a real risk
-  // for Chinese voices — simply keeps the whole sentence. `unit.text` is the
-  // raw slice, so the engine's offset is already paragraph-local.
+  // What the wash covers, in the coordinates of the paragraph it sits in: the
+  // sentence or the word the voice is on, or the whole paragraph at that level
+  // (see `washSpan` for why nothing is washed until the position arrives).
   const speechSpan = useMemo(() => {
     if (speechUnit === null) return null;
     const unit = speechQueue[speechUnit];
     if (!unit) return null;
     const head = speechTrim?.unit === speechUnit ? speechTrim.trim : 0;
-    if (speechGranularity !== "word" || speechBoundary?.unit !== speechUnit) {
-      return { source: unit.source, start: unit.start + head, end: unit.end };
-    }
-    const span = wordSpanAt(unit.text, speechBoundary.charIndex, speechBoundary.charLength);
-    return {
-      source: unit.source,
-      start: unit.start + head + span.start,
-      end: unit.start + head + span.end,
-    };
-  }, [speechUnit, speechQueue, speechGranularity, speechBoundary, speechTrim]);
+    const span = washSpan(
+      speechUnit,
+      unit,
+      speechBoundary,
+      speechGranularity,
+      head,
+      chapterData?.paragraphs?.[unit.source]?.length,
+    );
+    return span === null ? null : { source: unit.source, start: span.start, end: span.end };
+  }, [speechUnit, speechQueue, speechGranularity, speechBoundary, speechTrim, chapterData]);
+  // The PDF wash: the same span the prose path paints, expressed as a needle
+  // inside the spoken text — the page anchors on the sentence (the two
+  // extraction pipelines disagree on whitespace) and paints the span within
+  // it. At paragraph level the needle is the paragraph itself, since that is
+  // what the wash covers. Trimmed up front so the anchor and the offsets share
+  // one coordinate.
+  const pdfWash = useMemo(() => {
+    if (!isPdf || speechUnit === null) return null;
+    const unit = speechQueue[speechUnit];
+    if (!unit || !speechSpan || speechSpan.source !== unit.source) return null;
+    // Block-local offsets against a needle that starts at the block's own zero
+    // for a paragraph, and at the sentence's start for the others.
+    const whole = speechGranularity === "paragraph";
+    const raw = whole ? (chapterData?.paragraphs?.[unit.source] ?? unit.text) : unit.text;
+    const origin = whole ? 0 : unit.start;
+    const lead = raw.length - raw.trimStart().length;
+    const trail = raw.length - raw.trimEnd().length;
+    const from = Math.max(speechSpan.start - origin, lead) - lead;
+    const to = Math.min(speechSpan.end - origin, raw.length - trail) - lead;
+    const text = raw.trim();
+    if (text.length === 0 || from < 0 || to <= from || to > text.length) return null;
+    return { text, from, to };
+  }, [isPdf, speechUnit, speechQueue, speechSpan, speechGranularity, chapterData]);
   // Kindle units exactly as foliate handed them out, so the follow effect can
   // resolve a unit index back to a block and a range inside the section. State
   // rather than a ref: the player renders their text as it comes in.
@@ -1276,8 +1302,11 @@ function ReaderView({
     return () => window.clearInterval(id);
   }, [autoScrolling, autoScrollSpeed, isMobi, layoutMode]);
 
-  // The hook reads the rate and the voice out of refs, so both land on the next
-  // unit — the engine has already committed the one being spoken.
+  // Both settings live in refs inside the hook, which is what lets the player
+  // hand them over inside its own click and restart immediately (see
+  // `applySpeechSettings`). These keep the hook in step with anything that
+  // changes them another way — a resolved default voice, a stored rate read at
+  // launch — without restarting a session nobody is listening to.
   useEffect(() => {
     setRate(speechRate);
   }, [speechRate, setRate]);
@@ -1312,6 +1341,15 @@ function ReaderView({
     setSleep({ kind: "minutes", minutes: choice, endsAt: Date.now() + choice * 60_000 });
   };
 
+  /** The Kindle wash for a unit: the word the engine last reported, in the
+   *  block's own coordinates. `null` while the engine has not said where the
+   *  voice is — the page still follows the voice, but nothing is washed, so a
+   *  sentence never flashes before its word lands. */
+  const mobiWashSpan = useCallback(
+    (index: number, unit: SpeechUnit) => washSpan(index, unit, speechBoundary, speechGranularity),
+    [speechGranularity, speechBoundary],
+  );
+
   // Follow the voice: `nearest` only scrolls when the paragraph is fully out
   // of view, so skimming ahead is never yanked back.
   useEffect(() => {
@@ -1326,14 +1364,29 @@ function ReaderView({
     }
     // Kindle: the read-aloud units are the section's own text blocks, and the
     // paginator both scrolls to one and washes it, so the line being read is
-    // always visible. `null` means the voice stopped — drop the wash.
+    // always visible. `null` means the voice stopped — drop the wash. A
+    // word-level wash is not this effect's to paint: it lands with the
+    // engine's first position report, below.
+    const handle = mobiRef.current;
     if (speechUnit === null) {
-      mobiRef.current?.clearTts();
+      handle?.clearTts();
       return;
     }
     const unit = mobiUnits[speechUnit];
-    if (unit) mobiRef.current?.focusUnit(unit);
-  }, [isMobi, speechUnit, speechQueue, mobiUnits]);
+    if (!unit || !handle) return;
+    if (speechGranularity === "word") {
+      // The word washed a moment ago belongs to the sentence before this one.
+      handle.clearTts();
+      handle.focusUnit(unit, null);
+      return;
+    }
+    // The unit is one sentence at every level; the paragraph level asks for the
+    // whole block it sits in, whose extent only foliate knows.
+    handle.focusUnit(
+      unit,
+      speechGranularity === "paragraph" ? "block" : { start: unit.start, end: unit.end },
+    );
+  }, [isMobi, speechUnit, speechQueue, mobiUnits, speechGranularity]);
 
   // Word-level narrowing: several of these land inside one sentence, so they
   // only re-wash the run — scrolling again for every word would jitter.
@@ -1342,12 +1395,9 @@ function ReaderView({
     if (speechUnit === null || speechBoundary?.unit !== speechUnit) return;
     const unit = mobiUnits[speechUnit];
     if (!unit) return;
-    const span = wordSpanAt(unit.text, speechBoundary.charIndex, speechBoundary.charLength);
-    mobiRef.current?.paintSpan(unit, {
-      start: unit.start + span.start,
-      end: unit.start + span.end,
-    });
-  }, [isMobi, speechGranularity, speechUnit, speechBoundary, mobiUnits]);
+    const span = mobiWashSpan(speechUnit, unit);
+    if (span) mobiRef.current?.paintSpan(unit, span);
+  }, [isMobi, speechGranularity, speechUnit, speechBoundary, mobiUnits, mobiWashSpan]);
 
   /**
    * Read-aloud for Kindle books: one section at a time. foliate owns the
@@ -1359,38 +1409,118 @@ function ReaderView({
    * the transport can reuse the section roll-over without capturing a stale
    * section.
    */
-  const readMobiOnwards = (onFinish: () => void, fromSelection = false) => {
-    const handle = mobiRef.current;
-    if (!handle) return;
-    const reading = fromSelection ? handle.readFromSelection() : handle.readFrom();
-    void reading.then((units) => {
-      // Empty means the book ran out; `stop` leaves the voice where it ended.
-      if (units.length === 0 || handle.bookEnd()) {
+  const readMobiOnwards = useCallback(
+    (onFinish: () => void, fromSelection = false) => {
+      const handle = mobiRef.current;
+      if (!handle) return;
+      const reading = fromSelection ? handle.readFromSelection() : handle.readFrom();
+      void reading.then((units) => {
+        // Empty means the book ran out; `stop` leaves the voice where it ended.
+        if (units.length === 0 || handle.bookEnd()) {
+          stop();
+          return;
+        }
+        setMobiUnits(units);
+        play(
+          units.map((unit) => unit.text),
+          0,
+          onFinish,
+        );
+      });
+    },
+    [play, stop],
+  );
+
+  /** The Kindle roll-over: finish this section, hand the voice to the next.
+   *  Named as a function expression so it can hand itself to `readMobiOnwards`
+   *  as the continuation while still being memoised: the restart below hangs
+   *  off its identity, and a fresh one per render would rebuild that every
+   *  time the voice moves. */
+  const continueMobi = useCallback(
+    function roll() {
+      const handle = mobiRef.current;
+      if (!handle || handle.bookEnd()) {
         stop();
         return;
       }
-      setMobiUnits(units);
-      play(
-        units.map((unit) => unit.text),
-        0,
-        onFinish,
-      );
-    });
-  };
-
-  /** The Kindle roll-over: finish this section, hand the voice to the next. */
-  const continueMobi = () => {
-    const handle = mobiRef.current;
-    if (!handle || handle.bookEnd()) {
-      stop();
-      return;
-    }
-    handle.section(1);
-    readMobiOnwards(continueMobi);
-  };
+      handle.section(1);
+      readMobiOnwards(roll);
+    },
+    [readMobiOnwards, stop],
+  );
 
   /** The queue the voice is walking: prose units, or the Kindle section's. */
   const activeUnits = isMobi ? mobiUnits : speechQueue;
+
+  /** Set when a rate or a voice changed while the voice was on hold: the
+   *  utterance being held was spoken with the old settings, so the transport
+   *  restarts it instead of playing it out. */
+  const restartOnResume = useRef(false);
+
+  /**
+   * Restarts the voice where it is, under settings the engine has not applied.
+   *
+   * Both engines commit the clip they are speaking, so a new rate or voice can
+   * only reach the reader on a fresh utterance; restarting at the position the
+   * voice has got to — not at the top of the sentence — is what makes the
+   * change land now rather than at the next sentence. Picking a held voice up
+   * again runs through here too, which is why a paused status is not a refusal.
+   *
+   * The highlight level needs none of this: it decides how much text the wash
+   * covers, and the queue the voice walks is always cut per sentence.
+   */
+  const restartSpeech = useCallback(() => {
+    if (speechStatus === "idle" || speechUnit === null || !activeUnits[speechUnit]) return;
+    const head = speechTrim?.unit === speechUnit ? speechTrim.trim : 0;
+    const spot = boundaryAt();
+    const trim = head + (spot !== null && spot.unit === speechUnit ? spot.charIndex : 0);
+    setSpeechTrim(trim > 0 ? { unit: speechUnit, trim } : null);
+    play(
+      activeUnits.map((unit) => unit.text),
+      speechUnit,
+      isMobi ? continueMobi : onChapterEnd,
+      trim,
+    );
+  }, [
+    speechStatus,
+    speechUnit,
+    speechTrim,
+    activeUnits,
+    boundaryAt,
+    play,
+    isMobi,
+    onChapterEnd,
+    continueMobi,
+  ]);
+
+  /**
+   * The player's two settings that only a fresh utterance can carry: both
+   * engines commit the clip they are speaking. The change is handed to the
+   * engine first — it reads both out of refs, so the restart already speaks at
+   * the new rate and in the new voice — and the reading then carries on from
+   * where the voice was.
+   */
+  const applySpeechSettings = (change: { rate?: number; voice?: string }) => {
+    if (change.rate !== undefined) {
+      settings.update({ speechRate: change.rate });
+      setRate(change.rate);
+    }
+    if (change.voice !== undefined) {
+      settings.update({ speechVoiceURI: change.voice });
+      // Crossing engines cannot hand a queue over: `useTts` ends the session
+      // rather than carrying on in a voice the reader just replaced.
+      const crossed = engineOf(effectiveVoice) !== engineOf(change.voice);
+      setVoice(change.voice);
+      if (crossed) return;
+    }
+    // A voice that is on hold is restarted by the transport instead: the reader
+    // gets the new setting when they pick the reading up again.
+    if (speechStatus === "paused") {
+      restartOnResume.current = true;
+      return;
+    }
+    restartSpeech();
+  };
 
   /** Jumps the voice to a unit — a transport step, or the scrubber. */
   const seekSpeech = (index: number) => {
@@ -1465,6 +1595,14 @@ function ReaderView({
       return;
     }
     if (speechStatus === "paused") {
+      // A rate or voice changed while on hold: those only reach the voice on a
+      // fresh utterance, so pick the reading up again instead of playing the
+      // held one out at the settings it was spoken with.
+      if (restartOnResume.current) {
+        restartOnResume.current = false;
+        restartSpeech();
+        return;
+      }
       resume();
       return;
     }
@@ -2273,6 +2411,7 @@ function ReaderView({
                       nightBg={pdfNight?.bg ?? null}
                       invertImages={pdfInvertImages}
                       annotations={annotationsByPage.get(chapterIdx)}
+                      ttsWash={pdfWash}
                       onSelection={(range, rect) => onPdfSelection(range, rect, chapterIdx + 1)}
                       onAnnotationClick={(annotation, x, y) =>
                         onPdfAnnotationClick(annotation, x, y, chapterIdx + 1)
@@ -2315,6 +2454,8 @@ function ReaderView({
                   nightBg={pdfNight?.bg ?? null}
                   invertImages={pdfInvertImages}
                   annotationsByPage={annotationsByPage}
+                  ttsPage={chapterIdx}
+                  ttsWash={pdfWash}
                   onSelection={onPdfSelection}
                   onAnnotationClick={onPdfAnnotationClick}
                   onLayout={handlePdfLayout}
@@ -2332,7 +2473,6 @@ function ReaderView({
                 marginX={margin}
                 marginY={blockMargin}
                 style={foliateStyle}
-                speechGranularity={speechGranularity}
                 annotations={annotations}
                 onSelect={onFoliateSelection}
                 onAnnotationClick={onFoliateAnnotationClick}
@@ -2580,9 +2720,10 @@ function ReaderView({
           status={speechStatus}
           error={speechError}
           rate={speechRate}
-          onRate={(value) => settings.update({ speechRate: value })}
+          onRate={(value) => applySpeechSettings({ rate: value })}
           voiceUri={effectiveVoice}
-          onVoice={(uri) => settings.update({ speechVoiceURI: uri })}
+          onVoice={(uri) => applySpeechSettings({ voice: uri })}
+          bookLanguage={bookLanguage}
           sleep={sleep}
           onSleep={chooseSleep}
           onToggle={toggleSpeech}
@@ -3537,6 +3678,7 @@ export function ReaderPage() {
       bookId={bookId}
       title={bookSummary.title}
       coverUrl={bookSummary.coverUrl}
+      bookLanguage={bookSummary.language}
       format={bookSummary.format}
       chapters={chapters}
       initialProgress={bookSummary.progress}

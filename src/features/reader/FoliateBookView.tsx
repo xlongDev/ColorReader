@@ -5,7 +5,7 @@ import type { FoliateRelocate, View } from "foliate-js/view.js";
 import type { Annotation } from "@/types/ipc";
 import type { LayoutMode, PageTransition } from "./theme";
 import { speechUnits, unitsFromOffset, TTS_WASH_BOOK } from "./speech";
-import type { SpeechGranularity, SpeechUnit, Span } from "./speech";
+import type { SpeechUnit, Span } from "./speech";
 
 /** Where the reader is. `cfi` is opaque — hand it back to foliate verbatim. */
 export type FoliateLocation = {
@@ -90,9 +90,12 @@ export type FoliateHandle = {
   /** The same units, but starting at the sentence holding the reader's
    *  selection inside the section. */
   readFromSelection: () => Promise<SpeechUnit[]>;
-  /** Brings the unit `readFrom` handed out into view and washes the run the
-   *  voice is on: the whole unit when `span` is omitted, the word otherwise. */
-  focusUnit: (unit: SpeechUnit, span?: Span) => void;
+  /** Brings the unit `readFrom` handed out into view, and washes `span` — the
+   *  whole unit, or the word the engine reported. `"block"` washes everything
+   *  the unit sits in (the paragraph level) and `null` scrolls without
+   *  painting: at word granularity nothing is washed until the voice says
+   *  where it is, so the sentence never flashes first. */
+  focusUnit: (unit: SpeechUnit, span: Span | null | "block") => void;
   /** Re-washes a narrower run of the unit already in view, without scrolling
    *  — the word-level update that lands several times inside one sentence. */
   paintSpan: (unit: SpeechUnit, span: Span) => void;
@@ -127,8 +130,6 @@ type Props = {
   marginY: number;
   /** Reader typography and palette, injected as a stylesheet. */
   style: FoliateStyle;
-  /** What the read-aloud voice washes: sentence, word or paragraph. */
-  speechGranularity: SpeechGranularity;
   /**
    * Saved highlights. Only the ones carrying a `cfi` can be painted — a
    * Kindle annotation made before CFI support has no anchor foliate can
@@ -529,17 +530,9 @@ const firstVisibleBlock = (blocks: readonly TextBlock[], host: HTMLElement | nul
  * intact (rather than renumbering) is what lets `focusUnit` map a unit back to
  * the block it came from.
  */
-const unitsFrom = (
-  blocks: readonly TextBlock[],
-  granularity: SpeechGranularity,
-  block: number,
-  offset: number,
-): SpeechUnit[] =>
+const unitsFrom = (blocks: readonly TextBlock[], block: number, offset: number): SpeechUnit[] =>
   unitsFromOffset(
-    speechUnits(
-      blocks.map((entry, index) => ({ index, text: entry.text })),
-      granularity,
-    ),
+    speechUnits(blocks.map((entry, index) => ({ index, text: entry.text }))),
     block,
     offset,
   );
@@ -620,7 +613,6 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     marginX,
     marginY,
     style,
-    speechGranularity,
     annotations,
     onSelect,
     onAnnotationClick,
@@ -678,12 +670,6 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   // Where the last selection started, parked for 「朗读此处」: the pill clears
   // the browser's own selection the instant it is tapped.
   const spotAnchor = useRef<{ node: Node; offset: number } | null>(null);
-  // Read by `readFrom`, which is created once and must not capture a stale
-  // granularity when the setting changes mid-book.
-  const granularityRef = useRef(speechGranularity);
-  useEffect(() => {
-    granularityRef.current = speechGranularity;
-  }, [speechGranularity]);
 
   /**
    * Paints every CFI-bearing highlight and unpaints the ones that are gone.
@@ -1082,28 +1068,28 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         blocksRef.current = blocks;
         // Where the reader is looking, not the top of the section: tapping
         // read-aloud mid-page must not restart the chapter.
-        return unitsFrom(
-          blocks,
-          granularityRef.current,
-          firstVisibleBlock(blocks, hostRef.current),
-          0,
-        );
+        return unitsFrom(blocks, firstVisibleBlock(blocks, hostRef.current), 0);
       },
       readFromSelection: async () => {
         const blocks = await collectBlocks();
         if (blocks.length === 0) return [];
         blocksRef.current = blocks;
         const spot = selectionSpot(blocks);
-        return unitsFrom(blocks, granularityRef.current, spot?.block ?? 0, spot?.offset ?? 0);
+        return unitsFrom(blocks, spot?.block ?? 0, spot?.offset ?? 0);
       },
       focusUnit: (unit, span) => {
         const renderer = viewRef.current?.renderer;
         const block = blocksRef.current[unit.source];
         if (!renderer || !block) return;
-        const range = rangeIn(block, span?.start ?? unit.start, span?.end ?? unit.end);
+        const whole = span === "block";
+        const range = rangeIn(
+          block,
+          whole ? 0 : (span?.start ?? unit.start),
+          whole ? block.text.length : (span?.end ?? unit.end),
+        );
         if (!range) return;
         void renderer.scrollToAnchor(range);
-        paintTts(range);
+        if (span !== null) paintTts(range);
       },
       paintSpan: (unit, span) => {
         const block = blocksRef.current[unit.source];

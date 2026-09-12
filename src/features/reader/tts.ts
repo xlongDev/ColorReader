@@ -10,11 +10,20 @@ import { engineOf, resolveVoice, systemVoices, type Voice } from "./voice";
 export type { SpeechBoundary, SpeechStatus };
 
 type Options = {
-  /** Subscribe to `boundary` events. Only the word-level wash needs them; a
-   *  busy paragraph would otherwise re-render the chapter once per word for
-   *  nothing. */
+  /** Whether the word-level wash is watching. Both engines report the voice's
+   *  position from the first word either way — that is what a settings change
+   *  restarts the utterance from — but only a watcher is worth re-rendering the
+   *  reader per word, so this gates what is published as state, and with it the
+   *  fallback that hands a whole utterance over when a voice reports no
+   *  position at all. */
   trackBoundary?: boolean;
 };
+
+/** How long a fresh utterance may stay silent about its position before the
+ *  engine gives up on it reporting one. A voice that reports boundaries does
+ *  so within a frame or two of speaking, so anything still quiet when this
+ *  fires reports none at all — Chinese system voices are the usual case. */
+const BLIND_BOUNDARY_MS = 500;
 
 /** `speechSynthesis` republishes its list asynchronously, and hands back a fresh
  *  array on every call — so the snapshot is cached and only replaced when the
@@ -84,6 +93,14 @@ export function useTts({ trackBoundary = false }: Options = {}) {
 
   // Speaks only while `generation` matches: every play/stop bumps it.
   const generation = useRef(0);
+  /** True once a voice has failed to report a boundary in time, i.e. it does
+   *  not report them at all. Later utterances then hand the whole text over
+   *  straight away rather than leaving the wash blank while a timer runs. */
+  const blind = useRef(false);
+  /** Where the voice last said it was. Kept whether or not the word-level wash
+   *  is listening: the reader can ask for words mid-sentence, and a rate or a
+   *  voice change restarts the utterance from where the voice has got to. */
+  const lastBoundary = useRef<SpeechBoundary | null>(null);
   const rate = useRef(1);
   // A URI, not the platform object: `getVoices()` fills asynchronously and can
   // change under us, so the voice is resolved at speak time.
@@ -96,8 +113,12 @@ export function useTts({ trackBoundary = false }: Options = {}) {
   const edgeRef = useRef<EdgeEngine | null>(null);
 
   useEffect(() => {
+    // Only flips the switch: both engines report the voice's position from the
+    // first word regardless (the Edge engine tracks its clip continuously, a
+    // system voice reports every word), so asking for the word-level wash
+    // mid-utterance is answered by the next report — a frame away on the
+    // service, one word away from the platform.
     trackBoundaryRef.current = trackBoundary;
-    edgeRef.current?.setTrackBoundary(trackBoundary);
   }, [trackBoundary]);
 
   useEffect(() => {
@@ -115,6 +136,7 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     finishRef.current = undefined;
     setStatus("idle");
     setUnit(null);
+    lastBoundary.current = null;
     setBoundary(null);
   }, []);
 
@@ -126,7 +148,14 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     edgeRef.current ??= createEdgeEngine({
       status: setStatus,
       unit: setUnit,
-      boundary: setBoundary,
+      // Recorded whether or not the wash is watching words, and published only
+      // when it is: a settings change restarts the utterance from here (see
+      // `boundaryAt`), while an unwatched `setBoundary` per word would re-render
+      // the reader for nothing.
+      boundary: (spot) => {
+        lastBoundary.current = spot;
+        if (trackBoundaryRef.current) setBoundary(spot);
+      },
       done: () => {
         const finish = finishRef.current;
         finishRef.current = undefined;
@@ -154,30 +183,47 @@ export function useTts({ trackBoundary = false }: Options = {}) {
       if (engineOf(uri) === "edge" && uri !== null) {
         setError(null);
         finishRef.current = onFinish;
-        const engine = edgeEngine();
-        engine.setTrackBoundary(trackBoundaryRef.current);
-        engine.play(units, from, { trim, voice: uri, rate: rate.current });
+        edgeEngine().play(units, from, { trim, voice: uri, rate: rate.current });
         return;
       }
 
       generation.current += 1;
       const current = generation.current;
       window.speechSynthesis.cancel();
+      blind.current = false;
       setStatus("playing");
+      // The blind-voice fallback timer for the utterance being spoken. Cleared
+      // as soon as the voice reports a position, or replaced by the next one.
+      let fallback = 0;
+      // Records where the voice is, and publishes it only while the word-level
+      // wash is watching: a busy paragraph would otherwise re-render the reader
+      // for every word. The position is kept either way, since a rate or voice
+      // change restarts the utterance from it (see `boundaryAt`).
+      const mark = (spot: SpeechBoundary | null) => {
+        lastBoundary.current = spot;
+        if (trackBoundaryRef.current) setBoundary(spot);
+      };
 
       const speak = (index: number) => {
         if (generation.current !== current) return;
+        window.clearTimeout(fallback);
         if (index >= units.length) {
           setStatus("idle");
           setUnit(null);
-          setBoundary(null);
+          mark(null);
           onFinish?.();
           return;
         }
         const raw = units[index];
         const text = index === from && trim > 0 ? raw?.slice(trim) : raw;
         setUnit(index);
-        setBoundary(null);
+        // A voice that has shown it never reports boundaries hands the whole
+        // utterance over at once; the rest wait to be told where the voice is.
+        mark(
+          blind.current && text !== undefined
+            ? { unit: index, charIndex: 0, charLength: text.length }
+            : null,
+        );
         if (text === undefined || text.trim() === "") {
           speak(index + 1);
           return;
@@ -191,16 +237,20 @@ export function useTts({ trackBoundary = false }: Options = {}) {
           utterance.voice = voice;
           utterance.lang = voice.lang;
         }
-        if (trackBoundaryRef.current) {
-          utterance.addEventListener("boundary", (event) => {
-            if (generation.current !== current) return;
-            setBoundary({
-              unit: index,
-              charIndex: event.charIndex,
-              charLength: event.charLength ?? 0,
-            });
+        // Attached whether or not words are being washed: `mark` decides what to
+        // publish, and the position is kept either way, so a reader who turns
+        // the word-level wash on mid-sentence is answered by the next word
+        // rather than by the next sentence.
+        utterance.addEventListener("boundary", (event) => {
+          if (generation.current !== current) return;
+          window.clearTimeout(fallback);
+          blind.current = false;
+          mark({
+            unit: index,
+            charIndex: event.charIndex,
+            charLength: event.charLength ?? 0,
           });
-        }
+        });
         utterance.addEventListener("end", () => {
           if (generation.current !== current) return;
           speak(index + 1);
@@ -209,23 +259,36 @@ export function useTts({ trackBoundary = false }: Options = {}) {
           if (generation.current !== current) return;
           setStatus("idle");
           setUnit(null);
-          setBoundary(null);
+          mark(null);
         });
         window.speechSynthesis.speak(utterance);
+        // What the wash does while nothing has been reported: rather than
+        // painting the sentence and snapping down to a word a moment later
+        // (a flash, not a highlight), wait out the first word. A voice that
+        // reports none gets its whole utterance handed over here, which is
+        // the fallback the sentence-level wash has always been.
+        if (trackBoundaryRef.current) {
+          fallback = window.setTimeout(() => {
+            if (generation.current !== current) return;
+            blind.current = true;
+            mark({ unit: index, charIndex: 0, charLength: text.length });
+          }, BLIND_BOUNDARY_MS);
+        }
       };
       speak(from);
     },
     [edgeEngine],
   );
 
-  /** Applies a new rate; takes effect from the next unit on. */
+  /** Applies a new rate; a session in progress is restarted from where the
+   *  voice is, since the utterance being spoken was already synthesised. */
   const setRate = useCallback((value: number) => {
     rate.current = value;
     edgeRef.current?.setRate(value);
   }, []);
 
-  /** Applies a new voice; takes effect from the next unit on — the engine has
-   *  already committed the one being spoken.
+  /** Applies a new voice; a session in progress is restarted from where the
+   *  voice is — the engine has already committed the one being spoken.
    *
    *  Crossing engines is the exception: neither can hand its queue to the
    *  other, so the session ends rather than carrying on in a voice the reader
@@ -233,6 +296,9 @@ export function useTts({ trackBoundary = false }: Options = {}) {
   const setVoice = useCallback((uri: string | null) => {
     const was = engineOf(voiceUri.current);
     voiceUri.current = uri;
+    // A different voice reports boundaries on its own terms; whether the old
+    // one was blind says nothing about it.
+    blind.current = false;
     setError(null);
     if (engineOf(uri) !== was) {
       window.speechSynthesis.cancel();
@@ -240,6 +306,7 @@ export function useTts({ trackBoundary = false }: Options = {}) {
       finishRef.current = undefined;
       setStatus("idle");
       setUnit(null);
+      lastBoundary.current = null;
       setBoundary(null);
       return;
     }
@@ -264,6 +331,12 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     setStatus("playing");
   }, []);
 
+  /** The voice's position as last reported, read through a call rather than
+   *  from the state above: the word-level wash is the only thing that needs a
+   *  re-render per word, but a settings change restarts the utterance from
+   *  here even while the reader is only washing sentences. */
+  const boundaryAt = useCallback((): SpeechBoundary | null => lastBoundary.current, []);
+
   return {
     status,
     unit,
@@ -275,5 +348,6 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     resume,
     setRate,
     setVoice,
+    boundaryAt,
   };
 }

@@ -144,6 +144,39 @@ export function wordSpanAt(text: string, charIndex: number, charLength: number):
   return wordAround(text, at) ?? { start: at, end: Math.min(at + 1, text.length) };
 }
 
+/**
+ * The run to wash for the unit the voice is on: the whole utterance, the word
+ * the engine last reported, or — at paragraph level — the entire block the
+ * utterance came from.
+ *
+ * `null` means the engine has not said where the voice is yet. Painting the
+ * sentence and snapping down onto the word a moment later reads as a flash,
+ * not a highlight, so nothing is washed until the position arrives. Every
+ * engine reports one as soon as the voice starts; a voice that reports no
+ * boundaries at all hands over its whole utterance instead (see `useTts`).
+ *
+ * Offsets are block-local, ready to place on the page: the utterance's `start`
+ * is where its text begins inside its source block, and the paragraph level
+ * needs `block`, that block's own end. `trim` is the head 「朗读此处」 cut off the
+ * utterance, which shifts both what the engine's offsets are measured against
+ * and where the wash begins.
+ */
+export function washSpan(
+  index: number,
+  unit: SpeechUnit,
+  boundary: SpeechBoundary | null,
+  granularity: SpeechGranularity,
+  trim = 0,
+  block?: number,
+): Span | null {
+  if (granularity === "paragraph") return { start: 0, end: block ?? unit.end };
+  if (granularity === "sentence") return { start: unit.start + trim, end: unit.end };
+  if (boundary === null || boundary.unit !== index) return null;
+  const spoken = trim > 0 ? unit.text.slice(trim) : unit.text;
+  const span = wordSpanAt(spoken, boundary.charIndex, boundary.charLength);
+  return { start: unit.start + trim + span.start, end: unit.start + trim + span.end };
+}
+
 /** One word of an utterance, and where it starts. */
 export interface WordCue extends Span {
   /** Seconds from the start of the clip. */
@@ -176,21 +209,20 @@ export function wordCues(text: string, words: readonly { at: number; text: strin
 }
 
 /**
- * Splits a chapter (or a Kindle section) into utterance units. Empty blocks
- * are dropped: the voice has nothing to say and nothing to wash.
+ * Splits a chapter (or a Kindle section) into utterance units, one per
+ * sentence. Empty blocks are dropped: the voice has nothing to say and nothing
+ * to wash.
+ *
+ * The reader's highlight level is deliberately not part of the cut. It decides
+ * how much of the text the wash covers, not how the voice is fed, and a level
+ * change must not recut the queue the voice is walking: the index it holds
+ * would then land on a different run of the same text, which is exactly the
+ * jump this avoids.
  */
-export function speechUnits(
-  sources: readonly SpeechSource[],
-  granularity: SpeechGranularity,
-): SpeechUnit[] {
+export function speechUnits(sources: readonly SpeechSource[]): SpeechUnit[] {
   const units: SpeechUnit[] = [];
   for (const source of sources) {
     if (source.text.trim() === "") continue;
-    if (granularity === "paragraph") {
-      const { text, start, end } = trimSpan(source.text, 0);
-      units.push({ text, source: source.index, start, end });
-      continue;
-    }
     for (const span of sentenceSpans(source.text)) {
       const { text, start, end } = trimSpan(source.text.slice(span.start, span.end), span.start);
       if (text === "") continue;

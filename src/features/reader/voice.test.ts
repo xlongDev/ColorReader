@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_VOICE_NAME,
+  bookLangVoices,
   defaultVoice,
   defaultVoiceMissing,
   edgeUri,
@@ -9,6 +10,7 @@ import {
   edgeVoices,
   engineOf,
   languageName,
+  matchesBookLang,
   resolveVoice,
   systemVoices,
   voiceGroups,
@@ -240,6 +242,34 @@ describe("defaultVoice", () => {
 
   it("has nothing to offer on a platform with no voices", () => {
     expect(defaultVoice([], null)).toBeNull();
+  });
+});
+
+describe("book language filtering", () => {
+  it("matches on the base subtag, across region and case", () => {
+    expect(matchesBookLang("zh-CN", "zh")).toBe(true);
+    expect(matchesBookLang("zh-TW", "zh")).toBe(true);
+    expect(matchesBookLang("en-US", "en-GB")).toBe(true);
+    expect(matchesBookLang("ZH-CN", "zh")).toBe(true);
+    expect(matchesBookLang("yue-HK", "zh")).toBe(false);
+    expect(matchesBookLang("zh-CN", "ja")).toBe(false);
+  });
+
+  it("keeps every voice of the book's language, both engines", () => {
+    expect(bookLangVoices(SAMPLE, "zh")?.map((entry) => entry.name)).toEqual([
+      "Yunjian",
+      "Tingting",
+    ]);
+    expect(bookLangVoices(SAMPLE, "en")?.map((entry) => entry.name)).toEqual(["Samantha"]);
+  });
+
+  it("shows everything when the book carries no language", () => {
+    expect(bookLangVoices(SAMPLE, null)).toBeNull();
+    expect(bookLangVoices(SAMPLE, "")).toBeNull();
+  });
+
+  it("shows everything when the catalogue has nothing for the book's language", () => {
+    expect(bookLangVoices(SAMPLE, "it")).toBeNull();
   });
 });
 

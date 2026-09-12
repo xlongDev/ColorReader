@@ -101,6 +101,9 @@ function messageOf(error: unknown): string {
 interface Ready {
   buffer: AudioBuffer;
   cues: WordCue[];
+  /** Characters of the utterance as synthesised (after any head trim). The
+   *  whole-utterance position handed over when the service timed no words. */
+  chars: number;
 }
 
 /** How far ahead to synthesise. Two clips is roughly ten seconds of speech:
@@ -134,7 +137,6 @@ export interface EdgeEngine {
   resume: () => void;
   setRate: (rate: number) => void;
   setVoice: (uri: string | null) => void;
-  setTrackBoundary: (on: boolean) => void;
 }
 
 /** `atob` yields one character per byte; the loop is the whole decoder. */
@@ -177,7 +179,6 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
   let trim = 0;
   let voice = "";
   let rate = 1;
-  let trackBoundary = false;
   let onFinish: (() => void) | undefined;
 
   const ready = new Map<number, Ready>();
@@ -223,7 +224,7 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
       if (generation !== current || mine !== settings) return;
       const buffer = await audio().decodeAudioData(bytesOf(clip.audio));
       if (generation !== current || mine !== settings) return;
-      ready.set(index, { buffer, cues: wordCues(text, clip.words) });
+      ready.set(index, { buffer, cues: wordCues(text, clip.words), chars: text.length });
     } catch (error) {
       if (generation !== current) return;
       events.fail(messageOf(error));
@@ -258,10 +259,14 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
 
   /** Tracks the cue list against the context's clock, reporting only when the
    *  word actually changes — a reader must not re-render sixty times a second
-   *  to redraw the same highlight. */
+   *  to redraw the same highlight.
+   *
+   *  The loop runs for every clip, not only while words are being washed: the
+   *  listener decides what to publish, and a reader who turns the word-level
+   *  wash on mid-clip needs the position this has been tracking all along. */
   function follow(index: number, cues: readonly WordCue[], current: number): void {
     cancelAnimationFrame(frame);
-    if (!trackBoundary || cues.length === 0) return;
+    if (cues.length === 0) return;
     let last = -1;
     const step = () => {
       if (generation !== current) return;
@@ -316,7 +321,13 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
       void start(index + 1, current);
     });
     events.unit(index);
-    events.boundary(null);
+    // No word timings from the service: the whole utterance is the position,
+    // handed over as playback starts. Waiting for cues that will never arrive
+    // would leave the wash blank, and painting the sentence first only to
+    // shrink onto a word a moment later is the flash this avoids.
+    events.boundary(
+      clip.cues.length === 0 ? { unit: index, charIndex: 0, charLength: clip.chars } : null,
+    );
     startedAt = ctx.currentTime;
     source.start();
     warm(index, current);
@@ -382,9 +393,6 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
       if (id === voice) return;
       voice = id;
       reconfigure();
-    },
-    setTrackBoundary(value) {
-      trackBoundary = value;
     },
   };
 }

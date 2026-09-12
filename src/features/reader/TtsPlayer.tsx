@@ -27,7 +27,14 @@ import { cn } from "@/lib/cn";
 import { reloadEdgeVoices } from "./edge";
 import { formatClock, queuePosition, speechSeconds, unitAtChar, type SpeechUnit } from "./speech";
 import { useSpeechVoices, type SpeechStatus } from "./tts";
-import { DEFAULT_VOICE_NAME, defaultVoice, defaultVoiceMissing, voiceGroups } from "./voice";
+import {
+  DEFAULT_VOICE_NAME,
+  bookLangVoices,
+  defaultVoice,
+  defaultVoiceMissing,
+  languageName,
+  voiceGroups,
+} from "./voice";
 
 /**
  * The read-aloud player: a pill docked above the footer while a session runs,
@@ -75,6 +82,10 @@ export interface TtsPlayerProps {
   /** Chosen voice URI; `null` shows the default pick as selected. */
   voiceUri: string | null;
   onVoice: (uri: string) => void;
+  /** BCP-47 tag of the book's language, or `null` when the book carries none.
+   *  The voice picker leads with voices of this language, with a one-chip way
+   *  out to the full catalogue. */
+  bookLanguage: string | null;
   sleep: SleepTimer;
   onSleep: (choice: SleepChoice) => void;
   onToggle: () => void;
@@ -205,6 +216,7 @@ export function TtsPlayer({
   onRate,
   voiceUri,
   onVoice,
+  bookLanguage,
   sleep,
   onSleep,
   onToggle,
@@ -236,7 +248,13 @@ export function TtsPlayer({
   }, [open, onOpenChange]);
 
   const active = useMemo(() => defaultVoice(voices, voiceUri), [voices, voiceUri]);
-  const groups = useMemo(() => voiceGroups(voices), [voices]);
+  // A book in a known language leads the picker with that language's voices;
+  // `null` from `bookLangVoices` (no tag, or nothing in the catalogue) means
+  // the full list — an empty picker helps no one.
+  const bookVoices = useMemo(() => bookLangVoices(voices, bookLanguage), [voices, bookLanguage]);
+  const [allLangs, setAllLangs] = useState(false);
+  const shownVoices = bookVoices !== null && !allLangs ? bookVoices : voices;
+  const groups = useMemo(() => voiceGroups(shownVoices), [shownVoices]);
   const missingDefault = useMemo(() => defaultVoiceMissing(voices), [voices]);
 
   const { spoken, total } = queuePosition(units, index);
@@ -480,6 +498,19 @@ export function TtsPlayer({
                         在线语音里的 {DEFAULT_VOICE_NAME}。
                       </p>
                     )
+                  )}
+                  {/* The book's language against the whole catalogue. Only
+                      rendered when the book carries a language the catalogue
+                      can speak — otherwise there is nothing to switch. */}
+                  {bookVoices !== null && (
+                    <div className="mb-2 flex gap-1.5">
+                      <Chip active={!allLangs} onClick={() => setAllLangs(false)}>
+                        {languageName(bookLanguage ?? "")}
+                      </Chip>
+                      <Chip active={allLangs} onClick={() => setAllLangs(true)}>
+                        全部语言
+                      </Chip>
+                    </div>
                   )}
                   {/* One scroll, two headings deep: the engine, then the language.
                       The engine is the one thing the two sources cannot be merged

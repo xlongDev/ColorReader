@@ -28,6 +28,8 @@ export function PdfScrollView({
   nightBg,
   invertImages,
   annotationsByPage,
+  ttsPage,
+  ttsWash,
   onSelection,
   onAnnotationClick,
   onLayout,
@@ -46,6 +48,10 @@ export function PdfScrollView({
   invertImages?: boolean;
   /** Saved annotations grouped by 0-based page. */
   annotationsByPage?: Map<number, Annotation[]>;
+  /** The 0-based page the read-aloud voice is on, and its wash (sentence
+   *  text plus the span to paint). Only that page receives it. */
+  ttsPage?: number | null;
+  ttsWash?: { text: string; from: number; to: number } | null;
   /** A completed text-layer selection on some page. */
   onSelection?: (range: TextRange, rect: DOMRect, pageNumber: number) => void;
   /** A click on annotated text on some page. */
@@ -141,6 +147,7 @@ export function PdfScrollView({
                 nightBg={nightBg}
                 invertImages={invertImages}
                 annotations={annotationsByPage?.get(index)}
+                ttsWash={ttsPage === index ? ttsWash : null}
                 onSelection={(range, rect) => onSelection?.(range, rect, index + 1)}
                 onAnnotationClick={(annotation, x, y) =>
                   onAnnotationClick?.(annotation, x, y, index + 1)

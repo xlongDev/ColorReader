@@ -166,3 +166,99 @@ export function clearPageHighlights(pageNumber: number): void {
   if (!painted.delete(pageNumber)) return;
   repaint();
 }
+
+/**
+ * The read-aloud wash. One range at a time across every mounted page, in its
+ * own highlight name so it never mixes with saved annotations — the prose
+ * path's wash and this one are the same colour by intent: the line being
+ * read looks the same whichever format is speaking it.
+ */
+const TTS_NAME = "pdf-tts";
+let ttsRange: Range | null = null;
+
+function repaintTts() {
+  if (typeof CSS === "undefined" || !("highlights" in CSS)) return;
+  if (ttsRange === null) {
+    CSS.highlights.delete(TTS_NAME);
+  } else {
+    CSS.highlights.set(TTS_NAME, new Highlight(ttsRange));
+  }
+}
+
+/** Non-whitespace characters before `raw`, i.e. the offset's position in the
+ *  whitespace-collapsed string. */
+function compactAt(value: string, raw: number): number {
+  let count = 0;
+  for (let at = 0; at < raw && at < value.length; at += 1) {
+    if (!/\s/.test(value[at]!)) count += 1;
+  }
+  return count;
+}
+
+/** The value with every whitespace run removed, plus a map from each
+ *  surviving character back to its raw offset. */
+function collapse(value: string): { compact: string; map: number[] } {
+  const map: number[] = [];
+  let compact = "";
+  for (let at = 0; at < value.length; at += 1) {
+    const ch = value[at]!;
+    if (!/\s/.test(ch)) {
+      map.push(at);
+      compact += ch;
+    }
+  }
+  return { compact, map };
+}
+
+/** Locates `needle` in the layer's joined text and resolves the span
+ *  `from..to` (offsets inside the needle) to real layer offsets.
+ *
+ *  The spoken text comes from the extraction pipeline, the layer from pdf.js's
+ *  own: the two disagree on whitespace (pdf.js emits one space per text item)
+ *  and occasionally on reading order. An exact match is tried first; the
+ *  fallback compares with every whitespace run collapsed, carrying `from..to`
+ *  across the collapse on both sides. */
+export function locateLayerText(
+  container: HTMLElement,
+  needle: string,
+  from: number,
+  to: number,
+): { start: number; end: number } | null {
+  if (needle.length === 0 || from < 0 || to > needle.length || to <= from) return null;
+  const { text } = walkLayer(container);
+  const direct = text.indexOf(needle);
+  if (direct >= 0) return { start: direct + from, end: direct + to };
+  const layer = collapse(text);
+  const mark = collapse(needle);
+  if (mark.compact.length === 0) return null;
+  const hit = layer.compact.indexOf(mark.compact);
+  if (hit < 0) return null;
+  const start = layer.map[hit + compactAt(needle, from)];
+  const lastChar = layer.map[hit + compactAt(needle, to) - 1];
+  if (start === undefined || lastChar === undefined) return null;
+  return { start, end: lastChar + 1 };
+}
+
+/** Paints the read-aloud wash over real layer offsets and brings the line
+ *  into view. `nearest` never yanks a visible line, matching the prose
+ *  path's follow behaviour; word-level repaints therefore don't jitter. */
+export function paintTtsWash(container: HTMLElement, start: number, end: number): void {
+  if (typeof CSS === "undefined" || !("highlights" in CSS)) return;
+  const { nodes, text } = walkLayer(container);
+  const from = nodeAndOffset(nodes, Math.max(0, Math.min(start, text.length)));
+  const to = nodeAndOffset(nodes, Math.max(0, Math.min(end, text.length)));
+  if (!from || !to) return;
+  const range = new Range();
+  range.setStart(from.node, Math.min(from.at, from.node.length));
+  range.setEnd(to.node, Math.min(to.at, to.node.length));
+  ttsRange = range;
+  repaintTts();
+  range.startContainer.parentElement?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+/** Drops the read-aloud wash — the voice stopped, or its page unmounted. */
+export function clearTtsWash(): void {
+  if (ttsRange === null) return;
+  ttsRange = null;
+  repaintTts();
+}

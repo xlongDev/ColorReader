@@ -7,8 +7,11 @@ import type { Annotation } from "@/types/ipc";
 import { installNightContext } from "./pdfNightContext";
 import {
   clearPageHighlights,
+  clearTtsWash,
   layerOffsetAtPoint,
   paintPageHighlights,
+  paintTtsWash,
+  locateLayerText,
   resolveLayerSelection,
 } from "./pdfTextSelection";
 import type { TextRange } from "./selection";
@@ -38,6 +41,7 @@ export function PdfPageView({
   nightBg,
   invertImages = false,
   annotations = EMPTY,
+  ttsWash = null,
   onSelection,
   onAnnotationClick,
 }: {
@@ -57,6 +61,10 @@ export function PdfPageView({
   invertImages?: boolean;
   /** This page's saved annotations; painted onto the text layer. */
   annotations?: Annotation[];
+  /** Read-aloud wash: the sentence being spoken plus the span inside it to
+   *  paint (word-narrowed). Only the page whose chapter the voice is on
+   *  receives it; `null` on every other page. */
+  ttsWash?: { text: string; from: number; to: number } | null;
   /** A completed text-layer selection, with its viewport rect for the pill. */
   onSelection?: (range: TextRange, rect: DOMRect) => void;
   /** A click on text covered by an existing annotation. */
@@ -72,6 +80,8 @@ export function PdfPageView({
   const [base, setBase] = useState<{ w: number; h: number } | null>(null);
   /** The text layer exists and matches the current page render. */
   const [textReady, setTextReady] = useState(false);
+  /** True while this page owns the read-aloud wash (see the paint effect). */
+  const washPainted = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,6 +196,10 @@ export function PdfPageView({
       taskRef.current?.cancel();
       textTaskRef.current?.cancel();
       clearPageHighlights(pageNumber);
+      if (washPainted.current) {
+        clearTtsWash();
+        washPainted.current = false;
+      }
       restore?.();
     };
   }, [bookId, pageNumber, fit, nightFg, nightBg, invertImages]);
@@ -203,6 +217,26 @@ export function PdfPageView({
     paintPageHighlights(pageNumber, layer, annotations);
     return () => clearPageHighlights(pageNumber);
   }, [annotations, textReady, pageNumber]);
+
+  // Read-aloud wash: anchor the spoken sentence in this page's text layer,
+  // then paint the span inside it (the whole sentence, or the word the engine
+  // last reported). Only the page that owns the wash may clear it — a
+  // neighbour mounting with no wash must not erase the paint.
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer || !textReady) return;
+    if (!ttsWash) {
+      if (washPainted.current) {
+        clearTtsWash();
+        washPainted.current = false;
+      }
+      return;
+    }
+    const hit = locateLayerText(layer, ttsWash.text, ttsWash.from, ttsWash.to);
+    if (!hit) return;
+    paintTtsWash(layer, hit.start, hit.end);
+    washPainted.current = true;
+  }, [ttsWash, textReady]);
 
   // Selection and annotation-click handling for the text layer, attached
   // imperatively for the same reason the prose mouseup is: a selection

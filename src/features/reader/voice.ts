@@ -234,6 +234,29 @@ export function edgeVoices(system: readonly EdgeVoice[]): Voice[] {
     .toSorted(bySectionOrder);
 }
 
+/** Base language subtag, lowercased and normalised (`zh-CN-liaoning` → `zh`;
+ *  macOS locales may use `_` instead of `-`). */
+const baseLang = (tag: string): string => {
+  const head = tag.toLowerCase().replace(/_/g, "-").split("-")[0];
+  return head ?? tag;
+};
+
+/** True when a voice's locale can read a book of `bookLang`: the base subtags
+ *  must agree (`zh` covers `zh-CN` and `zh-TW`, but not `yue`; `en` covers
+ *  `en-US` and `en-GB`). */
+export function matchesBookLang(voiceLang: string, bookLang: string): boolean {
+  return baseLang(voiceLang) === baseLang(bookLang);
+}
+
+/** The voices that speak the book's own language, or `null` when the book's
+ *  language is unknown or the catalogue has nothing for it — in both cases the
+ *  picker shows every voice rather than an empty list. */
+export function bookLangVoices(voices: readonly Voice[], bookLang: string | null): Voice[] | null {
+  if (!bookLang) return null;
+  const hit = voices.filter((voice) => matchesBookLang(voice.lang, bookLang));
+  return hit.length > 0 ? hit : null;
+}
+
 /** The voices of one language, so the picker can page by language. */
 export function voicesInLang(voices: readonly Voice[], lang: string): Voice[] {
   return voices.filter((voice) => voice.lang === lang);

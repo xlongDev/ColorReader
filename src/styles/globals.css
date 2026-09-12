@@ -596,3 +596,9 @@ input[type="range"].range::-moz-range-thumb {
 ::highlight(pdf-notes) {
   background-color: var(--accent-soft);
 }
+
+/* The read-aloud wash: same colour as the prose path's, so the line being
+   read looks the same whichever format is speaking it. */
+::highlight(pdf-tts) {
+  background-color: var(--accent-soft);
+}
