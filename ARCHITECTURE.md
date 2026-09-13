@@ -197,22 +197,80 @@ Feature-oriented：`components/` 放可复用 UI，`features/` 放业务领域�
 
 禁止把 IPC 返回值塞进 Zustand，也禁止把所有业务状态塞进 Zustand。
 
-### 阅读渲染：两条通路
+### 阅读渲染：两条通路，一份语料
 
-| 通路                      | 格式                                    | 渲染                                                                     |
-| ------------------------- | --------------------------------------- | ------------------------------------------------------------------------ |
-| Document Model（默认）    | epub / pdf / fb2 / cbz / markdown / txt | Rust 抽取纯文本段落 → 段落索引 → FTS5 / 标注 / 朗读 / RAG 全基于段落索引 |
-| foliate-js（Kindle 专用） | mobi / azw / azw3（KF6 / KF7 / KF8）    | `makeBook()` + `<foliate-view>` 渲染原书 XHTML + CSS                     |
+| 通路                   | 何时使用                          | 渲染                                                                     |
+| ---------------------- | --------------------------------- | ------------------------------------------------------------------------ |
+| Document Model         | pdf / fb2 / cbz / markdown / txt  | Rust 抽取纯文本段落 → 段落索引 → FTS5 / 标注 / 朗读 / RAG 全基于段落索引 |
+| foliate-js（原书排版） | mobi / azw / azw3 / **epub** 恒用 | `makeBook()` + `<foliate-view>` 渲染原书 XHTML + CSS                     |
 
-Kindle 走 foliate 的原因：KF8 把正文拆成 skeleton + fragment，部首页壁纸、插图、
-字体与配色全在原书 CSS 里，抽成纯文本段落必然丢排版——这是反复修不好的根因，
-不是某个解析 bug。readest 采用同一分层（Rust 侧只做封面与哈希，解析交给
-foliate-js），本项目跟随。
+两个**容器格式**都走 foliate：KF8 把正文拆成 skeleton + fragment，部首页壁纸、
+插图、字体与配色全在原书 CSS 里；EPUB 自带样式与固定版式（fixed-layout）同理。
+抽成纯文本段落必然丢排版——这是反复修不好的根因，不是某个解析 bug。
 
-- 入口：`src/features/reader/FoliateBookView.tsx`，路由级 lazy，仅 Kindle 书加载。
-- 位置：foliate 的 CFI 是不透明字符串，与「章 idx + 段落 idx」模型不通约，
-  暂存 `localStorage: colorreader:foliate:<bookId>`，待进度表加 CFI 列后入库。
-- 未接入（后续阶段）：标注 / 划词 / 全文检索 / TTS / 字号与主题。
+FB2 / CBZ / TXT / MD 仍走 Document Model——它们的原书样式几乎没有内容；
+PDF 走自己的 pdf.js 通路，foliate 的 `pdf.js` 已打桩禁用。
+
+**一份语料**：`document::read_chapters` 对七种格式（含 mobi、epub）统一抽纯文本
+入库，导入期由 `library/import.rs` 落表。所以不论哪条通路在渲染，FTS5 / RAG 组块 /
+书内检索命中的都是同一份章节文本。双轨只存在于**渲染侧**：标注、划词、朗读定位
+在 foliate 通路上以 CFI 为锚，在 Document Model 上以「章 idx + 偏移」为锚。
+这点正是我们没有照搬 readest 全量方案的原因——它把渲染全交给 foliate 后，
+不得不自建「每本书一个索引库 + 反抽正文」才拿回检索与 RAG；我们导入期就有。
+
+- 入口：`src/features/reader/FoliateBookView.tsx`，路由级 lazy，仅上述书籍打开时加载。
+- 位置：CFI 存 `books.location`（`readerSetProgress` 的 `location` 参数）；
+  旧的 `localStorage: colorreader:foliate:<bookId>` 只作一次性兜底读取。
+  🔴 切通路不换算坐标：epub 首次以 foliate 打开时没有 CFI 可续，从书首开始；
+  之后位置一直是 CFI。
+- foliate 通路已对齐：标注回显（`draw-annotation` + `create-overlay` 重绘）、
+  书内检索（`view.search()`）、TTS 起读与洗色、页码与目录，均以 CFI 为锚。
+- 🟡 迁移前已有的 epub 标注没有 CFI：仍在标注列表里，但不再上色、点击不跳转。
+  新标注一律带 CFI。要补就得按 `text` 反查 CFI，等真有抱怨再做。
+- **fixed-layout**（`rendition:layout = pre-paginated`）：`view.open()` 自动切到
+  `foliate-fxl`（`fixed-layout.js` 动态分块，32 kB）。接线只有两处：
+  ① `applyLayout` 给它 `spread` 属性——它不认 paginator 的 `max-column-count`；
+  ② 页面反色靠 `foliate-view[data-fxl-night]::part(filter)` 反色 iframe
+  （view 元素上补了 `exportparts`，把 renderer 的 `filter` part 转出到文档样式）。
+  固定版式不吃排版设置：字号、行距、段距、首行缩进对它无效，这是版式本身决定的。
+  🔴 **该属性只在 `view.isFixedLayout` 且用户开了「夜间图片 → 反色」时才加**
+  （`syncPageInvert`）：paginator 给**每一个** section iframe 也挂了 `part="filter"`
+  （`paginator.js:780`），所以在可重排书上标记 view 会把**已经排好的夜色页面**整体
+  反相——`#15181d` 纸面 + `#c9ced8` 墨色反成「浅纸 + 深墨」，插图一起反相，看上去
+  与夜间模式完全没生效一模一样。诊断时 🔴 别只看 `getComputedStyle`：CSS filter 是
+  绘制期效果，computed 值永远正确，只有像素（或截图）能证伪。
+- **排版与主题注入**（`src/features/reader/foliateStyle.ts`）：一份字符串注入每个 section
+  文档，light 只给排版，dark 再叠 readest 的色彩方案。要点：
+  - `html` 上发 `--theme-bg-color` / `--theme-fg-color` / `--override-color: true`，
+    paginator 的 `#background` 层据此把「无图页面」的填充换成主题色，带 `url()`
+    的纸面（Kindle 水彩、章节图版）原样保留。
+  - **元素级重漆**：`html, body` 的 `color` 只够到达直接继承的文本；Calibre 系
+    转换书把颜色写在每个自有 class 与行内 `style` 上，所以还要给块级/内联元素
+    加 `color: fg !important`——否则夜间就是「黑字压夜色」。`background-color`
+    故意不强制：section 自己的背景交给上面的 resolver 处理。
+  - **图片封顶**：`img/svg/video/canvas` 加 `max-width/height: 100% !important` +
+    `object-fit: contain`，另给带像素 `width` 属性的元素（`width="900"` 这类印刷稿）
+    加 `max-width: 100% !important`。paginator 的 `setImageSize` 在横向分页下以
+    「元素自己的 CSS 宽度」为准，只在没有作者宽度时才回落到父级 100%，所以书把
+    图包进印刷宽度盒子时图会溢出栏位——规则补的就是这一段。
+  - **图片反色是 opt-in**（设置「夜间图片 → 原色/反色」，store `invertBookImages`，
+    默认关）：dark 且开启时在 sheet 末尾追加 `img, svg, video, canvas, image
+{ filter: invert(1) hue-rotate(180deg) }`；prose 通路（FB2/CBZ/TXT/MD）用
+    `.invert-book-images` 挂同一条规则；PDF 另有自己的 `pdfInvertImages`。默认关的
+    理由：调色板已经把纸面压暗，反相的照片是缺陷不是功能；开是给「整页就是一张亮
+    位图」的书（漫画、扫描图版）省亮度用的。
+  - 🔴 全链路禁写 `color-scheme`（注入样式、index.html、App 根都不写）：WebKit 里
+    used color-scheme ≠ normal 会把「根透明」的 iframe 画布画成不透明，盖死身后
+    的 `#background` 层与壁纸。模板字面量里的注释也禁写反引号（会提前闭合模板）。
+- **vendored fork 的本地补丁**（`src/vendor/foliate-js/`，均为 `// local patch` 注释）：
+  ① `epub.js` 的 `loadReplaced`：把资源重写成 `blob:` 时，同时把容器内路径写到元素
+  的 `data-path` 上——section 文档里 `src` 全是 blob URL，书内图片浏览器按档案路径
+  索引，除这里之外无处可join；② `paginator.js` 的暗色背景 resolver 保图不保色；
+  ③ `pdf.js` 打桩禁用（本项目 PDF 走自己的 pdf.js 通路）。
+- **书内图片浏览器**：正文里点图 → 该 section 的 `click` 监听（`attachSection`，与
+  keydown/mouseup 同一入口，幂等）读 `data-path` → `onImageOpen` → `ReaderPage`
+  在 `book_images` 里定位 → 打开 `ImageLightbox`。渲染框任一边小于 48px 的图不当
+  可点目标（书里的分隔线、项目符号也是图片）。
 - 协议：ColorReader 为 AGPL-3.0-or-later，foliate-js 为 MIT，
   见 `THIRD-PARTY-NOTICES.md` 与 `THIRD-PARTY-foliate-js-LICENSE`。
 

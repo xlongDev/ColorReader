@@ -24,6 +24,7 @@ import {
   LAYOUT_MODES,
   PAGE_TRANSITIONS,
   READING_SURFACES,
+  resolveSurface,
 } from "@/features/reader/theme";
 import { SPEECH_GRANULARITIES } from "@/features/reader/speech";
 
@@ -39,6 +40,10 @@ export function SettingsPanel() {
   // The picker edits the surface of the appearance currently active.
   const surfaceField = appTheme === "dark" ? "nightSurface" : "surface";
   const activeSurface = appTheme === "dark" ? settings.nightSurface : settings.surface;
+  // Inverting a book's pictures is a night-page decision, and a surface is
+  // absolute: the switch is offered on the dark ones, whichever appearance
+  // the shell is in.
+  const nightPage = resolveSurface(activeSurface, settings.customSurface).mode === "dark";
   const fileRef = useRef<HTMLInputElement>(null);
   const reduce = useReducedMotion();
 
@@ -300,6 +305,22 @@ export function SettingsPanel() {
           </p>
         )}
       </Group>
+
+      {nightPage && (
+        <Group label="夜间图片">
+          {/* Off keeps a photograph a photograph; on is for pages whose art is
+              one bright bitmap (a comic, a scanned plate) and would otherwise
+              glare. PDFs keep their own switch below. */}
+          <Chips
+            options={[
+              { key: false, label: "原色" },
+              { key: true, label: "反色" },
+            ]}
+            value={settings.invertBookImages}
+            onChange={(value) => update({ invertBookImages: value })}
+          />
+        </Group>
+      )}
 
       <Group label="自动滚动速度">
         <div className="w-full min-w-0">

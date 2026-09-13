@@ -18,6 +18,9 @@ type FoliateBookDoc = {
   sections?: unknown[];
   rendition?: { layout?: string; viewport?: Record<string, number> };
   dir?: string;
+  /** Present when foliate could map the TOC onto the spine — the condition
+   *  for its section-progress table, and so for `goToFraction`. */
+  splitTOCHref?: unknown;
 };
 
 /** Rects of one painted run, in the section document's own coordinates. */
@@ -66,6 +69,12 @@ declare module "foliate-js/view.js" {
     book: FoliateBookDoc;
     /** The live `foliate-paginator` (or `foliate-fxl` for fixed layout). */
     renderer: FoliateRenderer | null;
+    /** True for a pre-paginated book. Its pages are the book's own art and the
+     *  injected stylesheet never reaches them, so the night palette can only
+     *  arrive as a filter on the page frame — the one thing that must NOT be
+     *  applied when the renderer is the paginator, which exports the same
+     *  `filter` part and would invert the whole night page back to light. */
+    isFixedLayout: boolean;
     open(book: FoliateBookDoc): Promise<void>;
     /** `lastLocation` is a CFI string captured from `relocate`. */
     init(options?: { lastLocation?: string | null; showTextStart?: boolean }): Promise<void>;

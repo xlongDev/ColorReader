@@ -6,6 +6,8 @@ import type { Annotation } from "@/types/ipc";
 import type { LayoutMode, PageTransition } from "./theme";
 import { speechUnits, unitsFromOffset, TTS_WASH_BOOK } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
+import { buildStyleSheet } from "./foliateStyle";
+import type { FoliateStyle } from "./foliateStyle";
 
 /** Where the reader is. `cfi` is opaque — hand it back to foliate verbatim. */
 export type FoliateLocation = {
@@ -78,6 +80,9 @@ export type FoliateHandle = {
   bookEnd: () => boolean;
   /** Jumps to a foliate anchor string (a CFI). */
   goToCfi: (cfi: string) => void;
+  /** Jumps to a whole-book fraction, the only anchor a bookmark or a chapter
+   *  index from the importer can offer inside a foliate book. */
+  goToFraction: (fraction: number) => void;
   /** Full-text search across every section; every hit stays highlighted in
    *  the book until `clearSearch`. */
   search: (query: string) => Promise<FoliateSearchHit[]>;
@@ -103,24 +108,117 @@ export type FoliateHandle = {
   clearTts: () => void;
 };
 
-/** Typography and palette pushed into the book's own document. */
-export type FoliateStyle = {
-  fontSize: number;
-  fontFamily: string;
-  lineHeight: number;
-  /** Paragraph gap in em, mirroring the prose path's per-`p` margin. */
-  paraGap: number;
-  /** Two-em first-line indent on every paragraph. */
-  indent: boolean;
-  fg: string;
-  bg: string;
-  dark: boolean;
+/**
+ * foliate renders every book section in its own blob: iframe. Once the reader
+ * clicks into the book text, focus lives inside that iframe, and keydown
+ * events dispatched there never bubble to the parent window — so the global
+ * pager in ReaderPage (bound on `window`) stops receiving ArrowLeft/Right and
+ * Escape. Forward the keys we actually handle from the section document up to
+ * the parent window, where the existing handler runs. Editable targets (rare
+ * in books, but possible) keep their native behaviour.
+ */
+const FORWARDED_KEYS = new Set(["ArrowLeft", "ArrowRight", "Escape"]);
+const forwardKeyFromSection = (event: KeyboardEvent) => {
+  if (!FORWARDED_KEYS.has(event.key)) return;
+  const target = event.target;
+  if (
+    target instanceof HTMLElement &&
+    (target.isContentEditable ||
+      target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT")
+  ) {
+    return;
+  }
+  // Stop the iframe from scrolling/acting on the key; the parent window
+  // handler performs the page turn. The synthetic event is trusted=false but
+  // the handler only reads `key`/`code`/modifiers, so it works regardless.
+  event.preventDefault();
+  window.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: event.key,
+      code: event.code,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+      repeat: event.repeat,
+      cancelable: true,
+      bubbles: true,
+    }),
+  );
+};
+
+/**
+ * Payload of foliate's `draw-annotation`: the caller owns the ink, and only
+ * it knows which colour a highlight should be.
+ */
+type DrawAnnotationDetail = {
+  draw?: (paint: typeof Overlayer.highlight, options?: Record<string, unknown>) => void;
+};
+
+/** Payload of foliate's `show-annotation`: a click on a painted highlight. */
+type ShowAnnotationDetail = {
+  value?: string;
+  range?: Range;
+};
+
+/**
+ * Block-level elements that carry running text. Read-aloud walks these and
+ * takes the innermost ones, so a wrapper `<div>` full of `<p>`s is not read
+ * as one giant block after its children.
+ */
+const BLOCK_SELECTOR =
+  "p, li, blockquote, dd, dt, figcaption, pre, h1, h2, h3, h4, h5, h6, td, th, div";
+
+/** Overlayer key of the transient read-aloud wash (one unit at a time). */
+const TTS_KEY = "colorreader-tts";
+
+/**
+ * Smallest rendered box (px, each axis) that opens the image viewer when
+ * clicked. Below this a picture is decoration — a rule, a bullet, a heading
+ * ornament — and opening a full-screen viewer over it would be noise.
+ */
+const MIN_VIEWABLE_IMAGE = 48;
+
+/**
+ * Night for a fixed-layout page. Those pages are the book's own art: they
+ * carry no typography to override and the injected stylesheet never reaches
+ * them, so a filter on the page frame is the only lever — and it inverts the
+ * page's pictures along with its paper, which is why it follows the
+ * image-inversion setting instead of the surface.
+ *
+ * It must stay off for reflowable books. The paginator marks *every* section
+ * frame with `part="filter"` exactly like `foliate-fxl` does
+ * (paginator.js `setAttribute('part', 'filter')`), so flagging the view here
+ * inverted the finished night page: dark paper with light ink came back out
+ * light with dark ink, photographs and all.
+ */
+const syncPageInvert = (view: View, style: FoliateStyle) => {
+  if (style.dark && style.invertImages && view.isFixedLayout) {
+    view.setAttribute("data-fxl-night", "");
+  } else {
+    view.removeAttribute("data-fxl-night");
+  }
+};
+
+/** Container name + MIME handed to `makeBook`, per format. */
+const CONTAINER: Record<string, { ext: string; type: string }> = {
+  mobi: { ext: "mobi", type: "application/x-mobipocket-ebook" },
+  epub: { ext: "epub", type: "application/epub+zip" },
 };
 
 type Props = {
   bookId: string;
+  format: string;
   /** CFI captured from a previous session; ignored when empty. */
   startCfi?: string | null;
+  /**
+   * Where to land when there is no CFI yet — a book first opened under
+   * foliate. The importer's chapter indices do not line up with foliate
+   * sections, so the closest available anchor is the whole-book fraction.
+   */
+  startFraction?: number | null;
   /** Reading layout, mapped onto the foliate renderer's attributes. */
   layout: LayoutMode;
   /** Page turn animation; `slide`/`pan` = native clipped pan, `fade`/`paper` = VT. */
@@ -140,6 +238,12 @@ type Props = {
   onSelect?: (selection: FoliateSelection | null) => void;
   /** A click on a painted highlight: `cfi` plus viewport coordinates. */
   onAnnotationClick?: (cfi: string, x: number, y: number) => void;
+  /**
+   * A click on a picture in the book, with its archive entry path — the key
+   * `book_images` hands out. Only raised for images big enough to be worth
+   * opening; icons and rules are ignored.
+   */
+  onImageOpen?: (path: string) => void;
   onLocationChange?: (location: FoliateLocation) => void;
   /** Called once the book is open, with the flattened table of contents. */
   onTocLoaded?: (entries: FoliateTocEntry[]) => void;
@@ -238,195 +342,6 @@ const applyLayout = (
     renderer.setAttribute(name, `${px}px`);
   }
 };
-
-/**
- * The stylesheet injected into every section document.
- *
- * Typography always. Colour follows the readest scheme and is dark-only:
- * the paginator lifts each section's wallpaper out of the document at load
- * time by reading the computed body background, and falls back to the html
- * background only when body is fully transparent (paginator.js
- * `getBackground`) — so html/body never get a background from us. Instead we
- * publish `--theme-bg-color` on `html`: the paginator's `#background` layer
- * paints it as the page fill for transparent sections, and its resolver swaps
- * the colour component of every section's own background (keeping wallpaper
- * images) for the theme colour. Text is recoloured with the same rules
- * readest ships in `getColorStyles`, minus the element-level repaints we
- * don't expose yet.
- *
- * `color-scheme` must stay untouched anywhere in this chain — neither here
- * nor as a `<meta name="color-scheme">` in index.html: once a frame's used
- * colour scheme resolves away from `normal`, WebKit paints the iframe's
- * transparent-root canvas OPAQUE (dark under `dark`, white otherwise), which
- * sits on top of and completely hides the `#background` layer — the wallpaper
- * vanishes and page fill falls back to the system colour. `--override-color:
- * true` drives the same resolver colour swap without touching the canvas, and
- * the paginator's resolver keeps every image-bearing background (Kindle paper
- * textures) in its original colours, swapping only imageless page fills for
- * the theme colour.
- */
-const buildStyleSheet = ({
-  fontSize,
-  fontFamily,
-  lineHeight,
-  paraGap,
-  indent,
-  fg,
-  bg,
-  dark,
-}: FoliateStyle) => {
-  const typography = `:root {
-  /* The system stack resolves to var(--font-sans) from the app shell,
-     which does not exist inside a book iframe — define it here. */
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,
-    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-}
-html, body {
-  /* !important: KF8 books ship their own body typography for print paper;
-     the reader settings win over the book. */
-  font-size: ${fontSize}px !important;
-}
-/* A Kindle book restates line-height, font-family, margins and text-indent on
-   every paragraph class it ships, so html/body alone never reaches the
-   text — measured on a KF8 file: body computed line-height followed the
-   setting while every p kept the book's own 1.8. Repeat the settings on the
-   text elements themselves. Font SIZE deliberately stays on html/body only:
-   the book's em-based sizes scale with it, which keeps its headings and
-   title pages at the proportions its designer chose.
-   div is included because Calibre/KF8 mobi often wrap body paragraphs in
-   div.calibre_2 instead of p — without it the three typography
-   settings silently do nothing on those books (see probe on b3.mobi). */
-html, body, p, li, blockquote, dd, dt, td, th, div {
-  font-family: ${fontFamily} !important;
-  line-height: ${lineHeight} !important;
-}
-/* Both sides of the gap, not just the bottom: these books set a large
-   margin-top on their paragraph classes (27–63px measured), which swamped
-   a bottom-only override and made 紧凑 and 标准 look identical.
-   Paragraph <div>s get the same gap. The :has() guard keeps structural
-   container divs (those holding block children) out of the rule so we do
-   not inflate spacing around layout boxes; it is kept in its own rule so
-   that on a WebView without :has() support only this div clause is dropped,
-   not the p/li clause above. */
-p, li, blockquote, dd {
-  margin-top: ${paraGap}em !important;
-  margin-bottom: ${paraGap}em !important;
-}
-div:not([class*="pagebreak"]):not(:has(> p, > div, > section, > table, > ul, > ol, > blockquote, > h1, > h2, > h3, > h4, > h5, > h6)) {
-  margin-top: ${paraGap}em !important;
-  margin-bottom: ${paraGap}em !important;
-}
-/* Off must be as loud as on: the book's own 2em indent survives an omitted
-   declaration, so the toggle only reads as broken when it is not forced.
-   Same div handling as the gap above. */
-p {
-  text-indent: ${indent ? "2em" : "0"} !important;
-}
-div:not([class*="pagebreak"]):not(:has(> p, > div, > section, > table, > ul, > ol, > blockquote, > h1, > h2, > h3, > h4, > h5, > h6)) {
-  text-indent: ${indent ? "2em" : "0"} !important;
-}`;
-  if (!dark) return typography;
-  return `${typography}
-html {
-  --bg-texture-id: none;
-  --theme-bg-color: ${bg};
-  --theme-fg-color: ${fg};
-  --override-color: true;
-}
-html, body {
-  color: ${fg};
-}
-a:any-link {
-  color: lightblue;
-}
-/* Hardcoded black text the book shipped for white paper. */
-font[color="#000000"], font[color="#000"], font[color="black"],
-font[color="rgb(0,0,0)"], font[color="rgb(0, 0, 0)"],
-*[style*="color: rgb(0,0,0)"], *[style*="color: rgb(0, 0, 0)"],
-*[style*="color: #000"], *[style*="color: #000000"], *[style*="color: black"],
-*[style*="color:rgb(0,0,0)"], *[style*="color:rgb(0, 0, 0)"],
-*[style*="color:#000"], *[style*="color:#000000"], *[style*="color:black"] {
-  color: ${fg} !important;
-}
-/* Callout boxes with inline white/light backgrounds (readest's
-   getDarkModeLightBackgroundOverrides). */
-*[style*="background-color: #fff"], *[style*="background-color:#fff"],
-*[style*="background-color: #ffffff"], *[style*="background-color:#ffffff"],
-*[style*="background-color: white"], *[style*="background-color:white"],
-*[style*="background: #fff"], *[style*="background:#fff"],
-*[style*="background: #ffffff"], *[style*="background:#ffffff"],
-*[style*="background: white"], *[style*="background:white"],
-*[style*="background-color: rgb(255"], *[style*="background-color:rgb(255"],
-*[style*="background: rgb(255"], *[style*="background:rgb(255"] {
-  background-color: ${bg} !important;
-}`;
-};
-
-/**
- * foliate renders every book section in its own blob: iframe. Once the reader
- * clicks into the book text, focus lives inside that iframe, and keydown
- * events dispatched there never bubble to the parent window — so the global
- * pager in ReaderPage (bound on `window`) stops receiving ArrowLeft/Right and
- * Escape. Forward the keys we actually handle from the section document up to
- * the parent window, where the existing handler runs. Editable targets (rare
- * in books, but possible) keep their native behaviour.
- */
-const FORWARDED_KEYS = new Set(["ArrowLeft", "ArrowRight", "Escape"]);
-const forwardKeyFromSection = (event: KeyboardEvent) => {
-  if (!FORWARDED_KEYS.has(event.key)) return;
-  const target = event.target;
-  if (
-    target instanceof HTMLElement &&
-    (target.isContentEditable ||
-      target.tagName === "INPUT" ||
-      target.tagName === "TEXTAREA" ||
-      target.tagName === "SELECT")
-  ) {
-    return;
-  }
-  // Stop the iframe from scrolling/acting on the key; the parent window
-  // handler performs the page turn. The synthetic event is trusted=false but
-  // the handler only reads `key`/`code`/modifiers, so it works regardless.
-  event.preventDefault();
-  window.dispatchEvent(
-    new KeyboardEvent("keydown", {
-      key: event.key,
-      code: event.code,
-      altKey: event.altKey,
-      ctrlKey: event.ctrlKey,
-      metaKey: event.metaKey,
-      shiftKey: event.shiftKey,
-      repeat: event.repeat,
-      cancelable: true,
-      bubbles: true,
-    }),
-  );
-};
-
-/**
- * Payload of foliate's `draw-annotation`: the caller owns the ink, and only
- * it knows which colour a highlight should be.
- */
-type DrawAnnotationDetail = {
-  draw?: (paint: typeof Overlayer.highlight, options?: Record<string, unknown>) => void;
-};
-
-/** Payload of foliate's `show-annotation`: a click on a painted highlight. */
-type ShowAnnotationDetail = {
-  value?: string;
-  range?: Range;
-};
-
-/**
- * Block-level elements that carry running text. Read-aloud walks these and
- * takes the innermost ones, so a wrapper `<div>` full of `<p>`s is not read
- * as one giant block after its children.
- */
-const BLOCK_SELECTOR =
-  "p, li, blockquote, dd, dt, figcaption, pre, h1, h2, h3, h4, h5, h6, td, th, div";
-
-/** Overlayer key of the transient read-aloud wash (one unit at a time). */
-const TTS_KEY = "colorreader-tts";
 
 /**
  * Read-aloud wash for a palette, pre-divided so foliate's inside-iframe
@@ -607,7 +522,9 @@ const flattenToc = (toc: TocNode[] | undefined): FoliateTocEntry[] => {
 const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookView(
   {
     bookId,
+    format,
     startCfi,
+    startFraction,
     layout,
     transition,
     marginX,
@@ -616,6 +533,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     annotations,
     onSelect,
     onAnnotationClick,
+    onImageOpen,
     onLocationChange,
     onTocLoaded,
   },
@@ -645,10 +563,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   // Same for the two selection-facing callbacks.
   const selectReport = useRef(onSelect);
   const clickReport = useRef(onAnnotationClick);
+  const imageReport = useRef(onImageOpen);
   useEffect(() => {
     selectReport.current = onSelect;
     clickReport.current = onAnnotationClick;
-  }, [onSelect, onAnnotationClick]);
+    imageReport.current = onImageOpen;
+  }, [onSelect, onAnnotationClick, onImageOpen]);
   // Read through a ref inside the open effect: layout and style changes are
   // applied by the dedicated effects below, and reopening the book on a
   // settings switch would lose the reading position.
@@ -756,18 +676,45 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   }, [syncAnnotations]);
 
   /**
-   * `load` listener on the paginator: every section document arrives here, and
-   * we hook the two things the parent window cannot see — paging keys and
-   * selections made inside the book's iframe.
+   * A click inside a section document. Only a picture is interesting, and one
+   * big enough to be worth opening full screen: the books in this library
+   * paint rules, bullets and tiny inline icons as images too, and those would
+   * otherwise open the viewer by accident. The container path the picture came
+   * from rides on the element (`data-path`, stamped by our patched foliate) —
+   * the `src` is a `blob:` URL by then, which the library's image list cannot
+   * be looked up by.
    */
+  const onSectionClick = useCallback((event: MouseEvent) => {
+    // No `instanceof Element`: the section lives in a blob: iframe with its own
+    // realm, and a node from another realm fails the parent window's
+    // prototype test — the guard would silently swallow every click.
+    const image = (event.target as Element | null)?.closest?.("img, image");
+    if (!image) return;
+    const box = image.getBoundingClientRect();
+    if (box.width < MIN_VIEWABLE_IMAGE || box.height < MIN_VIEWABLE_IMAGE) return;
+    const path = image.getAttribute("data-path");
+    if (path) imageReport.current?.(path);
+  }, []);
+
+  /**
+   * `load` listener on the paginator: every section document arrives here, and
+   * we hook the three things the parent window cannot see — paging keys,
+   * selections made inside the book's iframe, and clicks on its pictures.
+   * Idempotent: the sections `open` already rendered are walked through this
+   * same door, and a document must not end up hooked twice (a double keydown
+   * handler turns one press into two page turns).
+   */
+  const hookedRef = useRef(new WeakSet<Document>());
   const attachSection = useCallback(
     (event: Event) => {
       const doc = (event as CustomEvent<{ doc?: Document }>).detail?.doc;
-      if (!doc) return;
+      if (!doc || hookedRef.current.has(doc)) return;
+      hookedRef.current.add(doc);
       doc.addEventListener("keydown", forwardKeyFromSection, true);
       doc.addEventListener("mouseup", () => captureSelection(doc), true);
+      doc.addEventListener("click", onSectionClick, true);
     },
-    [captureSelection],
+    [captureSelection, onSectionClick],
   );
 
   useEffect(() => {
@@ -790,9 +737,10 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       try {
         const bytes = await ipc.bookFile(bookId);
         if (cancelled) return;
-        // foliate only needs a File-like: it reads PDB records by range.
-        const file = new File([bytes], `${bookId}.mobi`, {
-          type: "application/x-mobipocket-ebook",
+        // foliate only needs a File-like: it reads the container by range.
+        const container = CONTAINER[format] ?? CONTAINER.mobi!;
+        const file = new File([bytes], `${bookId}.${container.ext}`, {
+          type: container.type,
         });
         // Resolved by the `foliate-js` Vite alias to the vendored readest fork
         // (src/vendor/foliate-js); TS sees the ambient declaration in
@@ -804,6 +752,11 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         // Custom elements default to `display: inline`, which collapses the
         // paginator's size chain; the host box must be the viewport.
         view.style.cssText = "display:block;width:100%;height:100%";
+        // foliate re-exports the renderer's parts onto the renderer element,
+        // which sits inside this element's shadow root; forwarding them once
+        // more is what lets a document stylesheet reach `::part(filter)` —
+        // the hook foliate gives for tinting a fixed-layout page.
+        view.setAttribute("exportparts", "head,foot,filter,container");
         view.addEventListener("relocate", onRelocate);
         // Registered before `open` so the very first section's overlayer is
         // covered; `addAnnotation` emits `draw-annotation` synchronously.
@@ -813,6 +766,9 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         host.append(view);
         await view.open(book);
         await view.init(startCfi ? { lastLocation: startCfi } : {});
+        if (!startCfi && startFraction && view.book?.splitTOCHref) {
+          await view.goToFraction(startFraction);
+        }
         viewRef.current = view;
         // The renderer (and its section iframes) exist only after `open()`.
         // Binding the `load` listener before `open` was a silent no-op —
@@ -825,13 +781,18 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
           renderer.addEventListener("load", attachSection);
           for (const { doc } of renderer.getContents()) {
             if (!doc) continue;
-            doc.addEventListener("keydown", forwardKeyFromSection, true);
-            doc.addEventListener("mouseup", () => captureSelection(doc), true);
+            // Through the same door as a later section: the paginator does not
+            // announce the sections `open` already put on screen, and hooking
+            // them by hand here is how the image click went missing once.
+            attachSection(new CustomEvent("load", { detail: { doc } }));
           }
         }
         if (cancelled) return;
         applyLayout(view, layoutRef.current, transitionRef.current, marginsRef.current);
         view.renderer?.setStyles?.(buildStyleSheet(styleRef.current));
+        // The style effect predates the view, so a book opened straight into
+        // the night palette needs the fixed-layout tint applied here too.
+        syncPageInvert(view, styleRef.current);
         tocRef.current = flattenToc(view.book.toc);
         tocReport.current?.(tocRef.current);
         syncAnnotations();
@@ -857,9 +818,10 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     };
   }, [
     bookId,
+    format,
     startCfi,
+    startFraction,
     attachSection,
-    captureSelection,
     onDrawAnnotation,
     onShowAnnotation,
     onOverlay,
@@ -882,7 +844,10 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     styleRef.current = style;
     highlightRef.current = highlightColor;
     ttsColorRef.current = ttsWash(style.dark);
-    viewRef.current?.renderer?.setStyles?.(buildStyleSheet(style));
+    const view = viewRef.current;
+    if (!view) return;
+    view.renderer?.setStyles?.(buildStyleSheet(style));
+    syncPageInvert(view, style);
   }, [style, highlightColor]);
 
   // Highlights: repaint whenever the list changes. foliate draws each one
@@ -1001,7 +966,9 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       },
       atEdge: (dir) => {
         const renderer = viewRef.current?.renderer;
-        if (!renderer) return false;
+        // The fixed-layout renderer has no column edges to report — one page
+        // is one section there, and `next()` already crosses.
+        if (!renderer?.isAtSectionEdge) return false;
         return renderer.isAtSectionEdge(dir);
       },
       goToEntry: (index) => {
@@ -1023,6 +990,14 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         const view = viewRef.current;
         if (!view || cfi === "") return;
         void view.goTo(cfi);
+      },
+      goToFraction: (fraction) => {
+        const view = viewRef.current;
+        // foliate resolves a fraction through its section-progress table,
+        // which it only builds for books whose TOC it can map onto the
+        // spine; on the rest the call would reject and move nothing.
+        if (!view?.book?.splitTOCHref) return;
+        void view.goToFraction(fraction);
       },
       search: async (query) => {
         const view = viewRef.current;

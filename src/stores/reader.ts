@@ -57,8 +57,18 @@ interface ReaderState {
    *  their real colours; on rescues scanned books, whose pages are one bright
    *  bitmap each and would otherwise glare on a dark surface. */
   pdfInvertImages: boolean;
+  /** Books (EPUB / Kindle / comics) on a night page: invert their pictures
+   *  too. Off by default — the injected palette already darkens the paper,
+   *  and an inverted photograph is a defect rather than a feature. On is for
+   *  readers who want the whole page dim, e.g. a comic whose pages are one
+   *  bright bitmap each. */
+  invertBookImages: boolean;
   /** Applies a partial settings patch in one call. */
-  update: (patch: Partial<Omit<ReaderState, "update" | "setFontSize" | "setReadingSpeed">>) => void;
+  update: (
+    patch: Partial<
+      Omit<ReaderState, "update" | "setFontSize" | "setReadingSpeed" | "setOriginalLayout">
+    >,
+  ) => void;
   setReadingSpeed: (charsPerMinute: number) => void;
 }
 
@@ -152,6 +162,7 @@ export const useReaderSettings = create<ReaderState>()(
       pdfNight: true,
       pdfGap: 0,
       pdfInvertImages: false,
+      invertBookImages: false,
       update: (patch) => set(patch),
       setReadingSpeed: (charsPerMinute) =>
         set({
@@ -163,6 +174,9 @@ export const useReaderSettings = create<ReaderState>()(
     }),
     {
       name: "colorreader.reader",
+      // Bump only when a stored value changes meaning; a newly added key needs
+      // no bump — the default merge layers the persisted state over the
+      // initial one.
       version: 5,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are

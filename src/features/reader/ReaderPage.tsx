@@ -125,7 +125,8 @@ const PdfPageView = lazy(() =>
 const PdfScrollView = lazy(() =>
   import("@/features/reader/PdfScrollView").then((module) => ({ default: module.PdfScrollView })),
 );
-/** foliate-js (MOBI/AZW3 rendering engine) is only fetched for Kindle books. */
+/** The original-layout renderer; fetched for the two container formats it
+ *  serves — Kindle (KF6/7/8) and EPUB (reflowable and fixed-layout). */
 const FoliateBookView = lazy(() => import("@/features/reader/FoliateBookView"));
 
 /** How long to wait after scrolling stops before persisting the position. */
@@ -162,6 +163,12 @@ const PDF_ZOOM_STEP = 1.25;
 
 /** Extra margin on all four sides while in fullscreen immersion. */
 const FULLSCREEN_MARGIN_BONUS = 48;
+
+/**
+ * Stand-in for the book's image list while the query is in flight. A fresh
+ * `[]` per render would re-create every callback that reads it.
+ */
+const NO_IMAGES: BookImage[] = [];
 
 /** Parses a link-marker paragraph (`<marker><idx><sep><text>`) into its
     target chapter and visible text; `null` when malformed. */
@@ -408,6 +415,7 @@ function ReaderView({
     pdfNight: pdfNightOn,
     pdfGap,
     pdfInvertImages,
+    invertBookImages,
   } = settings;
   const speechRate = settings.speechRate;
   const speechVoiceURI = settings.speechVoiceURI;
@@ -474,18 +482,23 @@ function ReaderView({
   // A PDF has no prose of its own: chapters are pages, and the fixed pages are
   // rendered by pdf.js. The extracted text still powers search, TTS and AI.
   const isPdf = format === "pdf";
-  // Kindle containers render through foliate-js: for KF8 the book's own
-  // XHTML + CSS is the only faithful rendering — wallpapers, part-title
-  // plates and inline art survive, which a text extraction cannot do.
-  const isMobi = format === "mobi";
+  // Two renderers, one corpus. foliate keeps a book's own XHTML + CSS: for
+  // KF8 that is the only faithful rendering (wallpapers, part-title plates,
+  // inline art) and an EPUB asks for no less — so both containers go through
+  // it. Everything else renders the extracted text: FB2 / CBZ / TXT / MD gain
+  // nothing the text model cannot already do, and PDF renders through its own
+  // pdf.js pipeline (foliate's PDF path is stubbed out). The chapters in the
+  // database are the same either way, so search, TTS and AI never care which
+  // renderer is on screen.
+  const useFoliate = format === "mobi" || format === "epub";
   // A foliate position is a CFI, an opaque string our (chapter, fraction)
   // progress model cannot express. It rides in `books.location`; the
   // localStorage key it used to park in is read once as a fallback and
   // cleared the moment the database has the value.
-  const mobiCfiKey = `colorreader:foliate:${bookId}`;
+  const cfiKey = `colorreader:foliate:${bookId}`;
   const startCfi = useMemo(
-    () => (isMobi ? (initialCfi ?? localStorage.getItem(mobiCfiKey)) : null),
-    [initialCfi, isMobi, mobiCfiKey],
+    () => (useFoliate ? (initialCfi ?? localStorage.getItem(cfiKey)) : null),
+    [initialCfi, useFoliate, cfiKey],
   );
   const outlineQuery = usePdfOutline(bookId, isPdf);
   const outline = outlineQuery.data ?? [];
@@ -500,7 +513,7 @@ function ReaderView({
      *  the chapter on screen. PDF selections set it — a two-page spread can
      *  surface a pill whose range lives on the other page. */
     chapterIdx?: number;
-    /** The foliate CFI of this range. Kindle sections do not line up with
+    /** The foliate CFI of this range. foliate sections do not line up with
      *  our chapter indices, so a mobi highlight is anchored by this instead. */
     cfi?: string;
   } | null>(null);
@@ -531,35 +544,43 @@ function ReaderView({
   /** Direction of the last chapter switch, drives the page transition. */
   const [nav, setNav] = useState<1 | -1>(1);
   // The book's own table of contents, handed over by foliate once the file is
-  // open. Kindle sections do not line up with the chapters our importer
+  // open. foliate sections do not line up with the chapters our importer
   // extracts, so the TOC panel switches to this list while reading a mobi.
   const [foliateToc, setFoliateToc] = useState<FoliateTocEntry[]>([]);
-  const [mobiSectionLabel, setMobiSectionLabel] = useState("");
+  const [foliateSectionLabel, setFoliateSectionLabel] = useState("");
   /** Section page counter from foliate; feeds the same indicator as
    *  `pageInfo` (separate state because this one is declared earlier). */
-  const [mobiPage, setMobiPage] = useState<{ page: number; pages: number } | null>(null);
+  const [foliatePage, setFoliatePage] = useState<{ page: number; pages: number } | null>(null);
   // Declared after the state it reports into (React Compiler forbids a
   // callback capturing a setter that is still initializing).
-  const rememberMobiLocation = useCallback(
+  const rememberFoliateLocation = useCallback(
     (location: FoliateLocation) => {
       // foliate reports true whole-book progress; our chapter-index estimate
       // (51 chapters of uneven length) drifts badly on Kindle files.
       setDisplayProgress(location.fraction);
-      setMobiSectionLabel(location.label);
+      setFoliateSectionLabel(location.label);
+      // foliate's sections are the container's own spine items; the importer
+      // splits the same book by character count instead. The whole-book
+      // fraction lands on the matching chapter, which is what the AI drawer
+      // quotes and the remaining-time labels count from. Best effort: a book
+      // whose empty spine documents were dropped at import shifts this by a
+      // constant offset (ponytail: index by spine href once the importer
+      // stores one).
+      setChapterIdx(locateChapter(chapters, location.fraction).idx);
       // The section page counter feeds the same "N / M 页" indicator the
       // prose pager drives; null in the scroll layout clears it.
-      setMobiPage(location.page && { page: location.page.current, pages: location.page.total });
+      setFoliatePage(location.page && { page: location.page.current, pages: location.page.total });
       if (location.cfi === "") return;
       const cfi = location.cfi;
-      if (mobiSaveRef.current !== null) window.clearTimeout(mobiSaveRef.current);
-      mobiSaveRef.current = window.setTimeout(() => {
+      if (foliateSaveRef.current !== null) window.clearTimeout(foliateSaveRef.current);
+      foliateSaveRef.current = window.setTimeout(() => {
         // The CFI goes to the database, where it survives a cache clear and
         // travels with the library row; the old parking spot is retired.
         setProgress({ progress: location.fraction, location: cfi });
-        localStorage.removeItem(mobiCfiKey);
+        localStorage.removeItem(cfiKey);
       }, SAVE_DELAY_MS);
     },
-    [mobiCfiKey, setProgress],
+    [cfiKey, setProgress, chapters],
   );
 
   /** Continuous scroll vs paged single/double spread. */
@@ -579,18 +600,18 @@ function ReaderView({
   const pinnedRef = useRef<number | null>(null);
   const pinReleaseRef = useRef<number | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
-  // The foliate view for Kindle formats, driven imperatively (see flip /
+  // The foliate view, driven imperatively (see flip /
   // stepChapter): paging and sections never touch our chapter index.
-  const mobiRef = useRef<FoliateHandle | null>(null);
+  const foliateRef = useRef<FoliateHandle | null>(null);
   // Fraction to apply once the current chapter body has rendered. Starts at the
   // saved position, then is reset to the top of the chapter on navigation.
   const pendingScroll = useRef<number>(start.fraction);
   // Offset of a search hit to reveal instead of the scroll fraction.
   const pendingFocus = useRef<number | null>(initialOffset);
   const debounceRef = useRef<number | null>(null);
-  // Pending debounce of the Kindle position save (a CFI, so it only ever
+  // Pending debounce of the foliate position save (a CFI, so it only ever
   // carries the latest one — a page-turn storm must not queue a write each).
-  const mobiSaveRef = useRef<number | null>(null);
+  const foliateSaveRef = useRef<number | null>(null);
   // Latest position along the active axis, read outside the scroll handler.
   const fractionRef = useRef<number>(start.fraction);
   // Mirror of the layout mode so scroll-dependent callbacks never go stale;
@@ -683,15 +704,46 @@ function ReaderView({
   }, [chapter.data]);
   const wallpaperPath = chapterData?.wallpaper ?? null;
   const bookImagesQuery = useBookImages(bookId);
-  const bookImages = bookImagesQuery.data ?? [];
+  const bookImages = bookImagesQuery.data ?? NO_IMAGES;
+  // A picture clicked inside the book's own rendering. foliate reports the
+  // archive entry it came from (see `FoliateBookView`), which is what the
+  // book-wide list is keyed by; the entry itself is the lightbox's position.
+  // An entry the importer skipped (rare: an image used only by the book's own
+  // CSS) has no row here, and nothing opens.
+  const openBookImage = useCallback(
+    (path: string) => {
+      const exact = bookImages.findIndex((image) => image.path === path);
+      // The importer stores the entry name as it appears in the container
+      // while foliate decodes percent escapes before resolving, so a CJK or
+      // spaced filename can arrive spelled the two ways. Same file, same
+      // basename — only the encoding differs.
+      const decoded = (value: string) => {
+        try {
+          return decodeURIComponent(value);
+        } catch {
+          return value;
+        }
+      };
+      const index =
+        exact >= 0
+          ? exact
+          : bookImages.findIndex(
+              (image) =>
+                image.path.slice(image.path.lastIndexOf("/") + 1) ===
+                decoded(path).slice(path.lastIndexOf("/") + 1),
+            );
+      if (index >= 0) setLightboxIdx(index);
+    },
+    [bookImages],
+  );
 
   // Read-aloud units for the prose path: the chapter split into sentences. The
-  // Kindle path builds its own from foliate's blocks, whose text lives in
+  // foliate path builds its own from foliate's blocks, whose text lives in
   // another document. The reader's highlight level is not part of the cut (see
   // `speechUnits`), so changing it never recuts the queue under the voice.
   const speechQueue = useMemo(
-    () => (isMobi ? [] : speechUnits(speechSources(chapterData?.paragraphs ?? []))),
-    [isMobi, chapterData],
+    () => (useFoliate ? [] : speechUnits(speechSources(chapterData?.paragraphs ?? []))),
+    [useFoliate, chapterData],
   );
   // 「朗读此处」 can start the voice inside a sentence: the first utterance is
   // spoken from the selected character on, so the wash has to begin where the
@@ -738,10 +790,10 @@ function ReaderView({
     if (text.length === 0 || from < 0 || to <= from || to > text.length) return null;
     return { text, from, to };
   }, [isPdf, speechUnit, speechQueue, speechSpan, speechGranularity, chapterData]);
-  // Kindle units exactly as foliate handed them out, so the follow effect can
+  // foliate units, exactly as foliate handed them out, so the follow effect can
   // resolve a unit index back to a block and a range inside the section. State
   // rather than a ref: the player renders their text as it comes in.
-  const [mobiUnits, setMobiUnits] = useState<SpeechUnit[]>([]);
+  const [foliateUnits, setFoliateUnits] = useState<SpeechUnit[]>([]);
 
   // Set when the voice rolls off the end of a chapter, consumed by the
   // position effect below once the next chapter has rendered.
@@ -750,6 +802,19 @@ function ReaderView({
   const goTo = useCallback(
     (idx: number) => {
       const clamped = Math.max(0, Math.min(idx, chapters.length - 1));
+      if (useFoliate) {
+        // The panels count chapters the importer's way; a foliate book is
+        // navigated by whole-book fraction, the only anchor such an entry
+        // carries once the container's own sections are on screen.
+        const at = globalProgress(chapters, clamped, 0);
+        stop();
+        setChapterIdx(clamped);
+        setFraction(0);
+        setDisplayProgress(at);
+        setAutoScrolling(false);
+        foliateRef.current?.goToFraction(at);
+        return;
+      }
       if (clamped === chapterIdx) return;
       // A chapter switch invalidates the paragraph queue the voice is walking.
       stop();
@@ -778,12 +843,20 @@ function ReaderView({
       setAutoScrolling(false);
       if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
     },
-    [chapters, chapterIdx, isPdf, setProgress, stop],
+    [chapters, chapterIdx, isPdf, setProgress, stop, useFoliate],
   );
 
   /** Jumps to a fraction inside a chapter, used by bookmarks. */
   const jumpTo = useCallback(
     (idx: number, target: number) => {
+      if (useFoliate) {
+        const at = globalProgress(chapters, idx, target);
+        setChapterIdx(idx);
+        setFraction(target);
+        setDisplayProgress(at);
+        foliateRef.current?.goToFraction(at);
+        return;
+      }
       if (idx === chapterIdx) {
         const el = scrollRef.current;
         if (el) applyPosition(el, target, layoutModeRef.current, marginRef.current);
@@ -796,7 +869,7 @@ function ReaderView({
       // `goTo` resets the pending fraction; restore ours after it.
       pendingScroll.current = target;
     },
-    [chapterIdx, chapters, goTo],
+    [chapterIdx, chapters, goTo, useFoliate],
   );
 
   const onChapterEnd = useCallback(() => {
@@ -970,13 +1043,13 @@ function ReaderView({
   /** Flips one page in a paged layout; rolls into the neighbouring chapter at the edges. */
   const flip = useCallback(
     (dir: 1 | -1) => {
-      if (isMobi) {
+      if (useFoliate) {
         // At the first/last page of the current section, roll explicitly into
         // the neighbouring section (foliate's implicit next()/prev() cross only
         // when its scroll probe reports the page edge, which is fragile);
         // otherwise turn the page normally. This makes "last page + next ->
         // next chapter" deterministic for keyboard paging.
-        const handle = mobiRef.current;
+        const handle = foliateRef.current;
         if (!handle) return;
         if (handle.atEdge(dir)) handle.section(dir);
         else handle.flip(dir);
@@ -1013,7 +1086,7 @@ function ReaderView({
       const target = (Math.round(pos / pitch) + dir * page) * pitch;
       flipPage(el, Math.max(0, Math.min(target, max)), pageTransition, dir, reduce);
     },
-    [chapterIdx, goTo, isPdf, isMobi, pageTransition, reduce],
+    [chapterIdx, goTo, isPdf, useFoliate, pageTransition, reduce],
   );
   // The auto page turn reads `flip` from a timer; a ref keeps that timer from
   // restarting (and losing its place) every time `flip` is rebuilt.
@@ -1022,16 +1095,16 @@ function ReaderView({
     flipRef.current = flip;
   }, [flip]);
 
-  /** Chapter step; foliate's sections replace our chapter index for Kindle. */
+  /** Chapter step; foliate's sections replace our chapter index for foliate books. */
   const stepChapter = useCallback(
     (dir: 1 | -1) => {
-      if (isMobi) {
-        mobiRef.current?.section(dir);
+      if (useFoliate) {
+        foliateRef.current?.section(dir);
         return;
       }
       goTo(chapterIdx + dir);
     },
-    [chapterIdx, goTo, isMobi],
+    [chapterIdx, goTo, useFoliate],
   );
 
   // Trackpad pinch (macOS wheel events with ctrlKey set) zooms the PDF pages;
@@ -1246,10 +1319,10 @@ function ReaderView({
       last = now;
       const fold = foldScrollDelta(autoScrollSpeed, dt, carry);
       carry = fold.carry;
-      if (isMobi) {
+      if (useFoliate) {
         // foliate owns the scrollport; the sub-pixel remainder rides its
         // composited transform so slow speeds still creep forward.
-        const handle = mobiRef.current;
+        const handle = foliateRef.current;
         if (!handle) {
           setAutoScrolling(false);
           return;
@@ -1277,7 +1350,7 @@ function ReaderView({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [autoScrolling, autoScrollSpeed, isMobi, layoutMode]);
+  }, [autoScrolling, autoScrollSpeed, useFoliate, layoutMode]);
 
   // Auto-scroll, paged layouts: there is no continuous scrollport to nudge, so
   // the same control turns a page at a time — one screenful per interval at the
@@ -1285,22 +1358,22 @@ function ReaderView({
   // (the default layout is paged) and the feature read as broken.
   useEffect(() => {
     if (!autoScrolling || layoutMode === "scroll") return;
-    const span = scrollRef.current?.[isMobi ? "clientHeight" : "clientWidth"] ?? 0;
+    const span = scrollRef.current?.[useFoliate ? "clientHeight" : "clientWidth"] ?? 0;
     const interval = Math.min(
       20_000,
       Math.max(900, ((span || 800) / Math.max(autoScrollSpeed, 1)) * 1000),
     );
     const id = window.setInterval(() => {
-      // Kindle: stop at the last page of the last section instead of turning
+      // foliate: stop at the last page of the last section instead of turning
       // in place forever.
-      if (isMobi && mobiRef.current?.bookEnd()) {
+      if (useFoliate && foliateRef.current?.bookEnd()) {
         setAutoScrolling(false);
         return;
       }
       flipRef.current(1);
     }, interval);
     return () => window.clearInterval(id);
-  }, [autoScrolling, autoScrollSpeed, isMobi, layoutMode]);
+  }, [autoScrolling, autoScrollSpeed, useFoliate, layoutMode]);
 
   // Both settings live in refs inside the hook, which is what lets the player
   // hand them over inside its own click and restart immediately (see
@@ -1341,11 +1414,11 @@ function ReaderView({
     setSleep({ kind: "minutes", minutes: choice, endsAt: Date.now() + choice * 60_000 });
   };
 
-  /** The Kindle wash for a unit: the word the engine last reported, in the
+  /** The foliate wash for a unit: the word the engine last reported, in the
    *  block's own coordinates. `null` while the engine has not said where the
    *  voice is — the page still follows the voice, but nothing is washed, so a
    *  sentence never flashes before its word lands. */
-  const mobiWashSpan = useCallback(
+  const foliateWashSpan = useCallback(
     (index: number, unit: SpeechUnit) => washSpan(index, unit, speechBoundary, speechGranularity),
     [speechGranularity, speechBoundary],
   );
@@ -1353,7 +1426,7 @@ function ReaderView({
   // Follow the voice: `nearest` only scrolls when the paragraph is fully out
   // of view, so skimming ahead is never yanked back.
   useEffect(() => {
-    if (!isMobi) {
+    if (!useFoliate) {
       if (speechUnit === null) return;
       const source = speechQueue[speechUnit]?.source;
       if (source === undefined) return;
@@ -1362,17 +1435,17 @@ function ReaderView({
         ?.scrollIntoView({ block: "nearest", inline: "nearest" });
       return;
     }
-    // Kindle: the read-aloud units are the section's own text blocks, and the
+    // foliate: the read-aloud units are the section's own text blocks, and the
     // paginator both scrolls to one and washes it, so the line being read is
     // always visible. `null` means the voice stopped — drop the wash. A
     // word-level wash is not this effect's to paint: it lands with the
     // engine's first position report, below.
-    const handle = mobiRef.current;
+    const handle = foliateRef.current;
     if (speechUnit === null) {
       handle?.clearTts();
       return;
     }
-    const unit = mobiUnits[speechUnit];
+    const unit = foliateUnits[speechUnit];
     if (!unit || !handle) return;
     if (speechGranularity === "word") {
       // The word washed a moment ago belongs to the sentence before this one.
@@ -1386,21 +1459,21 @@ function ReaderView({
       unit,
       speechGranularity === "paragraph" ? "block" : { start: unit.start, end: unit.end },
     );
-  }, [isMobi, speechUnit, speechQueue, mobiUnits, speechGranularity]);
+  }, [useFoliate, speechUnit, speechQueue, foliateUnits, speechGranularity]);
 
   // Word-level narrowing: several of these land inside one sentence, so they
   // only re-wash the run — scrolling again for every word would jitter.
   useEffect(() => {
-    if (!isMobi || speechGranularity !== "word") return;
+    if (!useFoliate || speechGranularity !== "word") return;
     if (speechUnit === null || speechBoundary?.unit !== speechUnit) return;
-    const unit = mobiUnits[speechUnit];
+    const unit = foliateUnits[speechUnit];
     if (!unit) return;
-    const span = mobiWashSpan(speechUnit, unit);
-    if (span) mobiRef.current?.paintSpan(unit, span);
-  }, [isMobi, speechGranularity, speechUnit, speechBoundary, mobiUnits, mobiWashSpan]);
+    const span = foliateWashSpan(speechUnit, unit);
+    if (span) foliateRef.current?.paintSpan(unit, span);
+  }, [useFoliate, speechGranularity, speechUnit, speechBoundary, foliateUnits, foliateWashSpan]);
 
   /**
-   * Read-aloud for Kindle books: one section at a time. foliate owns the
+   * Read-aloud for foliate books: one section at a time. foliate owns the
    * scrollport and the block list, so a finished section hands the voice to
    * the next one — there is no continuous chapter to walk like in prose.
    *
@@ -1409,9 +1482,9 @@ function ReaderView({
    * the transport can reuse the section roll-over without capturing a stale
    * section.
    */
-  const readMobiOnwards = useCallback(
+  const readFoliateOnwards = useCallback(
     (onFinish: () => void, fromSelection = false) => {
-      const handle = mobiRef.current;
+      const handle = foliateRef.current;
       if (!handle) return;
       const reading = fromSelection ? handle.readFromSelection() : handle.readFrom();
       void reading.then((units) => {
@@ -1420,7 +1493,7 @@ function ReaderView({
           stop();
           return;
         }
-        setMobiUnits(units);
+        setFoliateUnits(units);
         play(
           units.map((unit) => unit.text),
           0,
@@ -1431,26 +1504,26 @@ function ReaderView({
     [play, stop],
   );
 
-  /** The Kindle roll-over: finish this section, hand the voice to the next.
-   *  Named as a function expression so it can hand itself to `readMobiOnwards`
+  /** The foliate roll-over: finish this section, hand the voice to the next.
+   *  Named as a function expression so it can hand itself to `readFoliateOnwards`
    *  as the continuation while still being memoised: the restart below hangs
    *  off its identity, and a fresh one per render would rebuild that every
    *  time the voice moves. */
-  const continueMobi = useCallback(
+  const continueFoliate = useCallback(
     function roll() {
-      const handle = mobiRef.current;
+      const handle = foliateRef.current;
       if (!handle || handle.bookEnd()) {
         stop();
         return;
       }
       handle.section(1);
-      readMobiOnwards(roll);
+      readFoliateOnwards(roll);
     },
-    [readMobiOnwards, stop],
+    [readFoliateOnwards, stop],
   );
 
-  /** The queue the voice is walking: prose units, or the Kindle section's. */
-  const activeUnits = isMobi ? mobiUnits : speechQueue;
+  /** The queue the voice is walking: prose units, or the foliate section's. */
+  const activeUnits = useFoliate ? foliateUnits : speechQueue;
 
   /** Set when a rate or a voice changed while the voice was on hold: the
    *  utterance being held was spoken with the old settings, so the transport
@@ -1478,7 +1551,7 @@ function ReaderView({
     play(
       activeUnits.map((unit) => unit.text),
       speechUnit,
-      isMobi ? continueMobi : onChapterEnd,
+      useFoliate ? continueFoliate : onChapterEnd,
       trim,
     );
   }, [
@@ -1488,9 +1561,9 @@ function ReaderView({
     activeUnits,
     boundaryAt,
     play,
-    isMobi,
+    useFoliate,
     onChapterEnd,
-    continueMobi,
+    continueFoliate,
   ]);
 
   /**
@@ -1532,7 +1605,7 @@ function ReaderView({
     play(
       activeUnits.map((unit) => unit.text),
       at,
-      isMobi ? continueMobi : onChapterEnd,
+      useFoliate ? continueFoliate : onChapterEnd,
     );
   };
 
@@ -1606,8 +1679,8 @@ function ReaderView({
       resume();
       return;
     }
-    if (isMobi) {
-      readMobiOnwards(continueMobi);
+    if (useFoliate) {
+      readFoliateOnwards(continueFoliate);
       return;
     }
     if (speechQueue.length > 0) {
@@ -1626,8 +1699,8 @@ function ReaderView({
    * sentence the selection sits in.
    */
   const speakFromSelection = (range: TextRange) => {
-    if (isMobi) {
-      readMobiOnwards(continueMobi, true);
+    if (useFoliate) {
+      readFoliateOnwards(continueFoliate, true);
       return;
     }
     const paragraphs = chapterData?.paragraphs ?? [];
@@ -1704,11 +1777,11 @@ function ReaderView({
   // Recompute the page indicator when the setting or layout flips without a
   // scroll event; chapter switches and resizes re-report through `onScroll`.
   useEffect(() => {
-    // Kindle books are paginated by foliate inside their own scrollport, so
+    // foliate books are paginated inside their own scrollport, so
     // this host has no horizontal overflow to measure — running the formula
     // anyway reported a bogus "1 / 1", which then shadowed foliate's real
     // counter in the indicator.
-    if (!paged || !showPageNumbers || isMobi) return;
+    if (!paged || !showPageNumbers || useFoliate) return;
     const el = scrollRef.current;
     if (!el) return;
     const pageMargin = marginX + (fullscreen ? FULLSCREEN_MARGIN_BONUS : 0);
@@ -1719,13 +1792,13 @@ function ReaderView({
       page: Math.round(el.scrollLeft / pitch) + 1,
       pages: Math.round(max / pitch) + 1,
     });
-  }, [fullscreen, isMobi, layoutMode, marginX, paged, showPageNumbers]);
+  }, [fullscreen, useFoliate, layoutMode, marginX, paged, showPageNumbers]);
 
   // Flush a pending save on unmount.
   useEffect(() => {
     return () => {
       if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
-      if (mobiSaveRef.current !== null) window.clearTimeout(mobiSaveRef.current);
+      if (foliateSaveRef.current !== null) window.clearTimeout(foliateSaveRef.current);
     };
   }, []);
 
@@ -1815,7 +1888,7 @@ function ReaderView({
   );
 
   /**
-   * Kindle selection: foliate hands back a CFI, the only anchor that survives
+   * foliate selection: the view hands back a CFI, the only anchor that survives
    * a section change — the (chapter, offset) pair the prose path stores means
    * nothing here, because foliate's sections are the container's own.
    */
@@ -1833,7 +1906,7 @@ function ReaderView({
     });
   }, []);
 
-  /** Click on a painted Kindle highlight: reopen the pill in remove mode. */
+  /** Click on a painted foliate highlight: reopen the pill in remove mode. */
   const onFoliateAnnotationClick = useCallback(
     (cfi: string, x: number, y: number) => {
       const annotation = (annotations ?? []).find((item) => item.cfi === cfi);
@@ -1938,6 +2011,8 @@ function ReaderView({
       // Same trigger as the PDF night path: the reading surface decides, not
       // the shell theme (surfaces are absolute).
       dark: surface.mode === "dark",
+      // Inverting a book's pictures is the reader's call, not the surface's.
+      invertImages: invertBookImages,
     }),
     [
       fontSize,
@@ -1948,11 +2023,12 @@ function ReaderView({
       surface.fg,
       surface.mode,
       surface.tint,
+      invertBookImages,
     ],
   );
-  // The TOC panel reads chapters; Kindle books are driven by foliate's own
+  // The TOC panel reads chapters; foliate books are driven by its own
   // TOC, so the entries are reshaped into the same shape (with nesting depth).
-  const mobiChapters = useMemo(
+  const foliateChapters = useMemo(
     () =>
       foliateToc.map((entry, idx) => ({
         idx,
@@ -1962,10 +2038,10 @@ function ReaderView({
       })),
     [foliateToc],
   );
-  const mobiTocIdx = useMemo(() => {
-    const at = foliateToc.findIndex((entry) => entry.label === mobiSectionLabel);
+  const foliateTocIdx = useMemo(() => {
+    const at = foliateToc.findIndex((entry) => entry.label === foliateSectionLabel);
     return at;
-  }, [foliateToc, mobiSectionLabel]);
+  }, [foliateToc, foliateSectionLabel]);
 
   /** Column width for the paged layouts; `undefined` keeps flow layout. */
   const columnWidth = useMemo(() => {
@@ -2100,25 +2176,25 @@ function ReaderView({
 
   // The wallpaper behind a text page (the copyright page's paper) loads once
   // per chapter; plates draw the art themselves, so skip the double fetch.
-  // Kindle books paint their own paper inside the foliate view — the
+  // foliate books paint their own paper inside the view — the
   // extracted wallpaper would only layer underneath it.
-  const wallpaperUrl = useAssetUrl(bookId, plate || isMobi ? null : wallpaperPath);
+  const wallpaperUrl = useAssetUrl(bookId, plate || useFoliate ? null : wallpaperPath);
 
   // Reader chrome button: same anatomy as the sidebar's glass buttons, but
   // fill and hairline come from the re-rooted reading-surface tokens — the
   // fill is a wash of the paper colour (--glass-btn), so the circles read as
   // liquid glass over the page without darkening it like an ink fill would.
   const chromeBtn = "bg-(--glass-btn) border-hairline-strong shadow-glass";
-  // Kindle sections replace the imported chapter list while reading, but only
+  // foliate sections replace the imported chapter list while reading, but only
   // when foliate actually found a TOC — an old MOBI6 has none.
-  const useMobiToc = isMobi && foliateToc.length > 0;
-  const headerIndex = useMobiToc
-    ? mobiTocIdx + 1
+  const useFoliateToc = useFoliate && foliateToc.length > 0;
+  const headerIndex = useFoliateToc
+    ? foliateTocIdx + 1
     : isPdf && !paged && pdfScrollPage !== null
       ? pdfScrollPage
       : chapterIdx + 1;
-  const headerTotal = useMobiToc ? foliateToc.length : total;
-  const headerChapter = useMobiToc ? mobiSectionLabel : chapterTitle;
+  const headerTotal = useFoliateToc ? foliateToc.length : total;
+  const headerChapter = useFoliateToc ? foliateSectionLabel : chapterTitle;
 
   // Shared header bar: rendered in flow normally, and dropped from the top
   // edge on hover while in fullscreen — where it also gets a surface-tinted
@@ -2361,7 +2437,7 @@ function ReaderView({
             "min-h-0 flex-1",
             // foliate owns its own scrolling and paging; giving the host a
             // scroll container of its own would double-clip the pages.
-            isMobi
+            useFoliate
               ? "relative overflow-hidden"
               : paged
                 ? isPdf && pdfZoom !== 1
@@ -2462,12 +2538,14 @@ function ReaderView({
                 />
               </Suspense>
             )
-          ) : isMobi ? (
-            <Suspense fallback={<p className="text-text-3 p-6 text-sm">正在打开 Kindle 书籍…</p>}>
+          ) : useFoliate ? (
+            <Suspense fallback={<p className="text-text-3 p-6 text-sm">正在打开原书排版…</p>}>
               <FoliateBookView
-                ref={mobiRef}
+                ref={foliateRef}
                 bookId={bookId}
+                format={format}
                 startCfi={startCfi}
+                startFraction={startCfi ? null : initialProgress}
                 layout={layoutMode}
                 transition={pageTransition}
                 marginX={margin}
@@ -2476,7 +2554,8 @@ function ReaderView({
                 annotations={annotations}
                 onSelect={onFoliateSelection}
                 onAnnotationClick={onFoliateAnnotationClick}
-                onLocationChange={rememberMobiLocation}
+                onImageOpen={openBookImage}
+                onLocationChange={rememberFoliateLocation}
                 onTocLoaded={setFoliateToc}
               />
             </Suspense>
@@ -2524,6 +2603,7 @@ function ReaderView({
                 "prose-reader mx-auto",
                 !paged && "max-w-3xl",
                 paged && "paged-prose",
+                surface.mode === "dark" && invertBookImages && "invert-book-images",
                 transitionClass,
               )}
               style={articleStyle}
@@ -2648,12 +2728,13 @@ function ReaderView({
 
         {/* Page indicator (settings-gated) and a hairline progress rail that
             surfaces on activity and fades out after 2s of stillness. */}
-        {paged && showPageNumbers && (isMobi ? mobiPage : pageInfo) && (
+        {paged && showPageNumbers && (useFoliate ? foliatePage : pageInfo) && (
           <p
             className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 text-xs tabular-nums opacity-70"
             style={{ color: surface.fg }}
           >
-            {(isMobi ? mobiPage : pageInfo)!.page} / {(isMobi ? mobiPage : pageInfo)!.pages} 页
+            {(useFoliate ? foliatePage : pageInfo)!.page} /{" "}
+            {(useFoliate ? foliatePage : pageInfo)!.pages} 页
           </p>
         )}
         {/* Quiet progress rail in the text colour: a barely-there track that
@@ -2852,22 +2933,22 @@ function ReaderView({
               if (panel === "search") {
                 setSearch("");
                 // Drop the match highlights foliate painted into the pages.
-                if (isMobi) mobiRef.current?.clearSearch();
+                if (useFoliate) foliateRef.current?.clearSearch();
               }
               setPanel("none");
             }}
           >
             {panel === "toc" && (
               <TocPanel
-                chapters={useMobiToc ? mobiChapters : chapters}
+                chapters={useFoliateToc ? foliateChapters : chapters}
                 outline={outline}
-                currentIdx={useMobiToc ? mobiTocIdx : chapterIdx}
+                currentIdx={useFoliateToc ? foliateTocIdx : chapterIdx}
                 bookmarks={bookmarks ?? []}
                 busy={createBookmark.isPending || deleteBookmark.isPending}
                 onJump={(idx) => {
                   setPanel("none");
-                  if (useMobiToc) {
-                    mobiRef.current?.goToEntry(idx);
+                  if (useFoliateToc) {
+                    foliateRef.current?.goToEntry(idx);
                     return;
                   }
                   goTo(idx);
@@ -2887,22 +2968,22 @@ function ReaderView({
                 busy={deleteAnnotation.isPending}
                 onDelete={(id) => deleteAnnotation.mutate(id)}
                 onJump={
-                  isMobi
+                  useFoliate
                     ? (annotation) => {
                         setPanel("none");
-                        if (annotation.cfi) mobiRef.current?.goToCfi(annotation.cfi);
+                        if (annotation.cfi) foliateRef.current?.goToCfi(annotation.cfi);
                       }
                     : undefined
                 }
               />
             )}
             {panel === "search" &&
-              (isMobi ? (
+              (useFoliate ? (
                 <FoliateSearchPanel
-                  onSearch={(query) => mobiRef.current?.search(query) ?? Promise.resolve([])}
+                  onSearch={(query) => foliateRef.current?.search(query) ?? Promise.resolve([])}
                   onPick={(cfi) => {
                     setPanel("none");
-                    mobiRef.current?.goToCfi(cfi);
+                    foliateRef.current?.goToCfi(cfi);
                   }}
                 />
               ) : (
@@ -3543,7 +3624,7 @@ function AnnotationList({
   busy: boolean;
   onDelete: (id: string) => void;
   /**
-   * Makes a row navigate to its highlight. Kindle books need it: their
+   * Makes a row navigate to its highlight. foliate books need it: their
    * highlights are anchored by CFI and the list cannot scroll a chapter that
    * was never on screen. Prose rows already sit in the chapter on screen.
    */
@@ -3563,7 +3644,7 @@ function AnnotationList({
               className="border-hairline border-b pb-3 last:border-0 last:pb-0"
             >
               <div className="flex items-start justify-between gap-2">
-                {/* Kindle sections are the container's own, so the index this
+                {/* foliate sections are the container's own, so the index this
                     list groups by is a section, not an imported chapter. */}
                 <p className="text-text-3 text-xs">
                   第 {annotation.chapterIdx + 1}

@@ -1072,8 +1072,18 @@ class Loader {
                 }
             }
             // replace hrefs (excluding anchors)
-            const replace = async (el, attr) => el.setAttribute(attr,
-                await this.loadHref(el.getAttribute(attr), href, parents))
+            const replace = async (el, attr) => {
+                const source = el.getAttribute(attr)
+                const replaced = await this.loadHref(source, href, parents)
+                el.setAttribute(attr, replaced)
+                // local patch: keep the container path a resource was loaded
+                // from on the element itself. Everything is a `blob:` URL by
+                // the time a section reaches the DOM, and the reader keys its
+                // book-wide image list by archive entry — the URL says nothing
+                // about where the bytes live.
+                if (typeof replaced === 'string' && replaced.startsWith('blob:'))
+                    el.setAttribute('data-path', resolveURL(source, href))
+            }
             for (const el of doc.querySelectorAll('link[href]')) await replace(el, 'href')
             for (const el of doc.querySelectorAll('[src]')) await replace(el, 'src')
             for (const el of doc.querySelectorAll('[poster]')) await replace(el, 'poster')

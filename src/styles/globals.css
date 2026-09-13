@@ -602,3 +602,30 @@ input[type="range"].range::-moz-range-thumb {
 ::highlight(pdf-tts) {
   background-color: var(--accent-soft);
 }
+
+/* -- fixed-layout books ----------------------------------------------
+   A pre-paginated EPUB (comic, picture book, textbook spread) is rendered by
+   foliate's `foliate-fxl`, whose pages are the book's own art. There is no
+   typography to override and no injected stylesheet reaches them, so the
+   night palette can only arrive as a filter on the page iframe — foliate
+   exposes it as the `filter` part, and the view element forwards it out
+   here. `hue-rotate` puts colours back on the right side of the wheel, the
+   same trick the PDF night path uses.
+
+   🔴 The attribute is set only for a pre-paginated book, and only when the
+   reader has asked for inverted pictures. The paginator marks its section
+   frames with the same `part="filter"` (paginator.js
+   `setAttribute('part', 'filter')`), so flagging the view on a reflowable
+   book inverts the *finished* night page — `#15181d` paper and `#c9ced8` ink
+   come back out as a light page with dark ink, photographs inverted too,
+   which is indistinguishable from night mode not working at all. ---------- */
+foliate-view[data-fxl-night]::part(filter) {
+  filter: invert(1) hue-rotate(180deg);
+}
+
+/* Same opt-in on the prose path (FB2 / CBZ / TXT / MD), which paints its own
+   paper and so never had the inversion — the switch has to mean the same
+   thing whichever renderer is on screen. */
+.invert-book-images img {
+  filter: invert(1) hue-rotate(180deg);
+}
