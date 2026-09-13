@@ -219,6 +219,19 @@ function AiForm({ initial }: { initial: AiConfig }) {
             autoComplete="off"
           />
         </ConfigField>
+        <ConfigField
+          label="DeepL API Key"
+          hint="可选。填了之后划词翻译走 DeepL（免费版 Key 以 :fx 结尾），更即时、更准；留空则用上面的 AI 模型翻译。"
+        >
+          <GlassInput
+            type="password"
+            value={draft.deeplKey}
+            onChange={(event) => set("deeplKey")(event.target.value)}
+            placeholder="DeepL-Auth-Key…"
+            aria-label="DeepL API Key"
+            autoComplete="off"
+          />
+        </ConfigField>
         <ConfigField label="模型名称" hint="例如 gpt-4o-mini、qwen2.5、deepseek-chat。">
           <GlassInput
             value={draft.model}

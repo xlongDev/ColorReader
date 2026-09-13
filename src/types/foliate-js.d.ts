@@ -89,7 +89,10 @@ declare module "foliate-js/view.js" {
     resolveNavigation(target: string | number): { index: number; anchor: unknown };
     /** Draws (or with `remove`, erases) one overlayer annotation. `value` is a
      *  CFI; the caller paints it from the `draw-annotation` event. */
-    addAnnotation(annotation: { value: string }, remove?: boolean): Promise<void>;
+    addAnnotation(
+      annotation: { value: string; color?: string | null; style?: string | null },
+      remove?: boolean,
+    ): Promise<void>;
     deleteAnnotation(annotation: { value: string }): Promise<void>;
     /** `value.startsWith('foliate-search:')` marks a transient search highlight. */
     clearSearch(): void;

@@ -1,5 +1,6 @@
 import type { Annotation } from "@/types/ipc";
 
+import { inkWash } from "./selection";
 import type { TextRange } from "./selection";
 
 /**
@@ -121,22 +122,60 @@ export function layerOffsetAtPoint(x: number, y: number, container: HTMLElement)
   return joinedOffset(nodes, node, offset);
 }
 
-/** Paints the page's annotations with the CSS Custom Highlight API. All
- *  mounted pages share one highlight name: each page keeps its own ranges and
- *  every repaint rebuilds the union. Pages without Highlight support (none
- *  today, but the API is young) skip painting silently — the annotation
- *  drawer stays the source of truth. */
+/**
+ * Paints the page's annotations with the CSS Custom Highlight API. Mounted
+ * pages share a set of highlight names — one per ink — and every repaint
+ * rebuilds the unions. Pages without Highlight support (none today, but the
+ * API is young) skip painting silently — the annotation drawer stays the
+ * source of truth.
+ *
+ * ponytail: every style paints as a colour wash here — WebKit's `::highlight`
+ * styling of `text-decoration` is not dependable, and an underline that
+ * renders as nothing is worse than one that renders as a wash. The foliate
+ * and prose paths own the real shapes.
+ */
 const HIGHLIGHT_NAME = "pdf-notes";
-const painted = new Map<number, Range[]>();
+/** Static CSS rule for the legacy (uncoloured) ink; custom inks get their own
+ *  names generated below. */
+const painted = new Map<number, { ranges: Range[]; names: string[] }>();
+
+/** One dynamic rule per ink; ids are colour-derived so repeated repaints of
+ *  the same highlight reuse the rule instead of growing the sheet. */
+const styleSheetId = "pdf-notes-inks";
+function inkName(color: string): string {
+  return `pdf-notes-${color.replace(/[^a-zA-Z0-9]/g, "").toLowerCase()}`;
+}
+
+function ensureInkRule(color: string): string {
+  const name = inkName(color);
+  let sheet = document.getElementById(styleSheetId) as HTMLStyleElement | null;
+  if (!sheet) {
+    sheet = document.createElement("style");
+    sheet.id = styleSheetId;
+    document.head.append(sheet);
+  }
+  const rule = `::highlight(${name}) { background-color: ${inkWash(color, 0.35)} }`;
+  if (!sheet.textContent?.includes(rule)) sheet.append(rule);
+  return name;
+}
 
 function repaint() {
   if (typeof CSS === "undefined" || !("highlights" in CSS)) return;
-  const all: Range[] = [];
-  for (const ranges of painted.values()) all.push(...ranges);
-  if (all.length === 0) {
-    CSS.highlights.delete(HIGHLIGHT_NAME);
-  } else {
-    CSS.highlights.set(HIGHLIGHT_NAME, new Highlight(...all));
+  const byName = new Map<string, Range[]>();
+  for (const { ranges, names } of painted.values()) {
+    ranges.forEach((range, index) => {
+      const name = names[index] ?? HIGHLIGHT_NAME;
+      const list = byName.get(name) ?? [];
+      list.push(range);
+      byName.set(name, list);
+    });
+  }
+  for (const [name, ranges] of byName) {
+    CSS.highlights.set(name, new Highlight(...ranges));
+  }
+  // Drop the names this repaint no longer covers.
+  for (const name of Array.from(CSS.highlights.keys())) {
+    if (name.startsWith(HIGHLIGHT_NAME) && !byName.has(name)) CSS.highlights.delete(name);
   }
 }
 
@@ -148,6 +187,7 @@ export function paintPageHighlights(
   if (typeof CSS === "undefined" || !("highlights" in CSS)) return;
   const { nodes } = walkLayer(container);
   const ranges: Range[] = [];
+  const names: string[] = [];
   for (const annotation of annotations) {
     if (annotation.endChar <= annotation.startChar) continue;
     const from = nodeAndOffset(nodes, annotation.startChar);
@@ -157,8 +197,9 @@ export function paintPageHighlights(
     range.setStart(from.node, from.at);
     range.setEnd(to.node, to.at);
     ranges.push(range);
+    names.push(annotation.color ? ensureInkRule(annotation.color) : HIGHLIGHT_NAME);
   }
-  painted.set(pageNumber, ranges);
+  painted.set(pageNumber, { ranges, names });
   repaint();
 }
 

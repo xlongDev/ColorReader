@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
-import type { Annotation, NewAnnotation } from "@/types/ipc";
+import type { Annotation, AnnotationStyle, NewAnnotation } from "@/types/ipc";
 
 const annotationsKey = (bookId: string) => ["annotations", bookId];
 
@@ -49,6 +49,25 @@ export function useDeleteAnnotation(bookId: string | null) {
       if (!bookId) return;
       queryClient.setQueryData<Annotation[]>(annotationsKey(bookId), (old = []) =>
         old.filter((annotation) => annotation.id !== id),
+      );
+    },
+  });
+}
+
+/** Restyles a highlight in place (the toolbar's re-colour / re-shape path). */
+export function useUpdateAnnotation(bookId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, color, style }: { id: string; color?: string; style?: AnnotationStyle }) => {
+      if (!bookId || !isDesktopRuntime) {
+        return Promise.resolve<Annotation | null>(null);
+      }
+      return ipc.annotationUpdate(id, color ?? null, style ?? null);
+    },
+    onSuccess: (updated) => {
+      if (!bookId || !updated) return;
+      queryClient.setQueryData<Annotation[]>(annotationsKey(bookId), (old = []) =>
+        old.map((annotation) => (annotation.id === updated.id ? updated : annotation)),
       );
     },
   });

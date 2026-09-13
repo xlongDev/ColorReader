@@ -73,6 +73,12 @@ pub struct PackedAnnotation {
     pub start_char: usize,
     pub end_char: usize,
     pub text: String,
+    /// Ink colour and paint style; `default` keeps packs made before these
+    /// existed readable, and older app versions ignore the extra fields.
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub style: Option<String>,
 }
 
 /// A pack's contents, pulled out of the archive.
@@ -121,6 +127,8 @@ pub fn export(
                 start_char: annotation.start_char,
                 end_char: annotation.end_char,
                 text: annotation.text,
+                color: annotation.color,
+                style: annotation.style,
             })
             .collect();
         Ok(Reading { progress: book.progress, favorite: book.favorite, annotations })
@@ -171,6 +179,8 @@ pub fn apply_reading(conn: &Connection, book_id: &str, reading: &Reading) -> App
                 packed.end_char,
                 &packed.text,
                 None,
+                packed.color.as_deref(),
+                packed.style.as_deref(),
             )?;
         }
     }
@@ -434,7 +444,7 @@ mod tests {
             .with(|conn| {
                 repository::set_progress(conn, &id, 0.25, None)?;
                 repository::set_favorite(conn, &id, true)?;
-                annotations::create(conn, &id, 0, 1, 3, "你好", None)?;
+                annotations::create(conn, &id, 0, 1, 3, "你好", None, None, None)?;
                 Ok(())
             })
             .expect("seed reading state");

@@ -11,11 +11,13 @@ interface SearchPanelProps {
   bookId?: string | null;
   /** `needle` is handed back so the reader can highlight what was searched. */
   onPick: (hit: SearchHit, needle: string) => void;
+  /** Query the panel opens with (the toolbar's 搜索 action). */
+  initialQuery?: string;
 }
 
 /** Input plus hit list. Fills whatever container it is placed in. */
-export function SearchPanel({ bookId = null, onPick }: SearchPanelProps) {
-  const [needle, setNeedle] = useState("");
+export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: SearchPanelProps) {
+  const [needle, setNeedle] = useState(initialQuery);
   const query = useSearch(needle, bookId);
   const trimmed = needle.trim();
 

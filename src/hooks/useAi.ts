@@ -12,6 +12,7 @@ const OFFLINE_CONFIG: AiConfig = {
   systemPrompt: "",
   embeddingModel: "",
   rerankModel: "",
+  deeplKey: "",
 };
 
 /** Persisted AI config. `staleTime: Infinity` — it only changes through this app. */

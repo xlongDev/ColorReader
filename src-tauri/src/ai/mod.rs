@@ -11,6 +11,7 @@
 
 pub mod chat;
 pub mod embeddings;
+pub mod lookup;
 pub mod rerank;
 
 use rusqlite::OptionalExtension;
@@ -39,6 +40,11 @@ pub struct AiConfig {
     /// second-stage ranking. Same endpoint and key as chat.
     #[serde(default)]
     pub rerank_model: String,
+    /// DeepL auth key for the selection toolbar's instant translation; `:fx`
+    /// marks a free-tier key. Empty falls back to the chat model for
+    /// translation.
+    #[serde(default)]
+    pub deepl_key: String,
 }
 
 impl Default for AiConfig {
@@ -50,6 +56,7 @@ impl Default for AiConfig {
             system_prompt: DEFAULT_SYSTEM_PROMPT.to_string(),
             embedding_model: String::new(),
             rerank_model: String::new(),
+            deepl_key: String::new(),
         }
     }
 }
@@ -92,6 +99,7 @@ pub fn set_config(library: &Library, next: &AiConfig) -> AppResult<()> {
         system_prompt: next.system_prompt.clone(),
         embedding_model: next.embedding_model.trim().to_string(),
         rerank_model: next.rerank_model.trim().to_string(),
+        deepl_key: next.deepl_key.trim().to_string(),
     };
     let json = serde_json::to_string(&stored)?;
     library.with(|conn| {
@@ -182,6 +190,7 @@ mod tests {
                 system_prompt: "简短回答".into(),
                 embedding_model: "nomic-embed-text".into(),
                 rerank_model: " bge-reranker-v2-m3 ".into(),
+                deepl_key: " key:fx ".into(),
             },
         )
         .expect("save");

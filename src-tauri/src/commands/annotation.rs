@@ -8,6 +8,7 @@ use crate::state::AppState;
 
 /// `annotation.create` — records one highlight and returns it.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn annotation_create(
     state: State<'_, AppState>,
     book_id: String,
@@ -17,6 +18,9 @@ pub fn annotation_create(
     text: String,
     // Opaque foliate anchor (a CFI) for Kindle books; absent otherwise.
     cfi: Option<String>,
+    // Ink colour (hex) and paint style; absent = the legacy marker look.
+    color: Option<String>,
+    style: Option<String>,
 ) -> AppResult<Annotation> {
     state.library.with(|conn| {
         annotations::create(
@@ -27,8 +31,21 @@ pub fn annotation_create(
             end_char,
             &text,
             cfi.as_deref(),
+            color.as_deref(),
+            style.as_deref(),
         )
     })
+}
+
+/// `annotation.update` — restyles one highlight (re-colour / re-shape).
+#[tauri::command]
+pub fn annotation_update(
+    state: State<'_, AppState>,
+    id: String,
+    color: Option<String>,
+    style: Option<String>,
+) -> AppResult<Annotation> {
+    state.library.with(|conn| annotations::update(conn, &id, color.as_deref(), style.as_deref()))
 }
 
 /// `annotation.list` — every highlight for a book, in reading order.

@@ -15,7 +15,10 @@
     "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://github.com/xlongDev/ColorReader*" }]
+      "allow": [
+        { "url": "https://github.com/xlongDev/ColorReader*" },
+        { "url": "https://*.wikipedia.org/wiki/*" }
+      ]
     }
   ]
 }

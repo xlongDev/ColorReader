@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 import type { LayoutMode, PageTransition } from "@/features/reader/theme";
 import type { SpeechGranularity } from "@/features/reader/speech";
+import type { AnnotationStyle } from "@/types/ipc";
 
 /** Reading typography and viewing preferences, persisted across sessions. */
 interface ReaderState {
@@ -63,6 +64,10 @@ interface ReaderState {
    *  readers who want the whole page dim, e.g. a comic whose pages are one
    *  bright bitmap each. */
   invertBookImages: boolean;
+  /** Last ink colour the reader picked in the selection toolbar (hex). */
+  highlightColor: string;
+  /** Last paint style the reader picked in the selection toolbar. */
+  highlightStyle: AnnotationStyle;
   /** Applies a partial settings patch in one call. */
   update: (
     patch: Partial<
@@ -98,6 +103,16 @@ export const DEFAULT_MARGIN_Y = 64;
 export const MIN_AUTO_SCROLL_SPEED = 20;
 export const MAX_AUTO_SCROLL_SPEED = 480;
 export const DEFAULT_AUTO_SCROLL_SPEED = 80;
+
+/** Ink palette of the selection toolbar, in display order. The first entry is
+ *  the legacy marker yellow, so old highlights and new ones read alike. */
+export const HIGHLIGHT_COLORS = [
+  { hex: "#ffd12e", label: "黄色" },
+  { hex: "#f76f6f", label: "红色" },
+  { hex: "#7cd92c", label: "绿色" },
+  { hex: "#56aee2", label: "蓝色" },
+  { hex: "#b08fe8", label: "紫色" },
+] as const;
 
 /**
  * Folds one animation frame of auto-scroll into a whole-pixel delta plus the
@@ -163,6 +178,8 @@ export const useReaderSettings = create<ReaderState>()(
       pdfGap: 0,
       pdfInvertImages: false,
       invertBookImages: false,
+      highlightColor: HIGHLIGHT_COLORS[0]!.hex,
+      highlightStyle: "highlight",
       update: (patch) => set(patch),
       setReadingSpeed: (charsPerMinute) =>
         set({

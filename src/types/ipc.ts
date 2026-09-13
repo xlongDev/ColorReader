@@ -94,6 +94,9 @@ export interface ChapterContent {
 
 /** Mirrors `src-tauri/src/library/annotations.rs`. */
 
+/** How a highlight paints its ink. */
+export type AnnotationStyle = "highlight" | "underline" | "squiggly";
+
 export interface Annotation {
   id: string;
   bookId: string;
@@ -109,6 +112,10 @@ export interface Annotation {
    * every format the (chapter, offset) pair already locates.
    */
   cfi: string | null;
+  /** Ink colour as a hex string; `null` = the legacy marker yellow. */
+  color: string | null;
+  /** Paint style; `null` reads as `"highlight"`. */
+  style: AnnotationStyle | null;
   createdAt: number;
 }
 
@@ -120,6 +127,8 @@ export interface NewAnnotation {
   endChar: number;
   text: string;
   cfi?: string;
+  color?: string;
+  style?: AnnotationStyle;
 }
 
 /** Mirrors `src-tauri/src/library/bookmarks.rs`. */
@@ -176,6 +185,26 @@ export interface AiConfig {
   embeddingModel: string;
   /** Reranker for retrieval; empty disables the second-stage ranking. */
   rerankModel: string;
+  /**
+   * DeepL auth key for the selection toolbar's instant translation; a key
+   * ending in `:fx` is the free tier. Empty falls back to AI translation.
+   */
+  deeplKey: string;
+}
+
+/** One DeepL result: the rendered text plus DeepL's guess at the source. */
+export interface Translation {
+  text: string;
+  detectedLang: string | null;
+}
+
+/** Mirrors `src-tauri/src/ai/lookup.rs`. */
+export interface WikiSummary {
+  title: string;
+  extract: string;
+  thumbnail: string | null;
+  pageUrl: string;
+  lang: string;
 }
 
 export type AiRole = "system" | "user" | "assistant";

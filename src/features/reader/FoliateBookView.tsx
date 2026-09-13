@@ -8,6 +8,7 @@ import { speechUnits, unitsFromOffset, TTS_WASH_BOOK } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
 import { buildStyleSheet } from "./foliateStyle";
 import type { FoliateStyle } from "./foliateStyle";
+import { inkWash } from "./selection";
 
 /** Where the reader is. `cfi` is opaque — hand it back to foliate verbatim. */
 export type FoliateLocation = {
@@ -151,10 +152,12 @@ const forwardKeyFromSection = (event: KeyboardEvent) => {
 
 /**
  * Payload of foliate's `draw-annotation`: the caller owns the ink, and only
- * it knows which colour a highlight should be.
+ * it knows which colour and shape a highlight should be. `annotation` echoes
+ * whatever the caller passed to `addAnnotation`.
  */
 type DrawAnnotationDetail = {
   draw?: (paint: typeof Overlayer.highlight, options?: Record<string, unknown>) => void;
+  annotation?: { value?: string; color?: string | null; style?: string | null };
 };
 
 /** Payload of foliate's `show-annotation`: a click on a painted highlight. */
@@ -542,11 +545,6 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<View | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // Highlight ink. A fixed translucent wash rather than the app's `--accent`
-  // token: the overlay lives inside the book's iframe, which has none of the
-  // app's custom properties, and the wash has to survive both paper colours.
-  const highlightColor = style.dark ? "rgba(250, 219, 109, 0.26)" : "rgba(255, 209, 46, 0.36)";
-  const highlightRef = useRef(highlightColor);
   // Read-aloud wash. The prose path draws the same one with a `<mark>`, so a
   // reader switching a book's format sees one marker, not two styles.
   // Mirrored into a ref for `focusUnit`, which is created once and cannot
@@ -585,7 +583,9 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   }, [onTocLoaded]);
   // Highlights and read-aloud units, read by the section handlers below.
   const annotationsRef = useRef<readonly Annotation[]>(annotations ?? []);
-  const paintedRef = useRef<Set<string>>(new Set());
+  // Painted highlights: CFI → the ink signature it was painted with, so a
+  // restyle repaints even though the anchor has not changed.
+  const paintedRef = useRef<Map<string, string>>(new Map());
   const blocksRef = useRef<TextBlock[]>([]);
   // Where the last selection started, parked for 「朗读此处」: the pill clears
   // the browser's own selection the instant it is tapped.
@@ -598,18 +598,29 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
    * the `draw-annotation` event; sections that are not loaded simply resolve
    * to nothing, so this is safe to call for the whole list at once and is
    * repeated whenever a section mounts.
+   *
+   * Painted state is keyed by CFI but valued by an ink signature, so a
+   * restyle (the toolbar's re-colour path) repaints even though the anchor
+   * has not changed.
    */
   const syncAnnotations = useCallback(() => {
     const view = viewRef.current;
     if (!view) return;
-    const next = new Set(
-      annotationsRef.current.flatMap((annotation) => (annotation.cfi ? [annotation.cfi] : [])),
-    );
-    for (const cfi of paintedRef.current) {
-      if (!next.has(cfi)) void view.deleteAnnotation({ value: cfi });
+    const ink = (annotation: Annotation) => `${annotation.color ?? ""}|${annotation.style ?? ""}`;
+    const next = new Map<string, Annotation>();
+    for (const annotation of annotationsRef.current) {
+      if (annotation.cfi) next.set(annotation.cfi, annotation);
     }
-    for (const cfi of next) void view.addAnnotation({ value: cfi });
-    paintedRef.current = next;
+    for (const [cfi, signature] of paintedRef.current) {
+      const saved = next.get(cfi);
+      if (!saved || ink(saved) !== signature) void view.deleteAnnotation({ value: cfi });
+    }
+    for (const [cfi, saved] of next) {
+      if (paintedRef.current.get(cfi) !== ink(saved)) {
+        void view.addAnnotation({ value: cfi, color: saved.color, style: saved.style });
+      }
+    }
+    paintedRef.current = new Map([...next.entries()].map(([cfi, saved]) => [cfi, ink(saved)]));
   }, []);
 
   /** Turns a section's DOM selection into a CFI-anchored `FoliateSelection`. */
@@ -654,9 +665,31 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   // The three view events that carry annotations: paint requests, clicks on a
   // painted highlight, and a freshly mounted section (whose overlayer is new,
   // so every highlight in it has to be drawn again).
+  /**
+   * Paints one annotation in its own ink: a translucent wash, an underline or
+   * a squiggle, in the colour the reader picked. The legacy default (no
+   * stored colour) is the marker yellow the reader has always seen.
+   */
   const onDrawAnnotation = useCallback((event: Event) => {
     const detail = (event as CustomEvent<DrawAnnotationDetail>).detail;
-    detail?.draw?.(Overlayer.highlight, { color: highlightRef.current });
+    const draw = detail?.draw;
+    if (!draw) return;
+    const hex = detail.annotation?.color ?? "#ffd12e";
+    switch (detail.annotation?.style ?? "highlight") {
+      case "underline":
+        draw(Overlayer.underline, { color: hex, width: 2 });
+        return;
+      case "squiggly":
+        draw(Overlayer.squiggly, { color: hex, width: 1.5 });
+        return;
+      default:
+        draw(Overlayer.highlight, {
+          // Dark paper needs a lighter hand: the same wash reads heavier
+          // against it (the legacy ink's two alphas, kept).
+          color: inkWash(hex, styleRef.current.dark ? 0.26 : 0.36),
+          radius: 2,
+        });
+    }
   }, []);
 
   const onShowAnnotation = useCallback((event: Event) => {
@@ -832,7 +865,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     return () => {
       cancelled = true;
       viewRef.current = null;
-      paintedRef.current = new Set();
+      paintedRef.current = new Map();
       ttsRef.current = null;
       if (view) {
         view.renderer?.removeEventListener("load", attachSection);
@@ -870,13 +903,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   // paginator keeps across section changes.
   useEffect(() => {
     styleRef.current = style;
-    highlightRef.current = highlightColor;
     ttsColorRef.current = ttsWash(style.dark);
     const view = viewRef.current;
     if (!view) return;
     view.renderer?.setStyles?.(buildStyleSheet(style));
     syncPageInvert(view, style);
-  }, [style, highlightColor]);
+  }, [style]);
 
   // Highlights: repaint whenever the list changes. foliate draws each one
   // through `draw-annotation`, so a brand-new highlight appears immediately.

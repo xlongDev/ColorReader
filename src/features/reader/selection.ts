@@ -1,6 +1,20 @@
 import type { Annotation } from "@/types/ipc";
 
 /**
+ * Blows a hex ink back to display strength: a highlight wash must survive
+ * both paper colours, so the stored hex stays pure and the renderer knocks it
+ * back. Shared by every rendering path (prose marks, foliate overlays, PDF
+ * custom highlights) so one colour reads the same everywhere.
+ */
+export function inkWash(hex: string, alpha: number): string {
+  const value = hex.replace("#", "");
+  const full = value.length === 3 ? [...value].map((c) => c + c).join("") : value;
+  const rgb = [0, 2, 4].map((i) => Number.parseInt(full.slice(i, i + 2), 16));
+  if (rgb.some((n) => !Number.isFinite(n))) return hex;
+  return `rgba(${rgb[0]}, ${rgb[1]}, ${rgb[2]}, ${alpha})`;
+}
+
+/**
  * A chapter's paragraphs are rendered as `<p data-para-idx>` elements and joined
  * with `\n` into one string. Highlight offsets are UTF-16 code-unit counts into
  * that joined string, matching JavaScript's `String#length` and `String#slice`.

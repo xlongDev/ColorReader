@@ -9,6 +9,8 @@ interface FoliateSearchPanelProps {
   onSearch: (query: string) => Promise<FoliateSearchHit[]>;
   /** Jump to one hit; the engine highlights it in the page already. */
   onPick: (cfi: string) => void;
+  /** Query the panel opens with (the toolbar's 搜索 action); runs at once. */
+  initialQuery?: string;
 }
 
 /** Debounce before a keystroke hits the book, in ms. */
@@ -23,8 +25,12 @@ const SEARCH_DELAY_MS = 260;
  * query therefore runs inside the reading engine, which returns a CFI per hit
  * and paints every match in the page as it goes.
  */
-export function FoliateSearchPanel({ onSearch, onPick }: FoliateSearchPanelProps) {
-  const [needle, setNeedle] = useState("");
+export function FoliateSearchPanel({
+  onSearch,
+  onPick,
+  initialQuery = "",
+}: FoliateSearchPanelProps) {
+  const [needle, setNeedle] = useState(initialQuery);
   // One state, not three: the query rides along with its result, so a stale
   // run is simply "not about this query any more" instead of something the
   // effect has to reset on every keystroke.

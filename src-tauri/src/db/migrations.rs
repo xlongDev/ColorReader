@@ -358,6 +358,19 @@ ALTER TABLE annotations ADD COLUMN cfi TEXT;
 ALTER TABLE books ADD COLUMN location TEXT;
 "#,
     },
+    Migration {
+        version: 12,
+        name: "annotations_color_and_style",
+        // Per-highlight ink. `color` is the frontend's own hex string (it also
+        // feeds SVG overlays and CSS custom-highlight rules, so it stays
+        // opaque here); `style` is one of "highlight" | "underline" |
+        // "squiggly". Both nullable: legacy rows read as the original
+        // translucent marker look, so nothing re-styles underneath the reader.
+        sql: r#"
+ALTER TABLE annotations ADD COLUMN color TEXT;
+ALTER TABLE annotations ADD COLUMN style TEXT;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.
@@ -473,7 +486,7 @@ mod tests {
         )
         .expect("link");
 
-        assert_eq!(migrate(&mut conn).expect("migrate"), 11);
+        assert_eq!(migrate(&mut conn).expect("migrate"), MIGRATIONS.len() as u32);
 
         let title: String = conn
             .query_row("SELECT title FROM books WHERE id = 'b'", [], |row| row.get(0))

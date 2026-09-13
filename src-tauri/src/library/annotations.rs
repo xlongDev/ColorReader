@@ -24,14 +24,32 @@ pub struct Annotation {
     /// Opaque re-anchoring key for foliate-rendered books (a CFI). `None` for
     /// every format the (chapter, offset) pair already locates.
     pub cfi: Option<String>,
+    /// Highlight ink as a hex string (e.g. "#ffd12e"); `None` = legacy yellow.
+    pub color: Option<String>,
+    /// How the ink paints: "highlight" (translucent wash), "underline" or
+    /// "squiggly"; `None` reads as "highlight".
+    pub style: Option<String>,
     pub created_at: i64,
+}
+
+/// Allowed `style` values; anything else is rejected at the trust boundary.
+const STYLES: [&str; 3] = ["highlight", "underline", "squiggly"];
+
+fn validated_style(style: Option<&str>) -> AppResult<Option<String>> {
+    match style {
+        None => Ok(None),
+        Some(value) if STYLES.contains(&value) => Ok(Some(value.to_string())),
+        Some(other) => Err(AppError::InvalidArgument(format!("未知的标注样式: {other}"))),
+    }
 }
 
 /// Validates and inserts one highlight, returning it with its generated id.
 ///
 /// `text` is trimmed and must not be empty; the range must be non-empty.
 /// `cfi` carries the foliate anchor of a Kindle highlight; it is stored
-/// verbatim and never interpreted here.
+/// verbatim and never interpreted here. `color` is the frontend's hex string,
+/// `style` one of `STYLES`; both optional and stored verbatim.
+#[allow(clippy::too_many_arguments)]
 pub fn create(
     conn: &Connection,
     book_id: &str,
@@ -40,6 +58,8 @@ pub fn create(
     end_char: usize,
     text: &str,
     cfi: Option<&str>,
+    color: Option<&str>,
+    style: Option<&str>,
 ) -> AppResult<Annotation> {
     let text = text.trim();
     if text.is_empty() {
@@ -48,6 +68,7 @@ pub fn create(
     if start_char >= end_char {
         return Err(AppError::InvalidArgument("高亮范围无效".into()));
     }
+    let style = validated_style(style)?;
 
     let annotation = Annotation {
         id: uuid::Uuid::new_v4().to_string(),
@@ -57,12 +78,14 @@ pub fn create(
         end_char,
         text: text.to_string(),
         cfi: cfi.map(str::to_string),
+        color: color.map(str::to_string),
+        style,
         created_at: super::now_seconds(),
     };
     conn.execute(
         "INSERT INTO annotations \
-         (id, book_id, chapter_idx, start_char, end_char, text, cfi, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+         (id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, created_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             annotation.id,
             annotation.book_id,
@@ -71,17 +94,58 @@ pub fn create(
             annotation.end_char as i64,
             annotation.text,
             annotation.cfi,
+            annotation.color,
+            annotation.style,
             annotation.created_at,
         ],
     )?;
     Ok(annotation)
 }
 
+/// Restyles one highlight (the toolbar's re-colour / re-shape path). Only the
+/// fields that are `Some` change; the row is read back so the cache updates
+/// from the database's own answer.
+pub fn update(
+    conn: &Connection,
+    id: &str,
+    color: Option<&str>,
+    style: Option<&str>,
+) -> AppResult<Annotation> {
+    let style = validated_style(style)?;
+    let changed = conn.execute(
+        "UPDATE annotations SET \
+         color = COALESCE(?2, color), style = COALESCE(?3, style) WHERE id = ?1",
+        params![id, color, style],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(id.to_string()));
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, \
+         created_at FROM annotations WHERE id = ?1",
+    )?;
+    stmt.query_row(params![id], |row| {
+        Ok(Annotation {
+            id: row.get(0)?,
+            book_id: row.get(1)?,
+            chapter_idx: row.get::<_, i64>(2)? as usize,
+            start_char: row.get::<_, i64>(3)? as usize,
+            end_char: row.get::<_, i64>(4)? as usize,
+            text: row.get(5)?,
+            cfi: row.get(6)?,
+            color: row.get(7)?,
+            style: row.get(8)?,
+            created_at: row.get(9)?,
+        })
+    })
+    .map_err(|_| AppError::NotFound(id.to_string()))
+}
+
 /// Every highlight for a book, ordered by chapter then position.
 pub fn list(conn: &Connection, book_id: &str) -> AppResult<Vec<Annotation>> {
     let mut stmt = conn.prepare(
-        "SELECT id, book_id, chapter_idx, start_char, end_char, text, cfi, created_at \
-         FROM annotations WHERE book_id = ?1 ORDER BY chapter_idx, start_char",
+        "SELECT id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, \
+         created_at FROM annotations WHERE book_id = ?1 ORDER BY chapter_idx, start_char",
     )?;
     let mut rows = stmt.query(params![book_id])?;
     let mut annotations = Vec::new();
@@ -94,7 +158,9 @@ pub fn list(conn: &Connection, book_id: &str) -> AppResult<Vec<Annotation>> {
             end_char: row.get::<_, i64>(4)? as usize,
             text: row.get(5)?,
             cfi: row.get(6)?,
-            created_at: row.get(7)?,
+            color: row.get(7)?,
+            style: row.get(8)?,
+            created_at: row.get(9)?,
         });
     }
     Ok(annotations)
@@ -130,8 +196,8 @@ mod tests {
     #[test]
     fn highlights_round_trip_and_list_in_reading_order() {
         let conn = seed();
-        let second = create(&conn, "b", 1, 2, 6, "later", None).expect("create");
-        let first = create(&conn, "b", 0, 0, 4, " start ", None).expect("create");
+        let second = create(&conn, "b", 1, 2, 6, "later", None, None, None).expect("create");
+        let first = create(&conn, "b", 0, 0, 4, " start ", None, None, None).expect("create");
 
         assert_eq!(first.text, "start", "文本要裁剪首尾空白");
         assert_ne!(first.id, second.id);
@@ -147,11 +213,11 @@ mod tests {
     fn empty_text_or_range_is_rejected() {
         let conn = seed();
         assert!(matches!(
-            create(&conn, "b", 0, 0, 1, "   ", None),
+            create(&conn, "b", 0, 0, 1, "   ", None, None, None),
             Err(AppError::InvalidArgument(_))
         ));
         assert!(matches!(
-            create(&conn, "b", 0, 3, 3, "x", None),
+            create(&conn, "b", 0, 3, 3, "x", None, None, None),
             Err(AppError::InvalidArgument(_))
         ));
     }
@@ -160,7 +226,7 @@ mod tests {
     fn cfi_is_stored_and_read_back() {
         let conn = seed();
         let cfi = "epubcfi(/6/4!/4/2/2:3)";
-        create(&conn, "b", 0, 3, 9, "quoted", Some(cfi)).expect("create");
+        create(&conn, "b", 0, 3, 9, "quoted", Some(cfi), None, None).expect("create");
         let all = list(&conn, "b").expect("list");
         assert_eq!(all[0].cfi.as_deref(), Some(cfi), "CFI 要原样持久化");
     }
@@ -172,9 +238,26 @@ mod tests {
     }
 
     #[test]
+    fn update_restyles_partially_and_validates() {
+        let conn = seed();
+        let made = create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
+        let styled = update(&conn, &made.id, Some("#7cd92c"), Some("squiggly")).expect("update");
+        assert_eq!(styled.color.as_deref(), Some("#7cd92c"));
+        assert_eq!(styled.style.as_deref(), Some("squiggly"));
+        // Partial: a colour-only update keeps the previous style.
+        let recolored = update(&conn, &made.id, Some("#ffd12e"), None).expect("update");
+        assert_eq!(recolored.style.as_deref(), Some("squiggly"));
+        assert!(matches!(
+            update(&conn, &made.id, None, Some("bold")),
+            Err(AppError::InvalidArgument(_))
+        ));
+        assert!(matches!(update(&conn, "nope", Some("#fff"), None), Err(AppError::NotFound(_))));
+    }
+
+    #[test]
     fn deleting_a_book_cascades_to_its_highlights() {
         let conn = seed();
-        create(&conn, "b", 0, 0, 2, "hi", None).expect("create");
+        create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
         conn.execute("DELETE FROM books WHERE id = 'b'", []).expect("delete book");
         assert!(list(&conn, "b").expect("list").is_empty(), "外键级联必须清空高亮");
     }

@@ -7,6 +7,7 @@ pub mod annotation;
 pub mod book;
 pub mod bookmark;
 pub mod graph;
+pub mod lookup;
 pub mod rag;
 pub mod reader;
 pub mod search;

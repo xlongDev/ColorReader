@@ -77,6 +77,7 @@ pub async fn ai_test(config: AiConfig) -> AppResult<()> {
         system_prompt: config.system_prompt,
         embedding_model: config.embedding_model,
         rerank_model: config.rerank_model,
+        deepl_key: config.deepl_key,
     };
     if checked.model.is_empty() {
         return Err(AppError::InvalidArgument("模型名称不能为空".into()));

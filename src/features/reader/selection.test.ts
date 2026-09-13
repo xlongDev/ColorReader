@@ -22,6 +22,8 @@ function annotation(chapterIdx: number, startChar: number, endChar: number): Ann
     endChar,
     text: "",
     cfi: null,
+    color: null,
+    style: null,
     createdAt: 0,
   };
 }

@@ -34,6 +34,8 @@ import type {
   SyncChange,
   SyncConfig,
   SystemInfo,
+  Translation,
+  WikiSummary,
 } from "@/types/ipc";
 
 /** Event the backend emits once per file while an import batch runs. */
@@ -136,7 +138,14 @@ export const ipc = {
       endChar: input.endChar,
       text: input.text,
       cfi: input.cfi ?? null,
+      color: input.color ?? null,
+      style: input.style ?? null,
     });
+  },
+
+  /** Restyles one highlight; `null` keeps that field as stored. */
+  annotationUpdate(id: string, color: string | null, style: string | null): Promise<Annotation> {
+    return invoke<Annotation>("annotation_update", { id, color, style });
   },
 
   annotationList(bookId: string): Promise<Annotation[]> {
@@ -180,6 +189,16 @@ export const ipc = {
   /** Proves endpoint, key and model work together. Does not persist. */
   aiTest(config: AiConfig): Promise<void> {
     return invoke<void>("ai_test", { config });
+  },
+
+  /** One DeepL round trip. Errors when no DeepL key is configured. */
+  lookupTranslate(text: string): Promise<Translation> {
+    return invoke<Translation>("lookup_translate", { text });
+  },
+
+  /** Best-matching Wikipedia article summary for a term. */
+  wikipediaSummary(term: string): Promise<WikiSummary> {
+    return invoke<WikiSummary>("lookup_wikipedia", { term });
   },
 
   /**

@@ -56,12 +56,15 @@ import { SettingsPanel } from "@/features/reader/SettingsPanel";
 import { TocPanel } from "@/features/reader/TocPanel";
 import {
   highlightSegments,
+  inkWash,
   joinedText,
   paragraphAt,
   paragraphStart,
   resolveSelection,
   type TextRange,
 } from "@/features/reader/selection";
+import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionToolbar";
+import type { AnnotationStyle } from "@/types/ipc";
 import { useSpeechVoices, useTts } from "@/features/reader/tts";
 import { TtsPlayer, type SleepChoice, type SleepTimer } from "@/features/reader/TtsPlayer";
 import { defaultVoice, engineOf } from "@/features/reader/voice";
@@ -81,7 +84,12 @@ import {
   type PageTransition,
 } from "@/features/reader/theme";
 import { SearchPanel } from "@/features/search/SearchPanel";
-import { useAnnotations, useCreateAnnotation, useDeleteAnnotation } from "@/hooks/useAnnotations";
+import {
+  useAnnotations,
+  useCreateAnnotation,
+  useDeleteAnnotation,
+  useUpdateAnnotation,
+} from "@/hooks/useAnnotations";
 import { useBookmarks, useCreateBookmark, useDeleteBookmark } from "@/hooks/useBookmarks";
 import { useAiChat } from "@/hooks/useAi";
 import { useResolvedTheme } from "@/hooks/useTheme";
@@ -102,6 +110,7 @@ import {
   foldScrollDelta,
   updateReadingSpeed,
   useReaderSettings,
+  HIGHLIGHT_COLORS,
 } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
 import { useSettings } from "@/stores/settings";
@@ -432,6 +441,7 @@ function ReaderView({
   const annotationsQuery = useAnnotations(bookId);
   const createAnnotation = useCreateAnnotation(bookId);
   const deleteAnnotation = useDeleteAnnotation(bookId);
+  const updateAnnotation = useUpdateAnnotation(bookId);
   const bookmarksQuery = useBookmarks(bookId);
   const createBookmark = useCreateBookmark(bookId);
   const deleteBookmark = useDeleteBookmark(bookId);
@@ -527,6 +537,16 @@ function ReaderView({
   } | null>(null);
   // Quoted text for the AI drawer; `null` means "use the whole chapter".
   const [aiContext, setAiContext] = useState<string | null>(null);
+  // 词典 / 翻译 / 维基百科 popup over the selection; `null` = closed. The
+  // toolbar closes when it opens — one floating surface at a time.
+  const [lookup, setLookup] = useState<{
+    kind: LookupKind;
+    text: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  // Query the search panel opens with (the toolbar's 搜索 action).
+  const [searchSeed, setSearchSeed] = useState("");
   const [fullscreen, setFullscreen] = useState(false);
   const [autoScrolling, setAutoScrolling] = useState(false);
   // End-of-chapter column alignment spacer; mirror kept for idempotent measures.
@@ -1262,13 +1282,25 @@ function ReaderView({
         event.preventDefault();
         return;
       }
-      if (event.key === "Escape" && panel !== "none") {
-        if (panel === "search") setSearch("");
-        setPanel("none");
-        return;
-      }
-      if (event.key === "Escape" && fullscreen) {
-        void toggleFullscreen();
+      if (event.key === "Escape") {
+        // One floating surface at a time: a lookup closes before any panel.
+        if (lookup) {
+          setLookup(null);
+          return;
+        }
+        if (pending) {
+          window.getSelection()?.removeAllRanges();
+          setPending(null);
+          return;
+        }
+        if (panel !== "none") {
+          if (panel === "search") setSearch("");
+          setPanel("none");
+          return;
+        }
+        if (fullscreen) {
+          void toggleFullscreen();
+        }
         return;
       }
       // Don't hijack typing in any text field (search panel, etc.): a focused
@@ -1303,8 +1335,10 @@ function ReaderView({
     flip,
     fullscreen,
     lightboxIdx,
+    lookup,
     panel,
     paged,
+    pending,
     stepChapter,
     toggleFullscreen,
   ]);
@@ -1845,22 +1879,56 @@ function ReaderView({
     return () => el.removeEventListener("mouseup", onMouseUp);
   }, [chapterData]);
 
-  const createHighlight = (range: TextRange) => {
+  const createHighlight = (range: TextRange, color: string, style: AnnotationStyle) => {
     createAnnotation.mutate(
       {
         chapterIdx: pending?.chapterIdx ?? chapterIdx,
         startChar: range.start,
         endChar: range.end,
         text: range.text,
+        color,
+        style,
         ...(pending?.cfi !== undefined ? { cfi: pending.cfi } : {}),
       },
       {
         onSuccess: () => {
+          // The ink becomes the reader's default, so the next highlight
+          // starts where this one left off.
+          settings.update({ highlightColor: color, highlightStyle: style });
           window.getSelection()?.removeAllRanges();
           setPending(null);
         },
       },
     );
+  };
+
+  /** Restyles an existing highlight (the toolbar's edit mode). */
+  const restyleHighlight = (id: string, color: string, style: AnnotationStyle) => {
+    updateAnnotation.mutate({ id, color, style });
+    settings.update({ highlightColor: color, highlightStyle: style });
+  };
+
+  /** Copies the selection and dismisses the toolbar. */
+  const copySelection = () => {
+    void navigator.clipboard.writeText(pending?.range.text ?? "").catch(() => {
+      // Clipboard can be denied; the toolbar stays open either way.
+    });
+  };
+
+  /** Searches the selection in the book: opens the panel, query pre-filled. */
+  const searchSelection = () => {
+    if (!pending) return;
+    setSearchSeed(pending.range.text.trim());
+    setPanel("search");
+    window.getSelection()?.removeAllRanges();
+    setPending(null);
+  };
+
+  /** 词典 / 翻译 / 维基百科 popup anchored where the toolbar was. */
+  const openLookup = (kind: LookupKind) => {
+    if (!pending) return;
+    setLookup({ kind, text: pending.range.text.trim(), x: pending.x, y: pending.y });
+    setPending(null);
   };
 
   /** Asks the assistant about the current selection. */
@@ -1901,6 +1969,7 @@ function ReaderView({
    * nothing here, because foliate's sections are the container's own.
    */
   const onFoliateSelection = useCallback((selection: FoliateSelection | null) => {
+    setLookup(null);
     if (!selection) {
       setPending(null);
       return;
@@ -2162,15 +2231,58 @@ function ReaderView({
         chapterAnnotations,
         search,
         wash?.source === idx ? wash : undefined,
-      ).map((segment, position) => ({
-        key: `${chapterIdx}-${idx}-${position}`,
-        text: segment.text,
-        highlighted: segment.highlighted,
-        annotationId: segment.annotationId,
-        tts: segment.tts,
-      })),
+      ).map((segment, position) => {
+        // Annotation-backed runs carry their own ink; the toolbar's palette
+        // decides what they look like.
+        const owned = segment.annotationId
+          ? annotations?.find((a) => a.id === segment.annotationId)
+          : undefined;
+        return {
+          key: `${chapterIdx}-${idx}-${position}`,
+          text: segment.text,
+          highlighted: segment.highlighted,
+          annotationId: segment.annotationId,
+          tts: segment.tts,
+          color: owned?.color ?? null,
+          style: owned?.style ?? null,
+        };
+      }),
     }));
   }, [chapterData, chapterIdx, annotations, search, speechSpan]);
+
+  /**
+   * Inline ink for one prose-path annotation run: the translucent wash, the
+   * straight line or the squiggle, in the annotation's colour. `null` colour
+   * means a legacy highlight — the palette's marker yellow.
+   */
+  const markInk = useCallback(
+    (color: string | null, style: AnnotationStyle | null): CSSProperties => {
+      const hex = color ?? HIGHLIGHT_COLORS[0]!.hex;
+      if ((style ?? "highlight") === "underline") {
+        return {
+          textDecoration: "underline",
+          textDecorationColor: hex,
+          textDecorationThickness: 2,
+          textUnderlineOffset: "3px",
+        };
+      }
+      if (style === "squiggly") {
+        return {
+          textDecoration: "underline wavy",
+          textDecorationColor: hex,
+          textDecorationThickness: 1.5,
+          textUnderlineOffset: "3px",
+        };
+      }
+      // Dark paper needs a lighter hand; the foliate overlay uses the same
+      // two alphas, so one highlight reads the same on every path.
+      return {
+        backgroundColor: inkWash(hex, surface.mode === "dark" ? 0.26 : 0.36),
+        borderRadius: 2,
+      };
+    },
+    [surface.mode],
+  );
 
   // A plate chapter is a part-title page: the chapter's own wallpaper plus at
   // most a short heading, no running text. Kindle paints these pages with a
@@ -2415,6 +2527,13 @@ function ReaderView({
       <span className="text-text-3 text-xs">{paged ? "← → 翻页" : "← → 翻章"}</span>
     </>
   );
+
+  // The toolbar's edit mode: when the reader tapped a painted highlight,
+  // `pending` carries its id — resolve it to the whole annotation so the ink
+  // row can show (and change) what it is painted with.
+  const pendingAnnotation = pending?.annotationId
+    ? ((annotations ?? []).find((annotation) => annotation.id === pending.annotationId) ?? null)
+    : null;
 
   return (
     <div className="flex h-full flex-col" style={readerVars}>
@@ -2671,16 +2790,16 @@ function ReaderView({
                           </mark>
                         ) : segment.highlighted ? (
                           segment.annotationId ? (
-                            // An annotation-backed run opens the same pill a
-                            // fresh selection gets, with removal in place of
-                            // creation. The wrapper is an anchor, not a
-                            // `<button>`: buttons render as inline-block even
-                            // with `display: inline`, and one atomic box
-                            // breaks the paragraph's justified line breaking.
-                            // A native anchor is focusable and Enter-clickable
-                            // for free; the inner `<mark>` keeps the highlight
-                            // semantics. A search match has nothing to open
-                            // and stays a plain mark.
+                            // An annotation-backed run opens the same toolbar
+                            // a fresh selection gets, in edit mode. The
+                            // wrapper is an anchor, not a `<button>`: buttons
+                            // render as inline-block even with
+                            // `display: inline`, and one atomic box breaks
+                            // the paragraph's justified line breaking. A
+                            // native anchor is focusable and Enter-clickable
+                            // for free; the inner `<mark>` keeps the
+                            // highlight semantics. The ink comes from the
+                            // annotation's own colour and style.
                             <a
                               key={segment.key}
                               href={`#note-${segment.annotationId}`}
@@ -2703,7 +2822,10 @@ function ReaderView({
                                 });
                               }}
                             >
-                              <mark className="bg-accent-soft rounded-[2px] text-inherit">
+                              <mark
+                                className="text-inherit"
+                                style={markInk(segment.color, segment.style)}
+                              >
                                 {segment.text}
                               </mark>
                             </a>
@@ -2857,66 +2979,53 @@ function ReaderView({
         </div>
       )}
 
-      {pending && (
-        <div
-          className="fixed z-40 -translate-x-1/2"
-          style={{ left: pending.x, top: pending.y - 44 }}
-        >
-          {/* glass-solid, not glass-2: this pill floats over arbitrary page
-              content — a white PDF page washes a blurred glass out entirely. */}
-          <div className="glass-solid shadow-panel flex items-center overflow-hidden rounded-full">
-            {pending.annotationId ? (
-              <button
-                type="button"
-                onClick={() => {
-                  deleteAnnotation.mutate(pending.annotationId!);
+      {/* Selection toolbar (readest-style) or the 词典/翻译 popup — the
+          AnimatePresence inside handles the mount/unmount pop. */}
+      <SelectionOverlay
+        toolbar={
+          pending
+            ? {
+                x: pending.x,
+                y: pending.y,
+                annotation: pendingAnnotation,
+                defaultColor: settings.highlightColor,
+                defaultStyle: settings.highlightStyle,
+                onCopy: copySelection,
+                onSearch: searchSelection,
+                onSpeak: () => {
+                  if (!pending) return;
+                  speakFromSelection(pending.range);
+                  window.getSelection()?.removeAllRanges();
                   setPending(null);
-                }}
-                className="bg-accent text-on-accent px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90"
-              >
-                取消高亮
-              </button>
-            ) : (
-              <button
-                type="button"
-                onClick={() => createHighlight(pending.range)}
-                className="bg-accent text-on-accent px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90"
-              >
-                高亮
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() => askAboutSelection(pending.range)}
-              className="text-text-1 hover:text-accent border-hairline px-3 py-1.5 text-xs font-medium transition-colors"
-            >
-              问 AI
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                speakFromSelection(pending.range);
-                window.getSelection()?.removeAllRanges();
-                setPending(null);
-              }}
-              className="text-text-1 hover:text-accent border-hairline px-3 py-1.5 text-xs font-medium transition-colors"
-            >
-              朗读此处
-            </button>
-            <button
-              type="button"
-              aria-label="取消"
-              onClick={() => {
-                window.getSelection()?.removeAllRanges();
-                setPending(null);
-              }}
-              className="text-text-3 hover:text-text-1 px-2 py-1.5 transition-colors"
-            >
-              <X size={12} />
-            </button>
-          </div>
-        </div>
-      )}
+                },
+                onAsk: () => {
+                  if (!pending) return;
+                  askAboutSelection(pending.range);
+                },
+                onLookup: openLookup,
+                onHighlight: (color, style) => {
+                  if (!pending) return;
+                  createHighlight(pending.range, color, style);
+                },
+                onRestyle: (color, style) => {
+                  if (!pendingAnnotation) return;
+                  restyleHighlight(pendingAnnotation.id, color, style);
+                },
+                onDelete: () => {
+                  if (!pendingAnnotation) return;
+                  deleteAnnotation.mutate(pendingAnnotation.id);
+                  setPending(null);
+                },
+                onClose: () => {
+                  window.getSelection()?.removeAllRanges();
+                  setPending(null);
+                },
+              }
+            : null
+        }
+        lookup={lookup}
+        onLookupClose={() => setLookup(null)}
+      />
 
       {/* One drawer at a time; AnimatePresence keeps it mounted while it
           slides out, and clicking the dimmed backdrop dismisses it. */}
@@ -2988,6 +3097,7 @@ function ReaderView({
             {panel === "search" &&
               (useFoliate ? (
                 <FoliateSearchPanel
+                  initialQuery={searchSeed}
                   onSearch={(query) => foliateRef.current?.search(query) ?? Promise.resolve([])}
                   onPick={(cfi) => {
                     setPanel("none");
@@ -2997,6 +3107,7 @@ function ReaderView({
               ) : (
                 <SearchPanel
                   bookId={bookId}
+                  initialQuery={searchSeed}
                   onPick={(hit, needle) => {
                     setSearch(needle);
                     pickHit(hit);
