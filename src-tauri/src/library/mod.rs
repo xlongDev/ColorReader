@@ -63,6 +63,12 @@ pub fn cover_url(book_id: &str) -> String {
     format!("{}/cover/{book_id}", resource_origin())
 }
 
+/// Absolute URL for a book's source file, streamed by the reader over HTTP
+/// Range requests so opening never transfers the whole file.
+pub fn book_url(book_id: &str) -> String {
+    format!("{}/book/{book_id}", resource_origin())
+}
+
 /// Deletes a book row and its files.
 ///
 /// The row is authoritative: once it is gone the book is gone even if unlinking

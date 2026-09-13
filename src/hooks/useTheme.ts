@@ -1,5 +1,7 @@
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 
+import { isDesktopRuntime } from "@/lib/ipc";
 import { useSettings, type ThemeMode, type TransparencyMode } from "@/stores/settings";
 
 const THEME_MEDIA = "(prefers-color-scheme: light)";
@@ -36,6 +38,20 @@ export function useTheme(): void {
   useEffect(() => {
     applyTransparency(transparency);
   }, [transparency]);
+
+  // The webview's own appearance must follow the app theme, not the OS. A book
+  // can ship `@media (prefers-color-scheme: dark)` rules — the one that started
+  // this set a dark callout background — and that media query follows the window
+  // appearance, which on desktop defaults to the OS. CSS cannot retarget it, so
+  // with macOS in dark mode and the app in light a light-theme read still got
+  // the book's night styles. `null` hands it back to the OS, so `system` still
+  // tracks; a no-op in the browser build.
+  useEffect(() => {
+    if (!isDesktopRuntime) return;
+    void getCurrentWindow()
+      .setTheme(theme === "system" ? null : theme)
+      .catch((cause: unknown) => console.warn("窗口外观同步失败", cause));
+  }, [theme]);
 }
 
 /** The resolved light/dark appearance, reactive to both setting and system. */

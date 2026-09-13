@@ -32,13 +32,19 @@ pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
 ///
 /// Blank pages are kept: dropping them would make the reader's page N differ
 /// from the document's page N, which is the one thing a PDF reader must not do.
+///
+/// Text is optional. pdf-extract matches each font to Unicode and returns an
+/// empty string for fonts it cannot map — measured on a real 413-page book
+/// whose every page came back blank while its structure parsed fine — and a
+/// malformed file can make it panic outright. Neither may cost the reader its
+/// page index: a PDF is fixed layout, so the reader draws the pages with
+/// pdf.js and only needs the count. The text, when there is any, feeds search
+/// and the assistant; when there is none the book still opens and reads.
 pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
     let bytes = std::fs::read(path)?;
-    let pages = pdf_extract::extract_text_from_mem_by_pages(&bytes)
-        .map_err(|err| AppError::Parse(format!("PDF 解析失败：{err}")))?;
-
-    if pages.iter().all(|page| page.trim().is_empty()) {
-        return Err(AppError::Parse("这份 PDF 没有可提取的文字，可能是扫描件".into()));
+    let pages = page_texts(&bytes);
+    if pages.is_empty() {
+        return Err(AppError::Parse("这份 PDF 无法解析，可能已损坏或被加密".into()));
     }
 
     Ok(pages
@@ -49,6 +55,32 @@ pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
             paragraphs: paragraphs_of(&page),
         })
         .collect())
+}
+
+/// Per-page text, or one blank entry per page when the text cannot be read.
+///
+/// Falls back to the structural page count (`Document::get_pages`) so a PDF
+/// whose text is unmappable — or whose extraction errored or panicked — still
+/// yields the right number of pages and therefore still opens.
+fn page_texts(bytes: &[u8]) -> Vec<String> {
+    if let Some(Ok(pages)) = catch(|| pdf_extract::extract_text_from_mem_by_pages(bytes))
+        && !pages.is_empty()
+    {
+        return pages;
+    }
+    tracing::warn!("PDF 文本提取失败，仅按页建立索引");
+    let count = catch(|| pdf_extract::Document::load_mem(bytes))
+        .and_then(Result::ok)
+        .map(|document| document.get_pages().len())
+        .unwrap_or(0);
+    vec![String::new(); count]
+}
+
+/// `catch_unwind` in one line: `None` when the closure panicked. A malformed
+/// PDF can make pdf-extract panic, and one bad file must not abort a whole
+/// import batch, so every call into it goes through here.
+fn catch<T>(f: impl FnOnce() -> T) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
 }
 
 /// Splits a page's text into paragraphs: pdf-extract emits one line per text
@@ -134,6 +166,22 @@ mod tests {
         let path = crate::document::fixture::write_pdf(&dir, "报告.pdf", &["正文"], None);
 
         assert_eq!(read_metadata(&path).expect("metadata").title, "报告");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_pdf_without_extractable_text_still_indexes_every_page() {
+        // The regression this guards: a real 413-page book whose every page
+        // extracts to an empty string — unmappable fonts — used to be rejected
+        // as "probably a scan", which left the book shelved with no chapters and
+        // unopenable. A fixed-layout book only needs its page count to open.
+        let dir = crate::document::fixture::temp_dir("pdf-blank");
+        let path = crate::document::fixture::write_pdf(&dir, "blank.pdf", &["", "", ""], None);
+
+        let chapters = read_chapters(&path).expect("chapters");
+        assert_eq!(chapters.len(), 3, "{chapters:?}");
+        assert!(chapters.iter().all(|chapter| chapter.paragraphs.is_empty()));
+
         std::fs::remove_dir_all(&dir).ok();
     }
 

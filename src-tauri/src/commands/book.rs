@@ -88,6 +88,14 @@ pub async fn book_source_file(
     .map_err(|err| AppError::Message(format!("读取书籍文件被中断：{err}")))?
 }
 
+/// `book.source_url` — the protocol URL the reader streams the source file
+/// from. Pure: the origin is a compile-time constant per platform, so this
+/// does no I/O and answers instantly.
+#[tauri::command]
+pub fn book_source_url(id: String) -> String {
+    crate::library::book_url(&id)
+}
+
 /// `book.cover_save` — stores a PNG the frontend rendered for a book whose
 /// cover cannot be extracted on the Rust side (PDF first pages, drawn by
 /// pdf.js). The bytes must start with the PNG magic; anything else is a bug

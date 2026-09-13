@@ -33,7 +33,11 @@ const makeZipLoader = async file => {
     const { configure, ZipReader, BlobReader, TextWriter, BlobWriter } =
         await import('./vendor/zip.js')
     configure({ useWebWorkers: false })
-    const reader = new ZipReader(new BlobReader(file))
+    // A string is a ColorReader protocol URL: read the archive over HTTP Range
+    // requests so the reader never pulls the whole book across the wire.
+    const reader = new ZipReader(
+        typeof file === 'string' ? new ProtocolRangeReader(file) : new BlobReader(file),
+    )
     const entries = await reader.getEntries()
     const map = new Map(entries.map(entry => [entry.filename, entry]))
     const load = f => (name, ...args) =>
@@ -42,6 +46,62 @@ const makeZipLoader = async file => {
     const loadBlob = load((entry, type) => entry.getData(new BlobWriter(type)))
     const getSize = name => map.get(name)?.uncompressedSize ?? 0
     return { entries, loadText, loadBlob, getSize }
+}
+
+/**
+ * A zip.js `Reader` backed by HTTP Range requests against a ColorReader custom
+ * protocol URL. Satisfies the interface `ZipReader` expects: a finite `size`
+ * and an async `readUint8Array(offset, length)`. The reader probes the total
+ * size once (a `bytes=0-0` request) so `ZipReader` can locate the central
+ * directory without downloading the archive.
+ */
+class ProtocolRangeReader {
+    constructor(url) {
+        this.url = url
+        this.size = Infinity
+        this.initialized = false
+    }
+
+    async init() {
+        if (this.initialized) return
+        try {
+            const res = await fetch(this.url, { headers: { Range: 'bytes=0-0' } })
+            const range = res.headers.get('Content-Range')
+            if (range) {
+                const total = range.split('/')[1]
+                if (total && total !== '*') {
+                    const parsed = Number(total)
+                    if (Number.isFinite(parsed)) this.size = parsed
+                }
+            }
+            if (!Number.isFinite(this.size)) {
+                const length = res.headers.get('Content-Length')
+                if (length) {
+                    const parsed = Number(length)
+                    if (Number.isFinite(parsed)) this.size = parsed
+                }
+            }
+        } catch {
+            // Leave `size` as Infinity; `ZipReader` then tries a BlobReader,
+            // which fails and surfaces the error to the caller's fallback.
+        }
+        this.initialized = true
+    }
+
+    async readUint8Array(offset, length) {
+        if (!Number.isFinite(this.size)) await this.init()
+        const end = offset + length - 1
+        const res = await fetch(this.url, {
+            headers: { Range: `bytes=${offset}-${end}` },
+        })
+        if (!res.ok) {
+            throw new ResponseError(
+                `${res.status} ${res.statusText}`,
+                { cause: res },
+            )
+        }
+        return new Uint8Array(await res.arrayBuffer())
+    }
 }
 
 const getFileEntries = async entry => entry.isFile ? entry
@@ -79,7 +139,14 @@ const fetchFile = async url => {
 }
 
 export const makeBook = async file => {
-    if (typeof file === 'string') file = await fetchFile(file)
+    // A string is a ColorReader protocol URL (e.g. `colorreader://localhost/book/<id>`).
+    // Stream the archive over HTTP Range requests instead of downloading it whole;
+    // only EPUB is routed this way today, so build an EPUB directly.
+    if (typeof file === 'string') {
+        const loader = await makeZipLoader(file)
+        const { EPUB } = await import('./epub.js')
+        return await new EPUB(loader).init()
+    }
     let book
     if (file.isDirectory) {
         const loader = await makeDirectoryLoader(file)

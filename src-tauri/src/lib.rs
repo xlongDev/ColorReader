@@ -42,6 +42,7 @@ pub fn run() -> tauri::Result<()> {
             commands::book::book_get,
             commands::book::book_asset,
             commands::book::book_source_file,
+            commands::book::book_source_url,
             commands::book::book_cover_save,
             commands::book::book_images,
             commands::book::book_stats,

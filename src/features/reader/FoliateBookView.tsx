@@ -1,7 +1,7 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
-import { ipc } from "../../lib/ipc";
+import { ipc, isDesktopRuntime } from "../../lib/ipc";
 import { Overlayer } from "foliate-js/overlayer.js";
-import type { FoliateRelocate, View } from "foliate-js/view.js";
+import type { FoliateRelocate, View, makeBook } from "foliate-js/view.js";
 import type { Annotation } from "@/types/ipc";
 import type { LayoutMode, PageTransition } from "./theme";
 import { speechUnits, unitsFromOffset, TTS_WASH_BOOK } from "./speech";
@@ -710,6 +710,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       const doc = (event as CustomEvent<{ doc?: Document }>).detail?.doc;
       if (!doc || hookedRef.current.has(doc)) return;
       hookedRef.current.add(doc);
+      // A book can pin its own colour scheme with a meta tag, and that form
+      // outranks the `color-scheme: normal` our stylesheet sets: WebKit then
+      // paints the iframe's transparent-root canvas opaque and the page goes
+      // black over the `#background` layer. Drop the tag and the scheme is
+      // ours again. The `:root { color-scheme }` form is covered by the sheet.
+      doc.querySelector('meta[name="color-scheme" i]')?.remove();
       doc.addEventListener("keydown", forwardKeyFromSection, true);
       doc.addEventListener("mouseup", () => captureSelection(doc), true);
       doc.addEventListener("click", onSectionClick, true);
@@ -735,18 +741,40 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
 
     void (async () => {
       try {
-        const bytes = await ipc.bookFile(bookId);
-        if (cancelled) return;
-        // foliate only needs a File-like: it reads the container by range.
-        const container = CONTAINER[format] ?? CONTAINER.mobi!;
-        const file = new File([bytes], `${bookId}.${container.ext}`, {
-          type: container.type,
-        });
-        // Resolved by the `foliate-js` Vite alias to the vendored readest fork
-        // (src/vendor/foliate-js); TS sees the ambient declaration in
-        // src/types/foliate-js.d.ts.
-        const { makeBook } = await import("foliate-js/view.js");
-        const book = await makeBook(file);
+        // Kick off the foliate chunk load immediately so it parses in parallel
+        // with the (fast) source-URL lookup or the whole-file transfer below.
+        const viewModule = import("foliate-js/view.js");
+        let book: Awaited<ReturnType<typeof makeBook>>;
+        if (format === "epub" && isDesktopRuntime) {
+          // EPUB streams over the ColorReader protocol with HTTP Range requests,
+          // so opening no longer waits on the whole file crossing IPC.
+          try {
+            const sourceUrl = await ipc.bookSourceUrl(bookId);
+            if (cancelled) return;
+            const { makeBook } = await viewModule;
+            book = await makeBook(sourceUrl);
+          } catch (cause) {
+            // The scheme is unreachable on this platform, or streaming failed:
+            // fall back to the whole-file IPC transfer (same as every other format).
+            console.warn("协议流式打开失败，回退整文件传输", cause);
+            const bytes = await ipc.bookFile(bookId);
+            if (cancelled) return;
+            const { makeBook } = await viewModule;
+            book = await makeBook(
+              new File([bytes], `${bookId}.epub`, { type: "application/epub+zip" }),
+            );
+          }
+        } else {
+          const bytes = await ipc.bookFile(bookId);
+          if (cancelled) return;
+          // foliate only needs a File-like: it reads the container by range.
+          const container = CONTAINER[format] ?? CONTAINER.mobi!;
+          const file = new File([bytes], `${bookId}.${container.ext}`, {
+            type: container.type,
+          });
+          const { makeBook } = await viewModule;
+          book = await makeBook(file);
+        }
         if (cancelled) return;
         view = document.createElement("foliate-view") as View;
         // Custom elements default to `display: inline`, which collapses the

@@ -11,6 +11,7 @@
     "core:window:allow-start-dragging",
     "core:window:allow-is-fullscreen",
     "core:window:allow-set-fullscreen",
+    "core:window:allow-set-theme",
     "dialog:allow-open",
     {
       "identifier": "opener:allow-open-url",

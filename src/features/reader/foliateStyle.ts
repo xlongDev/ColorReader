@@ -34,19 +34,20 @@ export type FoliateStyle = {
  * paints it as the page fill for transparent sections, and its resolver swaps
  * the colour component of every section's own background (keeping wallpaper
  * images) for the theme colour. Text is recoloured with the same rules
- * readest ships in `getColorStyles`, minus the element-level repaints we
- * don't expose yet.
+ * readest ships in `getColorStyles`, including the element-level repaints.
  *
- * `color-scheme` must stay untouched anywhere in this chain — neither here
- * nor as a `<meta name="color-scheme">` in index.html: once a frame's used
- * colour scheme resolves away from `normal`, WebKit paints the iframe's
- * transparent-root canvas OPAQUE (dark under `dark`, white otherwise), which
- * sits on top of and completely hides the `#background` layer — the wallpaper
- * vanishes and page fill falls back to the system colour. `--override-color:
- * true` drives the same resolver colour swap without touching the canvas, and
- * the paginator's resolver keeps every image-bearing background (Kindle paper
- * textures) in its original colours, swapping only imageless page fills for
- * the theme colour.
+ * The app must not *leave* a colour scheme in force here, and neither may the
+ * book: once a frame's used colour scheme resolves away from `normal`, WebKit
+ * paints the iframe's transparent-root canvas OPAQUE (dark under `dark`, white
+ * otherwise), which sits on top of and completely hides the `#background`
+ * layer — the wallpaper vanishes, page fill falls back to the system colour and
+ * a book that declares `:root { color-scheme: light dark }` goes black on a
+ * dark-appearance OS even though the reader is not in night mode. So the
+ * scheme is forced back to `normal` below rather than merely left alone.
+ * `--override-color: true` drives the resolver colour swap without touching the
+ * canvas, and the paginator's resolver keeps every image-bearing background
+ * (Kindle paper textures) in its original colours, swapping only imageless page
+ * fills for the theme colour.
  */
 export const buildStyleSheet = ({
   fontSize,
@@ -69,6 +70,18 @@ html, body {
   /* !important: KF8 books ship their own body typography for print paper;
      the reader settings win over the book. */
   font-size: ${fontSize}px !important;
+}
+/* The book may declare its own colour scheme and this one does:
+   :root { color-scheme: light dark }. On a dark-appearance OS WebKit then
+   resolves the section's scheme to dark and paints the transparent-root
+   canvas opaque — a black page with white margins on a read that is not in
+   night mode. Forcing normal restores the transparent canvas (measured on a
+   WebKit fixture carrying this exact declaration). Applied in both palettes:
+   the symptom shows up precisely when night mode is off. A book that declares
+   the scheme through a meta name="color-scheme" tag instead is handled where a
+   section attaches — CSS one can't override that tag. */
+html {
+  color-scheme: normal !important;
 }
 /* A Kindle book restates line-height, font-family, margins and text-indent on
    every paragraph class it ships, so html/body alone never reaches the

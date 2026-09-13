@@ -79,6 +79,11 @@ export const ipc = {
     return invoke<ArrayBuffer>("book_source_file", { id });
   },
 
+  /** Protocol URL the reader streams the source file from (Range requests). */
+  bookSourceUrl(id: string): Promise<string> {
+    return invoke<string>("book_source_url", { id });
+  },
+
   /** Stores a PNG the frontend rendered as this book's cover (PDF first page). */
   bookCoverSave(id: string, bytes: ArrayBuffer): Promise<void> {
     return invoke("book_cover_save", { id, bytes: Array.from(new Uint8Array(bytes)) });

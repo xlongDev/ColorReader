@@ -107,6 +107,7 @@ import { useChrome } from "@/stores/chrome";
 import { useSettings } from "@/stores/settings";
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
+import type { PdfOutlineItem } from "@/lib/pdf";
 import type {
   Annotation,
   BookFormat,
@@ -169,6 +170,13 @@ const FULLSCREEN_MARGIN_BONUS = 48;
  * `[]` per render would re-create every callback that reads it.
  */
 const NO_IMAGES: BookImage[] = [];
+
+/**
+ * Stand-in for a PDF's bookmark outline before (or without) the query. A fresh
+ * `[]` per render would re-seed the TOC panel's fold state on every re-render,
+ * collapsing whatever the reader had opened.
+ */
+const EMPTY_OUTLINE: PdfOutlineItem[] = [];
 
 /** Parses a link-marker paragraph (`<marker><idx><sep><text>`) into its
     target chapter and visible text; `null` when malformed. */
@@ -501,7 +509,7 @@ function ReaderView({
     [initialCfi, useFoliate, cfiKey],
   );
   const outlineQuery = usePdfOutline(bookId, isPdf);
-  const outline = outlineQuery.data ?? [];
+  const outline = outlineQuery.data ?? EMPTY_OUTLINE;
   const [panel, setPanel] = useState<Panel>("none");
   const [search, setSearch] = useState(initialQuery);
   const [pending, setPending] = useState<{

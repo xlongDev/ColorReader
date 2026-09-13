@@ -4,6 +4,7 @@ import { cn } from "@/lib/cn";
 import { loadDoc } from "@/lib/pdf";
 import type { Annotation } from "@/types/ipc";
 
+import { canvasRatio, displaySize, MAX_DPR } from "./pdfCanvas";
 import { installNightContext } from "./pdfNightContext";
 import {
   clearPageHighlights,
@@ -25,11 +26,18 @@ type RenderState = "loading" | "ready" | "error";
 /** Stable empty default so the paint effect's deps stay identity-safe. */
 const EMPTY: Annotation[] = [];
 
+/** How long a zoom must rest before the page is re-rasterised at the new
+    scale. Long enough that a pinch — or a held zoom key — costs one render,
+    short enough that it lands while the page is still under the eye. */
+const ZOOM_SETTLE_MS = 240;
+
 /**
  * Draws page `pageNumber` (1-based) into a canvas, sized to fill its wrapper.
  * Re-renders when the wrapper resizes; `fit` picks between filling the width
- * (scroll layout) and the whole box (paged layouts). `zoom` rescales the
- * fitted page purely in CSS, so a pinch gesture never re-renders the page.
+ * (scroll layout) and the whole box (paged layouts). `zoom` rescales the page
+ * in CSS straight away so a pinch stays responsive, then re-rasterises the
+ * bitmap at that scale once the gesture rests: a page shown at 300% is drawn
+ * at 300%, not stretched from the bitmap rasterised for the fitted size.
  */
 export function PdfPageView({
   bookId,
@@ -82,6 +90,27 @@ export function PdfPageView({
   const [textReady, setTextReady] = useState(false);
   /** True while this page owns the read-aloud wash (see the paint effect). */
   const washPainted = useRef(false);
+  /** The zoom the next raster is drawn at. Lags `zoom` so a pinch redraws
+      once, when it rests, instead of on every frame. */
+  const rasterZoomRef = useRef(zoom);
+  /** This render's own entry point. A zoom re-raster goes through it rather
+      than through the effect's deps: restarting the effect would clear the
+      page's highlights and read-aloud wash, which belong to the page, not to
+      the bitmap. */
+  const schedulerRef = useRef<() => void>(() => {});
+  /** Canvas signature already painted, and the scale the text layer was built
+      at. A zoom change refreshes the bitmap but leaves the layer alone. */
+  const paintedRef = useRef("");
+  const layeredRef = useRef("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (rasterZoomRef.current === zoom) return;
+      rasterZoomRef.current = zoom;
+      schedulerRef.current();
+    }, ZOOM_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [zoom]);
 
   useEffect(() => {
     let cancelled = false;
@@ -97,7 +126,11 @@ export function PdfPageView({
         : null;
 
     const render = async () => {
-      setState("loading");
+      // A re-raster at a new zoom draws the page that is already up: the
+      // resize below clears the canvas, so announcing a load would blank the
+      // page the reader is looking at. Only a different page says so.
+      const signature = `${pageNumber}|${fit}|${nightFg}|${nightBg}|${invertImages}`;
+      if (paintedRef.current !== signature) setState("loading");
       setTextReady(false);
       textTaskRef.current?.cancel();
       try {
@@ -115,24 +148,44 @@ export function PdfPageView({
         // contract a paged layout gives prose.
         const scale =
           fit === "box" ? Math.min(widthScale, wrap.clientHeight / unit.height) : widthScale;
-        const dpr = Math.min(window.devicePixelRatio || 1, 2);
-        const viewport = page.getViewport({ scale: Math.max(scale, 0.01) * dpr });
+        // The bitmap spans the zoomed page, not the fitted one: the canvas is
+        // displayed at `fitted × zoom`, so rasterising at `scale × zoom` keeps
+        // one bitmap pixel per device pixel however far the reader zooms in.
+        const zoomToRaster = rasterZoomRef.current;
+        const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
+        const viewport = page.getViewport({
+          scale:
+            Math.max(scale * zoomToRaster, 0.01) *
+            canvasRatio({
+              unitWidth: unit.width,
+              unitHeight: unit.height,
+              fitScale: scale,
+              zoom: zoomToRaster,
+              dpr,
+            }),
+        });
 
         const context = canvas.getContext("2d");
         if (!context) return;
         canvas.width = Math.floor(viewport.width);
         canvas.height = Math.floor(viewport.height);
-        // CSS size is the layout viewport (scale without dpr); the canvas
-        // bitmap is dpr-scaled for sharpness. An explicit size — not
-        // `width: 100%` — is what makes "box" fit actually shrink the page
-        // into the visible box instead of clipping its bottom off.
+        // `fitted` is the page at zoom 1; both the layout and the write below
+        // scale it by the zoom. An explicit size — not `width: 100%` — is what
+        // makes "box" fit actually shrink the page into the visible box
+        // instead of clipping its bottom off.
         const fitted = {
-          w: Math.floor(viewport.width / dpr),
-          h: Math.floor(viewport.height / dpr),
+          w: Math.floor(unit.width * scale),
+          h: Math.floor(unit.height * scale),
         };
         setBase(fitted);
-        canvas.style.width = `${fitted.w}px`;
-        canvas.style.height = `${fitted.h}px`;
+        // Written at the size the page is *shown* at, zoom included — the same
+        // size JSX gives the canvas. React skips a style write whose value is
+        // unchanged, so a fit-sized pair here would survive the re-render
+        // `setBase` triggers and snap a zoomed page back to fit the moment the
+        // raster landed.
+        const shown = displaySize(fitted, zoomToRaster);
+        canvas.style.width = `${shown.w}px`;
+        canvas.style.height = `${shown.h}px`;
 
         taskRef.current?.cancel();
         // `background` is the paper the page is painted on; without it pdf.js
@@ -148,10 +201,13 @@ export function PdfPageView({
 
         // The selectable text layer sits over the canvas at the page's CSS
         // size (no dpr: it must line up with layout pixels, and pdf.js scales
-        // it internally by the real device pixel ratio). Rebuilt after every
-        // page render — page flips and wrapper resizes both land here.
+        // it internally by the real device pixel ratio). Rebuilt when the page
+        // or the fitted size changes — never on a zoom, which the layer takes
+        // through its CSS transform. Recorded only once it has rendered, so a
+        // cancelled build is redone rather than left half-filled.
         const layer = layerRef.current;
-        if (layer) {
+        const layerKey = `${pageNumber}|${scale}`;
+        if (layer && layeredRef.current !== layerKey) {
           layer.replaceChildren();
           // pdf.js v6 rewrites the layer box itself via setLayerDimensions:
           // width: calc(var(--total-scale-factor) * pageWidth …). Without the
@@ -167,8 +223,10 @@ export function PdfPageView({
           });
           textTaskRef.current = textLayer;
           await textLayer.render();
+          layeredRef.current = layerKey;
         }
         if (!cancelled) {
+          paintedRef.current = signature;
           setTextReady(true);
           setState("ready");
         }
@@ -185,11 +243,14 @@ export function PdfPageView({
       cancelAnimationFrame(frame);
       frame = requestAnimationFrame(render);
     };
+    // A wrapper resize and a settled zoom are the same request: draw again.
+    schedulerRef.current = schedule;
     void schedule();
 
     const observer = new ResizeObserver(schedule);
     if (wrapRef.current) observer.observe(wrapRef.current);
     return () => {
+      schedulerRef.current = () => {};
       cancelled = true;
       cancelAnimationFrame(frame);
       observer.disconnect();
@@ -272,22 +333,19 @@ export function PdfPageView({
     };
   }, [annotations, onSelection, onAnnotationClick]);
 
+  // The box the page is shown in, at the reader's zoom — the same value the
+  // re-raster writes, so a zoomed page can't be re-rendered back down to fit.
+  const shown = base ? displaySize(base, zoom) : null;
+
   return (
     <div ref={wrapRef} className="relative h-full w-full">
-      {/* ponytail: zoom is CSS-only over a dpr-capped bitmap, so >2x turns
-          soft on non-retina screens; re-render at the zoomed scale if that
-          ever bothers anyone. */}
       {/* Canvas and text layer share one centred box so the layer always sits
           exactly on the page, whatever the wrapper's width. The layer scales
           with `zoom` via transform: rebuilding it per pinch frame would
           thrash, and a transformed layer stays selectable and hittable. */}
       <div
         className="relative mx-auto"
-        style={
-          base
-            ? { width: `${Math.round(base.w * zoom)}px`, height: `${Math.round(base.h * zoom)}px` }
-            : undefined
-        }
+        style={shown ? { width: `${shown.w}px`, height: `${shown.h}px` } : undefined}
       >
         <canvas
           ref={canvasRef}
@@ -295,14 +353,7 @@ export function PdfPageView({
             "border-hairline block rounded-lg border",
             animated && "transition-[width,height] duration-200 ease-out",
           )}
-          style={
-            base
-              ? {
-                  width: `${Math.round(base.w * zoom)}px`,
-                  height: `${Math.round(base.h * zoom)}px`,
-                }
-              : undefined
-          }
+          style={shown ? { width: `${shown.w}px`, height: `${shown.h}px` } : undefined}
         />
         <div
           data-pdf-layer=""

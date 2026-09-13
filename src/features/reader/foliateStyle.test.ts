@@ -35,6 +35,15 @@ describe("buildStyleSheet", () => {
     expect(css).not.toContain("invert(1)");
   });
 
+  it("pins the colour scheme to normal in both palettes", () => {
+    // A book that declares `:root { color-scheme: light dark }` makes WebKit
+    // paint the section canvas opaque on a dark-mode OS; the page goes black on
+    // a read that is not in night mode. The scheme has to be reclaimed even on
+    // a light page, which is exactly where the symptom shows.
+    expect(buildStyleSheet(style())).toContain("color-scheme: normal !important");
+    expect(buildStyleSheet(style({ dark: false }))).toContain("color-scheme: normal !important");
+  });
+
   it("caps replaced elements the paginator would let overflow the column", () => {
     expect(buildStyleSheet(style({ dark: false }))).toContain("max-width: 100% !important");
   });
