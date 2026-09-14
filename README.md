@@ -57,6 +57,7 @@
 | 标注笔记 + 笔记导出（md / csv）                 | ✅   | `AnnotationNote` + `ExportNotesDialog`，带回本应用深链                                                                          |
 | 深链 `colorreader://book/<id>?annotation=<aid>` | ✅   | 三种位置模型（CFI / 章+偏移 / 页码）通解，macOS 需打包安装 `/Applications`                                                      |
 | single-instance 深链合流                        | ✅   | Windows / Linux 由 `tauri-plugin-single-instance` 把第二进程 argv 交给先到实例                                                  |
+| 自动更新（设置 → 关于，手动检查）               | ✅   | Tauri updater + process 插件，读 GitHub Releases 的 `latest.json`；签名用**自生成** minisign 密钥，不需要平台证书               |
 
 ### 支持的格式
 
@@ -96,7 +97,7 @@ Phase 12 交付物是**WebDAV 同步**：设置里配置任意 WebDAV 服务（�
 
 Phase 13 交付物是**性能与代码分割**：主 chunk 从 719 kB 降到 285 kB（gzip 87 kB），消除 500 kB 告警。手段有三：阅读器 / 搜索 / 设置三个页面路由级 `React.lazy`，按需从本地磁盘加载；书架的重对话框（在线找书、书档导入导出）拆成独立 chunk，首次打开才加载；react-dom 与路由 / react-query 两个稳定 vendor 块单独成 chunk，只在依赖升级时失效，浏览器缓存长期命中。
 
-Phase 14 交付物是**生产化**：GitHub Actions 双工作流（CI 全门禁 + tag 触发 tauri-action 多平台打包，产物为 draft release）；本地实测 `tauri build` 产出 ColorReader.app（arm64，ad-hoc 签名，7.7 MB 二进制）；Playwright E2E smoke（`pnpm test:e2e`）对生产构建验证四个路由渲染且零 console 错误，专防懒加载分包崩坏；可重复的 release 基准测试（600 章 / 2.7 MB 参考书）：导入含切章与 FTS 索引 60 ms、全文检索均值 1.3 ms、目录加载 0.6 ms。**代码签名与自动更新暂缓**：需要 Apple 开发者证书与 updater 签名密钥，工作流里已留好注入点，密钥到位后按 release.yml 注释补两步即可。标注与书签的 WebDAV 同步（墓碑机制）已于 2026-09-14 落地，多设备同步不再有缺口；剩余待办只剩需要外部凭据的代码签名与自动更新，详见 **[ARCHITECTURE.md](./ARCHITECTURE.md)** 第 9 节。
+Phase 14 交付物是**生产化**：GitHub Actions 双工作流（CI 全门禁 + tag 触发 tauri-action 多平台打包，产物为 draft release）；本地实测 `tauri build` 产出 ColorReader.app（arm64，ad-hoc 签名，7.7 MB 二进制）；Playwright E2E smoke（`pnpm test:e2e`）对生产构建验证四个路由渲染且零 console 错误，专防懒加载分包崩坏；可重复的 release 基准测试（600 章 / 2.7 MB 参考书）：导入含切章与 FTS 索引 60 ms、全文检索均值 1.3 ms、目录加载 0.6 ms。**自动更新已于 2026-09-15 落地，且不需要任何证书**：更新签名用的是本地生成的 minisign 密钥对（`pnpm tauri signer generate`），公钥钉在 `tauri.conf.json`、私钥进 GitHub Secrets，与 Apple / 微软账号无关。入口在设置的「关于」区，只做手动检查（`latest.json` → 验签 → 下载安装 → 重启）。**剩下唯一待办是代码签名**：它不影响功能，只影响他人首次打开时的那次信任提示，详见 **[ARCHITECTURE.md](./ARCHITECTURE.md)** 第 9 节。多设备同步方面，进度、标注与书签的 WebDAV 同步（墓碑机制）已于 2026-09-14 落地，不再有缺口。
 
 ---
 

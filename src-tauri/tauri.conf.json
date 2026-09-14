@@ -35,11 +35,18 @@
       "desktop": {
         "schemes": ["colorreader"]
       }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIwMDVFMEZBMjRGMjAwRTQKUldUa0FQSWsrdUFGc0F5NVkwMEljUk9IcG9ubnlrbjFNUXBseHY0Sys4WDRsb0FaL3ZFNTlkTXcK",
+      "endpoints": [
+        "https://github.com/xlongDev/ColorReader/releases/latest/download/latest.json"
+      ]
     }
   },
   "bundle": {
     "active": true,
     "targets": ["dmg", "app", "nsis", "deb", "appimage"],
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

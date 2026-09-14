@@ -15,6 +15,9 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "deep-link:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "process:allow-restart",
     {
       "identifier": "opener:allow-open-url",
       "allow": [

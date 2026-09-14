@@ -49,6 +49,15 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"]
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 tokio = { version = "1.53.1", features = ["time"] }
 tauri-plugin-deep-link = "2.4.10"
+# Auto-update. The signature the updater insists on is a minisign keypair we
+# generate ourselves (`tauri signer generate`), **not** an Apple / Microsoft
+# certificate: the key proves the artifact came from us, and it is the only
+# thing the updater needs. Platform code signing is a separate concern that
+# only affects the first-run trust prompt.
+tauri-plugin-updater = "2"
+# Installing an update replaces the running bundle, so the app has to restart
+# itself afterwards; `relaunch()` is this plugin's command, not core's.
+tauri-plugin-process = "2"
 # Desktop only, and the crate says so itself (`#![cfg(not(android | ios))]`);
 # `run()` gates the registration the same way. Windows and Linux deliver a
 # `colorreader://` link to a *new* process, so this is what forwards that

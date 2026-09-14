@@ -50,17 +50,31 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Signing is intentionally absent until certs/keys exist; artifacts
-          # ship unsigned (macOS ad-hoc). To enable:
+          # Updater signing. This is the minisign keypair from
+          # `pnpm tauri signer generate` — self-generated, so no Apple or
+          # Microsoft account is involved. The public half is pinned in
+          # `tauri.conf.json`; the private half lives only in this secret, and
+          # losing it means no further updates can ever be published to installs
+          # that are already out there.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Platform code signing is still absent (no Apple certificate), so the
+          # artifacts ship ad-hoc signed on macOS. To enable later:
           #   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_SIGNING_IDENTITY
-          #   TAURI_SIGNING_PRIVATE_KEY / TAURI_SIGNING_PRIVATE_KEY_PASSWORD  (updater)
-          # then set updater.active + pubkey in tauri.conf.json.
         with:
           projectPath: "."
           tauriScript: pnpm tauri
           tagName: ${{ github.ref_name }}
           releaseName: "ColorReader ${{ github.ref_name }}"
           releaseBody: "See the assets below to download and install ColorReader."
-          releaseDraft: true
+          # Published, not drafted: the updater endpoint is
+          # `releases/latest/download/latest.json`, and GitHub's "latest"
+          # deliberately skips drafts — a drafted release would leave every
+          # installed app checking forever and never seeing anything.
+          releaseDraft: false
           prerelease: false
+          # Writes `latest.json` (version + per-platform url + signature) next to
+          # the bundles. It is populated from the signing key above; without that
+          # secret the file is skipped and the updater has nothing to read.
+          includeUpdaterJson: true
           args: ${{ matrix.args }}

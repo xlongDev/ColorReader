@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useId, useState } from "react";
 import {
+  ArrowsClockwise,
   CloudArrowUp,
   Monitor,
   Moon,
@@ -22,6 +23,7 @@ import { useSystemInfo } from "@/hooks/useSystemInfo";
 import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
 import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from "@/hooks/useSync";
 import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
+import { useUpdater, type UpdateState } from "@/hooks/useUpdater";
 import type {
   AiConfig,
   LocalDictionary,
@@ -146,8 +148,32 @@ function AppearanceSection({
   );
 }
 
+/** The line beside the update button, and whether it is bad news. */
+function updateStatus(state: UpdateState): { text: string; bad: boolean } {
+  switch (state.status) {
+    case "idle":
+      return { text: "", bad: false };
+    case "checking":
+      return { text: "正在检查…", bad: false };
+    case "current":
+      return { text: "已是最新版本。", bad: false };
+    case "available":
+      return { text: `发现新版本 ${state.version}。`, bad: false };
+    case "downloading":
+      return {
+        text: state.percent === null ? "正在下载…" : `正在下载 ${state.percent}%…`,
+        bad: false,
+      };
+    case "failed":
+      return { text: state.message, bad: true };
+  }
+}
+
 function AboutSection() {
   const { data, isLoading } = useSystemInfo();
+  const { state, checkForUpdate, installAndRestart } = useUpdater();
+  const status = updateStatus(state);
+  const installing = state.status === "available" || state.status === "downloading";
 
   return (
     <GlassPanel className="p-5">
@@ -171,6 +197,43 @@ function AboutSection() {
           </div>
         ))}
       </dl>
+
+      <div className="border-hairline mt-4 flex flex-wrap items-center gap-x-3 gap-y-2 border-t pt-4">
+        {installing ? (
+          <GlassButton
+            size="sm"
+            variant="primary"
+            leading={<ArrowsClockwise size={13} weight="bold" />}
+            disabled={state.status === "downloading"}
+            onClick={() => void installAndRestart()}
+          >
+            下载并安装
+          </GlassButton>
+        ) : (
+          <GlassButton
+            size="sm"
+            leading={<ArrowsClockwise size={13} weight="bold" />}
+            disabled={state.status === "checking"}
+            onClick={() => void checkForUpdate()}
+          >
+            检查更新
+          </GlassButton>
+        )}
+        {status.text && (
+          <output
+            className={cn(
+              "text-[12.5px] leading-relaxed",
+              status.bad ? "text-danger" : "text-text-3",
+            )}
+          >
+            {status.text}
+          </output>
+        )}
+      </div>
+
+      <p className="text-text-3 mt-2 text-[12px] leading-relaxed">
+        更新包在安装前用本地生成的密钥校验来源。应用未做平台签名，若首次打开被系统拦截，手动放行一次即可。
+      </p>
     </GlassPanel>
   );
 }
