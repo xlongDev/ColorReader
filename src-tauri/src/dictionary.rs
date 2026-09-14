@@ -35,6 +35,13 @@ pub enum Lookup {
     Found { text: String, source: Option<String> },
     /// The dictionary is there but does not carry this term. An ordinary answer,
     /// not a failure — the caller falls through to the AI explanation.
+    ///
+    /// `allow` outside macOS, the mirror of `Unavailable` above: with no system
+    /// dictionary there is nothing to be *missing* from, so only the macOS
+    /// implementation ever builds this variant. It stays in the enum because the
+    /// API — and the popup's fall-through — speaks all three states, and a
+    /// non-macOS build used to fail on it under `-D warnings`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     Missing,
     /// This platform ships no system dictionary.
     ///
