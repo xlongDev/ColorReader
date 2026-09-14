@@ -1,5 +1,8 @@
-//! `lookup.*` commands: external references the selection toolbar queries
-//! directly — DeepL for instant translation, Wikipedia for term summaries.
+//! `lookup.*` commands: the external references the selection toolbar queries —
+//! DeepL for instant translation and Wikipedia for term summaries. The
+//! dictionary actions live in `commands/dictionary.rs`, because theirs is not a
+//! network call: the platform's own dictionary and the imported bundles are both
+//! local.
 
 use tauri::State;
 

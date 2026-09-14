@@ -640,6 +640,8 @@ dependencies = [
  "argon2",
  "base64 0.23.1",
  "chrono",
+ "core-foundation-sys",
+ "flate2",
  "futures-util",
  "pdf-extract",
  "quick-xml 0.42.0",

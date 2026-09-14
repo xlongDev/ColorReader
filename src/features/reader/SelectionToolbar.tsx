@@ -19,7 +19,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { useAiChat, useAiConfig } from "@/hooks/useAi";
-import { ipc } from "@/lib/ipc";
+import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
 import type { Annotation, AnnotationStyle } from "@/types/ipc";
 import { HIGHLIGHT_COLORS } from "@/stores/reader";
@@ -379,10 +379,12 @@ function StyleSwatch({ style: kind, color }: { style: AnnotationStyle; color: st
 }
 
 /**
- * 词典 / 翻译 / 维基百科 popup, anchored where the toolbar was. 词典 streams
- * one AI answer; 翻译 uses DeepL when a key is configured (one fast round
- * trip) and the same AI stream otherwise; 维基百科 renders the article
- * summary from the REST API, no key needed.
+ * 词典 / 翻译 / 维基百科 popup, anchored where the toolbar was. 词典 asks the
+ * platform's own dictionary first — offline, key-free, instant — and falls
+ * through to one streamed AI answer when the term is not a headword; 翻译 uses
+ * DeepL when a key is configured (one fast round trip) and the same AI stream
+ * otherwise; 维基百科 renders the article summary from the REST API, no key
+ * needed.
  */
 
 export type LookupKind = "dict" | "translate" | "wiki";
@@ -414,7 +416,7 @@ export function QuickLookup({
 }) {
   if (kind === "wiki") return <WikiLookup text={text} x={x} y={y} onClose={onClose} />;
   if (kind === "translate") return <TranslateLookup text={text} x={x} y={y} onClose={onClose} />;
-  return <AiLookup title="词典" prompt={DICT_PROMPT(text)} x={x} y={y} onClose={onClose} />;
+  return <DictLookup text={text} x={x} y={y} onClose={onClose} />;
 }
 
 /** Shared popup frame: title bar, scrollable body, anchored motion. */
@@ -462,16 +464,22 @@ function LookupPanel({
   );
 }
 
-/** One streamed AI answer; shared by 词典 and the AI fallback of 翻译. */
+/**
+ * One streamed AI answer; shared by the AI fallback of 词典 and 翻译. `hint` is
+ * a quiet first line for when something else already declined the question, so
+ * the reader can see why AI is answering at all.
+ */
 function AiLookup({
   title,
   prompt,
+  hint,
   x,
   y,
   onClose,
 }: {
   title: string;
   prompt: string;
+  hint?: string;
   x: number;
   y: number;
   onClose: () => void;
@@ -487,6 +495,7 @@ function AiLookup({
 
   return (
     <LookupPanel title={title} x={x} y={y} onClose={onClose}>
+      {hint && <p className="text-text-3 mb-1.5 text-xs leading-relaxed">{hint}</p>}
       {error ? (
         <p className="text-text-3">{friendlyAiError(error)}</p>
       ) : (
@@ -497,6 +506,67 @@ function AiLookup({
         </>
       )}
     </LookupPanel>
+  );
+}
+
+/** Browser dev mode has no backend; the panel goes straight to the AI path. */
+const OFFLINE_LOOKUP = { status: "unavailable" } as const;
+
+/**
+ * 词典: the platform's own dictionary and the imported ones, in that order —
+ * offline, key-free, instant. Only when neither has an entry (or the platform
+ * ships no dictionary and nothing is imported) does the AI answer take over,
+ * which is also where a selection longer than a headword always lands. The
+ * entry is rendered verbatim; it arrives as plain text.
+ */
+function DictLookup({
+  text,
+  x,
+  y,
+  onClose,
+}: {
+  text: string;
+  x: number;
+  y: number;
+  onClose: () => void;
+}) {
+  const entry = useQuery({
+    queryKey: ["dictionary", text],
+    queryFn: () =>
+      isDesktopRuntime ? ipc.lookupDictionary(text) : Promise.resolve(OFFLINE_LOOKUP),
+    // An entry is a pure function of the term, so it never goes stale.
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+
+  if (entry.isPending) {
+    return (
+      <LookupPanel title="词典" x={x} y={y} onClose={onClose}>
+        <span className="text-text-3">正在查询…</span>
+      </LookupPanel>
+    );
+  }
+  if (entry.data?.status === "found") {
+    return (
+      <LookupPanel title="词典" x={x} y={y} onClose={onClose}>
+        {entry.data.text}
+        {entry.data.source && (
+          <p className="text-text-3 mt-2 text-xs leading-relaxed">来自：{entry.data.source}</p>
+        )}
+      </LookupPanel>
+    );
+  }
+  return (
+    <AiLookup
+      title="词典"
+      prompt={DICT_PROMPT(text)}
+      // Only the "no entry" case is worth explaining: with no system dictionary
+      // at all, AI is simply how 词典 works on this platform.
+      hint={entry.data?.status === "missing" ? "词典未收录，用 AI 解释：" : undefined}
+      x={x}
+      y={y}
+      onClose={onClose}
+    />
   );
 }
 

@@ -13,6 +13,7 @@ import type {
   ChapterContent,
   ChapterMeta,
   ClippingsOutcome,
+  DictionaryLookup,
   EdgeClip,
   EdgeVoice,
   GraphProgress,
@@ -21,6 +22,7 @@ import type {
   ImportOutcome,
   ImportProgress,
   LibraryStats,
+  LocalDictionary,
   NewAnnotation,
   NewBookmark,
   RagProgress,
@@ -33,8 +35,8 @@ import type {
   SourceEntry,
   SourceProgress,
   SourceRules,
-  SyncChange,
   SyncConfig,
+  SyncReport,
   SystemInfo,
   TagSummary,
   Translation,
@@ -258,6 +260,26 @@ export const ipc = {
     return invoke<WikiSummary>("lookup_wikipedia", { term });
   },
 
+  /** The platform's own dictionary. Local, instant, no key. */
+  lookupDictionary(term: string): Promise<DictionaryLookup> {
+    return invoke<DictionaryLookup>("lookup_dictionary", { term });
+  },
+
+  /** Every imported dictionary, in the order they were added. */
+  dictionaryList(): Promise<LocalDictionary[]> {
+    return invoke<LocalDictionary[]>("dictionary_list");
+  },
+
+  /** Imports the StarDict bundle whose `.ifo` sits at `path`. */
+  dictionaryImport(path: string): Promise<LocalDictionary> {
+    return invoke<LocalDictionary>("dictionary_import", { path });
+  },
+
+  /** Forgets one dictionary and deletes its files. */
+  dictionaryDelete(id: string): Promise<void> {
+    return invoke<void>("dictionary_delete", { id });
+  },
+
   /**
    * Streams an answer through `ai://stream`. Resolves once the request is
    * accepted; the answer arrives as events terminated by `done: true`.
@@ -348,8 +370,8 @@ export const ipc = {
     return invoke<void>("sync_test", { config });
   },
 
-  syncNow(config: SyncConfig): Promise<SyncChange[]> {
-    return invoke<SyncChange[]>("sync_now", { config });
+  syncNow(config: SyncConfig): Promise<SyncReport> {
+    return invoke<SyncReport>("sync_now", { config });
   },
 
   /**

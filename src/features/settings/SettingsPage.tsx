@@ -1,7 +1,18 @@
 import type { ReactNode } from "react";
 import { useId, useState } from "react";
-import { CloudArrowUp, Monitor, Moon, Sun, Info, Palette, Sparkle } from "@phosphor-icons/react";
+import {
+  CloudArrowUp,
+  Monitor,
+  Moon,
+  Sun,
+  Info,
+  Palette,
+  Sparkle,
+  BookOpenText,
+  Trash,
+} from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassPanel } from "@/components/glass/panel";
@@ -10,7 +21,15 @@ import { useSettings, type ThemeMode } from "@/stores/settings";
 import { useSystemInfo } from "@/hooks/useSystemInfo";
 import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
 import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from "@/hooks/useSync";
-import type { AiConfig, SyncChange, SyncConfig } from "@/types/ipc";
+import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
+import type {
+  AiConfig,
+  LocalDictionary,
+  SyncChange,
+  SyncConfig,
+  SyncReport,
+  SyncTally,
+} from "@/types/ipc";
 import { cn } from "@/lib/cn";
 
 const THEMES: readonly { value: ThemeMode; label: string; icon: typeof Sun }[] = [
@@ -40,6 +59,7 @@ export function SettingsPage() {
           onTransparencyChange={(reduced) => setTransparency(reduced ? "reduced" : "full")}
         />
         <AiSection />
+        <DictionarySection />
         <SyncSection />
         <AboutSection />
       </div>
@@ -296,6 +316,112 @@ function AiForm({ initial }: { initial: AiConfig }) {
   );
 }
 
+/** What each bundle format is called in the list. */
+const FORMAT_LABELS: Record<LocalDictionary["kind"], string> = {
+  stardict: "StarDict",
+  mdict: "MDict",
+};
+
+/**
+ * Local dictionaries.
+ *
+ * The offline layer under the platform dictionary: the reader imports a
+ * dictionary they already have, and 词典 answers out of it with no key and no
+ * network. On Windows and Linux, where there is no system dictionary, this is
+ * the only offline path there is.
+ *
+ * Two formats, because that is where the files are: StarDict is the open one
+ * with a published spec, MDict is the one Chinese dictionary releases mostly
+ * ship as.
+ */
+function DictionarySection() {
+  const dictionaries = useDictionaries();
+  const upload = useImportDictionary();
+  const remove = useDeleteDictionary();
+  const [status, setStatus] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+
+  const pick = async () => {
+    setStatus(null);
+    try {
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "词典", extensions: ["ifo", "mdx"] }],
+      });
+      if (typeof picked !== "string") return;
+      upload.mutate(picked, {
+        onSuccess: (added) => setStatus({ tone: "ok", text: `已导入《${added.name}》。` }),
+        onError: (error) => setStatus({ tone: "bad", text: String(error) }),
+      });
+    } catch (error) {
+      // A rejected dialog is a real failure worth naming — the ACL rules deny
+      // `dialog:allow-open` per command, and swallowing it reads as a dead button.
+      setStatus({ tone: "bad", text: `无法打开文件选择器：${String(error)}` });
+    }
+  };
+
+  const list = dictionaries.data ?? [];
+
+  return (
+    <GlassPanel className="px-5 pt-5 pb-4">
+      <div className="mb-3 flex items-center gap-2">
+        <BookOpenText size={16} weight="duotone" className="text-text-2" />
+        <h2 className="text-text-1 text-sm font-semibold">本地词典</h2>
+      </div>
+      <p className="text-text-3 text-[12px] leading-relaxed">
+        导入 StarDict 词典（.ifo、.idx、.dict 放在同一目录）或 MDict 词典（.mdx）。
+        划词查词先用系统词典，再用这里导入的，都不收录才交给 AI；全部离线，不需要 Key。
+      </p>
+
+      {list.length === 0 ? (
+        <p className="text-text-3 mt-3 text-[12.5px] leading-relaxed">还没有导入词典。</p>
+      ) : (
+        <ul className="mt-3 grid gap-2">
+          {list.map((dictionary) => (
+            <li
+              key={dictionary.id}
+              className="border-hairline flex items-center justify-between gap-3 border-t pt-2"
+            >
+              <span className="text-text-1 min-w-0 truncate text-[13px]">
+                {dictionary.name}
+                <span className="text-text-3">
+                  {" "}
+                  · {FORMAT_LABELS[dictionary.kind]} · {dictionary.wordcount.toLocaleString()} 条
+                </span>
+              </span>
+              <button
+                type="button"
+                aria-label={`删除 ${dictionary.name}`}
+                onClick={() => remove.mutate(dictionary.id)}
+                disabled={remove.isPending}
+                className="text-text-3 hover:text-danger focus-ring shrink-0 rounded-md transition-colors disabled:opacity-50"
+              >
+                <Trash size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-4 flex items-center gap-2">
+        <GlassButton size="sm" onClick={() => void pick()} disabled={upload.isPending}>
+          {upload.isPending ? "正在导入…" : "导入词典…"}
+        </GlassButton>
+        {status && (
+          <output
+            className={cn(
+              "text-xs leading-relaxed",
+              status.tone === "ok" ? "text-text-2" : "text-danger",
+            )}
+          >
+            {status.text}
+          </output>
+        )}
+      </div>
+    </GlassPanel>
+  );
+}
+
 /** The form only mounts once the stored config is known, and remounts when the
  * stored value changes — typing stays local state, saving refills the form.
  */
@@ -315,7 +441,7 @@ const DECISION_LABELS: Record<SyncChange["decision"], string> = {
 function SyncForm({ initial }: { initial: SyncConfig }) {
   const [draft, setDraft] = useState(initial);
   const [status, setStatus] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
-  const [changes, setChanges] = useState<SyncChange[] | null>(null);
+  const [report, setReport] = useState<SyncReport | null>(null);
   const save = useSaveSyncConfig();
   const test = useTestSyncConfig();
   const sync = useSyncNow();
@@ -341,10 +467,10 @@ function SyncForm({ initial }: { initial: SyncConfig }) {
 
   const onSync = () => {
     setStatus(null);
-    setChanges(null);
+    setReport(null);
     sync.mutate(draft, {
       onSuccess: (result) => {
-        setChanges(result);
+        setReport(result);
         setStatus({ tone: "ok", text: "同步完成。" });
       },
       onError: (error) => setStatus({ tone: "bad", text: String(error) }),
@@ -361,7 +487,7 @@ function SyncForm({ initial }: { initial: SyncConfig }) {
       <div className="grid gap-3">
         <ConfigField
           label="服务器目录"
-          hint="坚果云等 WebDAV 服务的目录地址；阅读进度存为目录下的 state.json。"
+          hint="坚果云等 WebDAV 服务的目录地址；阅读进度、标注与书签存为目录下的 state.json。"
         >
           <GlassInput
             value={draft.url}
@@ -415,23 +541,47 @@ function SyncForm({ initial }: { initial: SyncConfig }) {
         )}
       </div>
 
-      {changes && (
-        <ul className="border-hairline mt-3 grid gap-1.5 border-t pt-3">
-          {changes.map((change) => (
-            <li
-              key={`${change.title}-${change.decision}`}
-              className="text-[12.5px] leading-relaxed"
-            >
-              <span className="text-text-1">{change.title}</span>
-              <span className="text-text-3">
-                {" "}
-                · {DECISION_LABELS[change.decision]} · {Math.round(change.progress * 100)}%
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
+      {report &&
+        (report.books.length > 0 || moved(report.annotations) || moved(report.bookmarks)) && (
+          <ul className="border-hairline mt-3 grid gap-1.5 border-t pt-3">
+            {report.books.map((change) => (
+              <li
+                key={`${change.title}-${change.decision}`}
+                className="text-[12.5px] leading-relaxed"
+              >
+                <span className="text-text-1">{change.title}</span>
+                <span className="text-text-3">
+                  {" "}
+                  · {DECISION_LABELS[change.decision]} · {Math.round(change.progress * 100)}%
+                </span>
+              </li>
+            ))}
+            <SyncTallyRow label="标注" tally={report.annotations} />
+            <SyncTallyRow label="书签" tally={report.bookmarks} />
+          </ul>
+        )}
     </GlassPanel>
+  );
+}
+
+/** Whether a merge moved anything at all for one kind of item. */
+function moved(tally: SyncTally): boolean {
+  return tally.uploaded + tally.downloaded + tally.deleted > 0;
+}
+
+/** One kind's merge counts; renders nothing when that kind did not move. */
+function SyncTallyRow({ label, tally }: { label: string; tally: SyncTally }) {
+  if (!moved(tally)) return null;
+  const parts = [
+    tally.uploaded > 0 ? `上传 ${tally.uploaded}` : null,
+    tally.downloaded > 0 ? `下载 ${tally.downloaded}` : null,
+    tally.deleted > 0 ? `删除 ${tally.deleted}` : null,
+  ].filter(Boolean);
+  return (
+    <li className="text-[12.5px] leading-relaxed">
+      <span className="text-text-1">{label}</span>
+      <span className="text-text-3"> · {parts.join(" / ")}</span>
+    </li>
   );
 }
 

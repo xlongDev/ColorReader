@@ -31,13 +31,17 @@ export function useTestSyncConfig() {
   return useMutation({ mutationFn: (config: SyncConfig) => ipc.syncTest(config) });
 }
 
-/** Runs one full sync cycle; the shelf refreshes with any downloaded progress. */
+/** Runs one full sync cycle; the shelf and any open reader refresh with what moved. */
 export function useSyncNow() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (config: SyncConfig) => ipc.syncNow(config),
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["books"] });
+      // Highlights and bookmarks ride along in the same state document, so a
+      // pull may have rewritten them: drop their caches rather than patch.
+      void queryClient.invalidateQueries({ queryKey: ["annotations"] });
+      void queryClient.invalidateQueries({ queryKey: ["bookmarks"] });
     },
   });
 }

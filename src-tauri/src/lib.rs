@@ -3,6 +3,7 @@
 mod ai;
 mod commands;
 mod db;
+mod dictionary;
 mod document;
 mod error;
 mod library;
@@ -106,6 +107,10 @@ pub fn run() -> tauri::Result<()> {
             commands::ai::ai_digest,
             commands::lookup::lookup_translate,
             commands::lookup::lookup_wikipedia,
+            commands::dictionary::lookup_dictionary,
+            commands::dictionary::dictionary_list,
+            commands::dictionary::dictionary_import,
+            commands::dictionary::dictionary_delete,
             commands::rag::rag_status,
             commands::rag::rag_index_book,
             commands::rag::rag_chat,

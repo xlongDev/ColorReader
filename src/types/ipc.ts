@@ -263,6 +263,31 @@ export interface WikiSummary {
   lang: string;
 }
 
+/**
+ * Mirrors `src-tauri/src/dictionary.rs` / `library/dictionaries.rs`: the answer
+ * the 词典 action got before it reaches AI. `"found"` carries the entry
+ * verbatim — `source` names the imported dictionary it came from, and is `null`
+ * when the platform's own answered — `"missing"` means neither knew the term,
+ * and `"unavailable"` means there was no system dictionary and nothing imported
+ * either. The last two are answers rather than errors: the popup falls through
+ * to AI on both, and only mentions the miss.
+ */
+export type DictionaryLookup =
+  | { status: "found"; text: string; source: string | null }
+  | { status: "missing" }
+  | { status: "unavailable" };
+
+/** One imported dictionary (mirrors `src-tauri/src/library/dictionaries.rs`). */
+export interface LocalDictionary {
+  id: string;
+  name: string;
+  /** Which reader opens the bundle: a StarDict `.ifo` set or an MDict `.mdx`. */
+  kind: "stardict" | "mdict";
+  /** As the bundle declares it; shown for scale, not used for sizing. */
+  wordcount: number;
+  addedAt: number;
+}
+
 export type AiRole = "system" | "user" | "assistant";
 
 export interface AiMessage {
@@ -444,6 +469,23 @@ export interface SyncChange {
   title: string;
   /** 0..1 reading position that was kept or applied. */
   progress: number;
+}
+
+/** Counts of what a merge did to one kind of item. */
+export interface SyncTally {
+  uploaded: number;
+  downloaded: number;
+  deleted: number;
+}
+
+/**
+ * Result of `sync.now`: the per-book decisions plus highlight and bookmark
+ * tallies. The latter are counts, not lists — a library can hold hundreds.
+ */
+export interface SyncReport {
+  books: SyncChange[];
+  annotations: SyncTally;
+  bookmarks: SyncTally;
 }
 
 /** Mirrors `src-tauri/src/tts.rs` — the Edge read-aloud service. */

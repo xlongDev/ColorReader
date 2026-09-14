@@ -6,8 +6,8 @@
 //! shown in the list. Chapter content never changes for a given book (re-import
 //! is a new content hash), so nothing re-locates stale offsets.
 
-use rusqlite::{Connection, params};
-use serde::Serialize;
+use rusqlite::{Connection, OptionalExtension, params};
+use serde::{Deserialize, Serialize};
 
 use crate::error::{AppError, AppResult};
 
@@ -73,6 +73,7 @@ pub fn create(
         return Err(AppError::InvalidArgument("高亮范围无效".into()));
     }
     let style = validated_style(style)?;
+    let now = super::now_seconds();
 
     let annotation = Annotation {
         id: uuid::Uuid::new_v4().to_string(),
@@ -87,12 +88,13 @@ pub fn create(
         // Born without one: `set_note` is the only writer of notes, so this
         // path takes no parameter for it and the column stays `NULL`.
         note: None,
-        created_at: super::now_seconds(),
+        created_at: now,
     };
     conn.execute(
         "INSERT INTO annotations \
-         (id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, created_at) \
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+         (id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, created_at, \
+          updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             annotation.id,
             annotation.book_id,
@@ -104,6 +106,7 @@ pub fn create(
             annotation.color,
             annotation.style,
             annotation.created_at,
+            now,
         ],
     )?;
     Ok(annotation)
@@ -120,9 +123,9 @@ pub fn update(
 ) -> AppResult<Annotation> {
     let style = validated_style(style)?;
     let changed = conn.execute(
-        "UPDATE annotations SET \
-         color = COALESCE(?2, color), style = COALESCE(?3, style) WHERE id = ?1",
-        params![id, color, style],
+        "UPDATE annotations SET color = COALESCE(?2, color), style = COALESCE(?3, style), \
+         updated_at = ?4 WHERE id = ?1",
+        params![id, color, style, super::now_seconds()],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
@@ -141,8 +144,10 @@ pub fn anchor(conn: &Connection, id: &str, cfi: &str) -> AppResult<Annotation> {
     if cfi.trim().is_empty() {
         return Err(AppError::InvalidArgument("标注锚点不能为空".into()));
     }
-    let changed =
-        conn.execute("UPDATE annotations SET cfi = ?2 WHERE id = ?1", params![id, cfi.trim()])?;
+    let changed = conn.execute(
+        "UPDATE annotations SET cfi = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, cfi.trim(), super::now_seconds()],
+    )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
     }
@@ -157,8 +162,10 @@ pub fn anchor(conn: &Connection, id: &str, cfi: &str) -> AppResult<Annotation> {
 /// clears the column; anything else is trimmed and stored.
 pub fn set_note(conn: &Connection, id: &str, note: Option<&str>) -> AppResult<Annotation> {
     let note = note.map(str::trim).filter(|value| !value.is_empty());
-    let changed =
-        conn.execute("UPDATE annotations SET note = ?2 WHERE id = ?1", params![id, note])?;
+    let changed = conn.execute(
+        "UPDATE annotations SET note = ?2, updated_at = ?3 WHERE id = ?1",
+        params![id, note, super::now_seconds()],
+    )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
     }
@@ -203,11 +210,168 @@ pub fn list(conn: &Connection, book_id: &str) -> AppResult<Vec<Annotation>> {
 }
 
 /// Deletes one highlight; `NotFound` when it does not exist.
+///
+/// The row goes for real — every local query stays free of a "not deleted"
+/// filter — but a tombstone is left behind so the deletion can travel to the
+/// other devices. Without it the next sync would pull the highlight straight
+/// back from a copy that still has it.
 pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
-    let changed = conn.execute("DELETE FROM annotations WHERE id = ?1", params![id])?;
+    let tx = conn.unchecked_transaction()?;
+    let changed = tx.execute("DELETE FROM annotations WHERE id = ?1", params![id])?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
     }
+    tx.execute(
+        "INSERT INTO annotation_tombstones (id, updated_at) VALUES (?1, ?2) \
+         ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at",
+        params![id, super::now_seconds()],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// One highlight as the sync layer moves it between devices.
+///
+/// `book` is the owning book's `content_hash` — the only book identity two
+/// devices agree on — and `id` its own UUID, which the creating device mints
+/// once and every other device adopts verbatim, making it a stable cross-device
+/// key. `deleted` marks a tombstone, whose position fields are meaningless.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncAnnotation {
+    pub id: String,
+    #[serde(default)]
+    pub book: String,
+    pub chapter_idx: usize,
+    pub start_char: usize,
+    pub end_char: usize,
+    #[serde(default)]
+    pub text: String,
+    #[serde(default)]
+    pub cfi: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub style: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
+    pub updated_at: i64,
+    #[serde(default)]
+    pub deleted: bool,
+}
+
+impl SyncAnnotation {
+    /// Everything a merge compares except the write clock: same payload means
+    /// the two devices already agree, so neither side needs to be rewritten.
+    pub fn same_payload(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.book == other.book
+            && self.chapter_idx == other.chapter_idx
+            && self.start_char == other.start_char
+            && self.end_char == other.end_char
+            && self.text == other.text
+            && self.cfi == other.cfi
+            && self.color == other.color
+            && self.style == other.style
+            && self.note == other.note
+            && self.deleted == other.deleted
+    }
+}
+
+/// Every highlight to sync — live rows and tombstones alike.
+///
+/// ponytail: tombstones are never pruned, so a repeatedly-used library grows a
+/// few rows per deletion. At personal scale that is nothing; prune tombstones
+/// older than ~90 days if a state file ever gets unwieldy.
+pub fn for_sync(conn: &Connection) -> AppResult<Vec<SyncAnnotation>> {
+    let mut stmt = conn.prepare(
+        "SELECT a.id, b.content_hash, a.chapter_idx, a.start_char, a.end_char, a.text, a.cfi, \
+                a.color, a.style, a.note, a.updated_at \
+         FROM annotations a JOIN books b ON b.id = a.book_id",
+    )?;
+    let live = stmt.query_map([], |row| {
+        Ok(SyncAnnotation {
+            id: row.get(0)?,
+            book: row.get(1)?,
+            chapter_idx: row.get::<_, i64>(2)? as usize,
+            start_char: row.get::<_, i64>(3)? as usize,
+            end_char: row.get::<_, i64>(4)? as usize,
+            text: row.get(5)?,
+            cfi: row.get(6)?,
+            color: row.get(7)?,
+            style: row.get(8)?,
+            note: row.get(9)?,
+            updated_at: row.get(10)?,
+            deleted: false,
+        })
+    })?;
+    let mut out = live.collect::<rusqlite::Result<Vec<_>>>()?;
+
+    let mut stmt = conn.prepare("SELECT id, updated_at FROM annotation_tombstones")?;
+    let graves = stmt.query_map([], |row| {
+        Ok(SyncAnnotation {
+            id: row.get(0)?,
+            book: String::new(),
+            chapter_idx: 0,
+            start_char: 0,
+            end_char: 0,
+            text: String::new(),
+            cfi: None,
+            color: None,
+            style: None,
+            note: None,
+            updated_at: row.get(1)?,
+            deleted: true,
+        })
+    })?;
+    out.extend(graves.collect::<rusqlite::Result<Vec<_>>>()?);
+    Ok(out)
+}
+
+/// Writes a highlight that won the merge into the local database.
+///
+/// A no-op when the book is not imported here: the entry stays in the sync
+/// state for the device that does have the book, exactly like a book's own
+/// progress entry.
+pub fn apply_remote(conn: &Connection, remote: &SyncAnnotation) -> AppResult<()> {
+    let book_id: Option<String> = conn
+        .query_row("SELECT id FROM books WHERE content_hash = ?1", params![remote.book], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    let Some(book_id) = book_id else { return Ok(()) };
+    conn.execute(
+        "INSERT INTO annotations \
+         (id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, note, created_at, \
+          updated_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+         ON CONFLICT (id) DO UPDATE SET book_id = excluded.book_id, \
+           chapter_idx = excluded.chapter_idx, start_char = excluded.start_char, \
+           end_char = excluded.end_char, text = excluded.text, cfi = excluded.cfi, \
+           color = excluded.color, style = excluded.style, note = excluded.note, \
+           updated_at = excluded.updated_at",
+        params![
+            remote.id,
+            book_id,
+            remote.chapter_idx as i64,
+            remote.start_char as i64,
+            remote.end_char as i64,
+            remote.text,
+            remote.cfi,
+            remote.color,
+            remote.style,
+            remote.note,
+            super::now_seconds(),
+            remote.updated_at,
+        ],
+    )?;
+    Ok(())
+}
+
+/// Drops one highlight without leaving a tombstone — the other device's delete
+/// already is one. Used when a remote tombstone wins the merge.
+pub fn remove(conn: &Connection, id: &str) -> AppResult<()> {
+    conn.execute("DELETE FROM annotations WHERE id = ?1", params![id])?;
     Ok(())
 }
 
@@ -374,5 +538,116 @@ mod tests {
         create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
         conn.execute("DELETE FROM books WHERE id = 'b'", []).expect("delete book");
         assert!(list(&conn, "b").expect("list").is_empty(), "外键级联必须清空高亮");
+    }
+
+    /// The write clock, read straight from the row (it stays out of the API).
+    fn stamp(conn: &Connection, id: &str) -> i64 {
+        conn.query_row("SELECT updated_at FROM annotations WHERE id = ?1", params![id], |row| {
+            row.get(0)
+        })
+        .expect("updated_at")
+    }
+
+    #[test]
+    fn every_writer_advances_the_write_clock() {
+        let conn = seed();
+        let made = create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
+        assert_eq!(stamp(&conn, &made.id), made.created_at, "创建即写入 updated_at");
+
+        // Pin the clock into the past so the bump is observable regardless of
+        // how fast the test runs (second resolution would hide it otherwise).
+        for write in 0..3 {
+            conn.execute("UPDATE annotations SET updated_at = 1 WHERE id = ?1", params![made.id])
+                .expect("pin");
+            match write {
+                0 => {
+                    update(&conn, &made.id, Some("#7cd92c"), None).expect("update");
+                }
+                1 => {
+                    anchor(&conn, &made.id, "epubcfi(/6/4!/4/2/2:3)").expect("anchor");
+                }
+                _ => {
+                    set_note(&conn, &made.id, Some("记一笔")).expect("note");
+                }
+            }
+            assert!(stamp(&conn, &made.id) > 1, "第 {write} 条写者必须推进 updated_at");
+        }
+    }
+
+    #[test]
+    fn deleting_leaves_a_tombstone_that_sync_can_carry() {
+        let conn = seed();
+        let made = create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
+        delete(&conn, &made.id).expect("delete");
+
+        assert!(list(&conn, "b").expect("list").is_empty(), "本地行必须真的没了");
+        let grave = for_sync(&conn)
+            .expect("for_sync")
+            .into_iter()
+            .find(|entry| entry.id == made.id)
+            .expect("墓碑必须在同步列表里");
+        assert!(grave.deleted, "墓碑要带删除标志");
+        assert!(grave.updated_at > 0, "墓碑要带写时钟");
+        assert!(grave.book.is_empty(), "墓碑不需要书引用");
+    }
+
+    #[test]
+    fn for_sync_identifies_the_owning_book_by_content_hash() {
+        let conn = seed();
+        create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
+        let entry = &for_sync(&conn).expect("for_sync")[0];
+        assert_eq!(entry.book, "h", "跨设备要靠 content_hash 认书");
+        assert!(!entry.deleted);
+    }
+
+    #[test]
+    fn apply_remote_resolves_the_book_and_upserts_by_id() {
+        let conn = seed();
+        let remote = SyncAnnotation {
+            id: "from-other-device".into(),
+            book: "h".into(),
+            chapter_idx: 2,
+            start_char: 5,
+            end_char: 9,
+            text: "云端".into(),
+            cfi: None,
+            color: Some("#7cd92c".into()),
+            style: Some("underline".into()),
+            note: Some("另一台设备写的".into()),
+            updated_at: 500,
+            deleted: false,
+        };
+        apply_remote(&conn, &remote).expect("apply");
+
+        let all = list(&conn, "b").expect("list");
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].id, "from-other-device", "要保持对方的 id 才能继续跨设备对齐");
+        assert_eq!(all[0].text, "云端");
+        assert_eq!(all[0].note.as_deref(), Some("另一台设备写的"));
+
+        // Applying an updated version of the same id overwrites in place.
+        apply_remote(&conn, &SyncAnnotation { note: Some("改过".into()), ..remote.clone() })
+            .expect("apply again");
+        assert_eq!(list(&conn, "b").expect("list").len(), 1, "同一个 id 不能变成两行");
+        assert_eq!(list(&conn, "b").expect("list")[0].note.as_deref(), Some("改过"));
+
+        // A book this device has not imported is skipped, not an error.
+        let orphan = SyncAnnotation { book: "not-here".into(), ..remote };
+        apply_remote(&conn, &orphan).expect("未导入的书要静默跳过");
+        assert_eq!(list(&conn, "b").expect("list").len(), 1);
+    }
+
+    #[test]
+    fn remove_drops_the_row_without_leaving_a_tombstone() {
+        let conn = seed();
+        let made = create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
+        // Simulate the tombstone living only on the remote: deleting it here
+        // must not manufacture a second one to echo back.
+        remove(&conn, &made.id).expect("remove");
+        assert!(list(&conn, "b").expect("list").is_empty());
+        assert!(
+            for_sync(&conn).expect("for_sync").iter().all(|entry| !entry.deleted),
+            "远端墓碑的本地应用不该再产出一个墓碑"
+        );
     }
 }

@@ -36,9 +36,27 @@
 | 检索重排（Cohere 兼容 `/rerank`，可选）        | ✅   | Phase 10 |
 | 朗读 TTS（Web Speech / 逐段高亮 / 自动跨章）   | ✅   | Phase 10 |
 | 书源插件（JSON 规则 / 搜索 / 下载进书架）      | ✅   | Phase 11 |
-| WebDAV 进度同步（逐本 LWW / 冲突决策回报）     | ✅   | Phase 12 |
+| WebDAV 同步（进度 / 标注 / 书签，LWW + 墓碑）  | ✅   | Phase 12 |
 | 性能与代码分割（路由 lazy / vendor 分块）      | ✅   | Phase 13 |
 | 生产化（CI / 多平台打包 / E2E / Benchmark）    | ✅   | Phase 14 |
+
+### 已落地能力（未单列阶段）
+
+以下能力已随各阶段陆续实现，但未单独编号成 Phase：
+
+| 能力                                            | 状态 | 说明                                                                                                                            |
+| ----------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------- |
+| PDF 划词标注 + 问 AI（文字版）                  | ✅   | pdf.js 文本层可划选，`createHighlight` 以 `chapterIdx = page - 1` 落库；扫描件无文字层仍不支持                                  |
+| 书签（章节定位 / 阅读位置标记）                 | ✅   | 独立 `bookmarks` 表，与标注并列                                                                                                 |
+| 划词查词（系统词典 + 导入词典 + AI 兜底）       | ✅   | 先问平台自带词典（macOS `DictionaryServices`），再问导入的本地词典（StarDict / MDict），都不收录才交给 AI；前两级全离线、免 Key |
+| 划词翻译 / 维基百科（DeepL + Wikipedia）        | ✅   | `SelectionToolbar` 划词后翻译 / 查百科，需 Key 或网络                                                                           |
+| 阅读统计（时长 / 进度 / 标注数）                | ✅   | `StatsPage` + `reading_sessions`（migration v13）                                                                               |
+| 书架标签（多标签分类）                          | ✅   | `tags` / `book_tags`（migration v1），`TagDialog` / `TagBar` 编辑                                                               |
+| Kindle 标注导入（My Clippings）                 | ✅   | `clippings.rs` 按高亮文本在已入库正文里锚定 UTF-16 区间，回填标注                                                               |
+| AI 导读（流式章节导读）                         | ✅   | `GuidePanel` 流式生成，按 `guide:<book_id>` 缓存完整答案                                                                        |
+| 标注笔记 + 笔记导出（md / csv）                 | ✅   | `AnnotationNote` + `ExportNotesDialog`，带回本应用深链                                                                          |
+| 深链 `colorreader://book/<id>?annotation=<aid>` | ✅   | 三种位置模型（CFI / 章+偏移 / 页码）通解，macOS 需打包安装 `/Applications`                                                      |
+| single-instance 深链合流                        | ✅   | Windows / Linux 由 `tauri-plugin-single-instance` 把第二进程 argv 交给先到实例                                                  |
 
 ### 支持的格式
 
@@ -74,11 +92,11 @@ Phase 10 交付物是**检索重排与朗读**：设置里可选填重排模型�
 
 Phase 11 交付物是**在线找书（书源插件）**：书架新增「在线找书」入口，书源是一份用户可编辑的 JSON 规则（迷你 JSONPath 子集 `$.a.b[*].c`），描述一个网站 JSON 接口的搜索、详情、章节列表与正文取法。搜索结果一键下载，Rust 逐章抓取拼成带「第N章」标记的 TXT，走既有导入管线（去重、哈希、切章全部复用），进度逐章汇报，下载完成直接跳书架。
 
-Phase 12 交付物是**WebDAV 进度同步**：设置里配置任意 WebDAV 服务（坚果云、InfiniCloud 等），阅读进度以 `content_hash` 为键同步到云端单个 `state.json`，同一本书在多台设备间自动对齐。冲突按书逐本解决：两边进度相同视为一致，不同时时间戳新者胜、平局云端胜，每一本的决策（上传 / 下载 / 云端独有 / 一致）都会在同步结果里列出，绝不静默覆盖；云端文件解析失败时直接中止同步，绝不拿本地数据覆盖一个可能恢复的远端。凭据只存本地 SQLite。
+Phase 12 交付物是**WebDAV 同步**：设置里配置任意 WebDAV 服务（坚果云、InfiniCloud 等），阅读进度、标注与书签同步到云端单个 `state.json`，同一本书在多台设备间自动对齐。进度以 `content_hash` 为键，标注与书签以各自 UUID 为键。冲突逐项解决：两边相同视为一致，不同时时间戳新者胜、平局云端胜，**删除则胜过同秒的活项**，每一本的决策（上传 / 下载 / 云端独有 / 一致）连同标注、书签的计数都会在同步结果里列出，绝不静默覆盖；删除靠墓碑传播（本地行真删、另记一行删除），否则删掉的标注会被旧副本拉回来。云端文件解析失败时直接中止同步，绝不拿本地数据覆盖一个可能恢复的远端。凭据只存本地 SQLite。
 
 Phase 13 交付物是**性能与代码分割**：主 chunk 从 719 kB 降到 285 kB（gzip 87 kB），消除 500 kB 告警。手段有三：阅读器 / 搜索 / 设置三个页面路由级 `React.lazy`，按需从本地磁盘加载；书架的重对话框（在线找书、书档导入导出）拆成独立 chunk，首次打开才加载；react-dom 与路由 / react-query 两个稳定 vendor 块单独成 chunk，只在依赖升级时失效，浏览器缓存长期命中。
 
-Phase 14 交付物是**生产化**：GitHub Actions 双工作流（CI 全门禁 + tag 触发 tauri-action 多平台打包，产物为 draft release）；本地实测 `tauri build` 产出 ColorReader.app（arm64，ad-hoc 签名，7.7 MB 二进制）；Playwright E2E smoke（`pnpm test:e2e`）对生产构建验证四个路由渲染且零 console 错误，专防懒加载分包崩坏；可重复的 release 基准测试（600 章 / 2.7 MB 参考书）：导入含切章与 FTS 索引 60 ms、全文检索均值 1.3 ms、目录加载 0.6 ms。**代码签名与自动更新暂缓**：需要 Apple 开发者证书与 updater 签名密钥，工作流里已留好注入点，密钥到位后按 release.yml 注释补两步即可。
+Phase 14 交付物是**生产化**：GitHub Actions 双工作流（CI 全门禁 + tag 触发 tauri-action 多平台打包，产物为 draft release）；本地实测 `tauri build` 产出 ColorReader.app（arm64，ad-hoc 签名，7.7 MB 二进制）；Playwright E2E smoke（`pnpm test:e2e`）对生产构建验证四个路由渲染且零 console 错误，专防懒加载分包崩坏；可重复的 release 基准测试（600 章 / 2.7 MB 参考书）：导入含切章与 FTS 索引 60 ms、全文检索均值 1.3 ms、目录加载 0.6 ms。**代码签名与自动更新暂缓**：需要 Apple 开发者证书与 updater 签名密钥，工作流里已留好注入点，密钥到位后按 release.yml 注释补两步即可。标注与书签的 WebDAV 同步（墓碑机制）已于 2026-09-14 落地，多设备同步不再有缺口；剩余待办只剩需要外部凭据的代码签名与自动更新，详见 **[ARCHITECTURE.md](./ARCHITECTURE.md)** 第 9 节。
 
 ---
 
@@ -158,8 +176,8 @@ Rust 侧也提供 `pnpm rust:check`、`pnpm rust:fmt`、`pnpm rust:lint`、`pnpm
 │   └── types/ipc.ts            # Rust 命令返回值的镜像类型
 └── src-tauri/
     ├── src/
-    │   ├── commands/           # Tauri 命令（按域分文件：system / book / reader / annotation / search）
-    │   ├── library/            # 导入 / 仓储 / 章节 / 标注 / 检索 / 书档
+│   ├── commands/           # Tauri 命令（按域分文件：system / book / reader / annotation / search / export / ai / rag / graph / source / sync / clippings / dictionary）
+│   ├── library/            # 导入 / 仓储 / 章节 / 标注 / 检索 / 书档 / 笔记导出 / RAG / 知识图谱 / 书源 / WebDAV 同步 / 词典（StarDict）
     │   ├── error.rs            # AppError：类型化 + 可序列化
     │   ├── state.rs            # 全局 AppState
     │   └── lib.rs              # 应用装配与 tracing 初始化

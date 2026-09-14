@@ -22,12 +22,16 @@ const BOOKS_DIR: &str = "books";
 /// Directory holding extracted cover images.
 const COVERS_DIR: &str = "covers";
 
+/// Directory holding imported dictionaries, one subdirectory per bundle.
+const DICTIONARIES_DIR: &str = "dictionaries";
+
 /// Resolved locations under the data directory.
 #[derive(Debug, Clone)]
 pub struct Layout {
     pub data_dir: PathBuf,
     pub books_dir: PathBuf,
     pub covers_dir: PathBuf,
+    pub dictionaries_dir: PathBuf,
 }
 
 impl Layout {
@@ -35,9 +39,11 @@ impl Layout {
     pub fn create(data_dir: PathBuf) -> AppResult<Self> {
         let books_dir = data_dir.join(BOOKS_DIR);
         let covers_dir = data_dir.join(COVERS_DIR);
+        let dictionaries_dir = data_dir.join(DICTIONARIES_DIR);
         std::fs::create_dir_all(&books_dir)?;
         std::fs::create_dir_all(&covers_dir)?;
-        Ok(Self { data_dir, books_dir, covers_dir })
+        std::fs::create_dir_all(&dictionaries_dir)?;
+        Ok(Self { data_dir, books_dir, covers_dir, dictionaries_dir })
     }
 }
 

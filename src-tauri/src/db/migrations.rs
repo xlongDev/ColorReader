@@ -404,6 +404,40 @@ CREATE INDEX reading_sessions_day ON reading_sessions (day DESC);
 ALTER TABLE annotations ADD COLUMN note TEXT;
 "#,
     },
+    Migration {
+        version: 15,
+        name: "annotation_and_bookmark_sync",
+        // What multi-device sync needs and nothing more: a write clock per row
+        // and a record of deletions.
+        //
+        // `updated_at` is the last-writer-wins key. Existing rows are backfilled
+        // from `created_at` rather than left at 0, so a first sync does not
+        // present every old row as "brand new" and win an upload against a
+        // remote copy that is actually newer.
+        //
+        // A tombstone is the only way a deletion can travel: once the row is
+        // gone the remote side would otherwise keep re-uploading it. The id is
+        // a UUID minted once on the creating device and carried to every other
+        // device with the row, so it is already a stable cross-device key; a
+        // tombstone therefore needs no book reference to be meaningful.
+        sql: r#"
+ALTER TABLE annotations ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+UPDATE annotations SET updated_at = created_at;
+
+ALTER TABLE bookmarks ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+UPDATE bookmarks SET updated_at = created_at;
+
+CREATE TABLE annotation_tombstones (
+  id         TEXT PRIMARY KEY,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE bookmark_tombstones (
+  id         TEXT PRIMARY KEY,
+  updated_at INTEGER NOT NULL
+);
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

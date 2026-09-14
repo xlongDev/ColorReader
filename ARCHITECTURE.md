@@ -70,7 +70,7 @@ chapters_fts（FTS5 外部内容表，内容指向 chapters，由触发器维护
 
 内嵌图片统一记成带内标记段落（`\u{FFFC}` + 容器内的可寻址名字），阅读时按需经 `book.asset` 取字节：EPUB / CBZ 按 ZIP 条目名，FB2 按 `#<binary id>`（base64 内联），其余格式没有内嵌资源。
 
-**PDF 是唯一的固定版式例外**：阅读器不走文字段落，而是用 pdf.js（懒加载独立 chunk）把每页原样画到 canvas，`book.source_file` 返回整份文件字节。提取的逐页文本仍落库，供全文检索、朗读与 AI 使用，但不负责显示。PDF 排版不走 prose 的 multicol 分栏（页盒画布进分栏必溢出一栏，读起来就是整页空白），由独立的固定高度容器承载。目录面板由 pdf.js `getOutline()` 解析（named dest、`/A` action、UTF-16 标题均已处理，映射到 0-based 页码）；没有书签的 PDF 回退到逐页列表。封面同理由前端渲染第 1 页成 PNG，经 `book.cover_save` 落盘（书库挂载时对缺封面的 PDF 自动补一次）。画布不可划选，标注/划词问 AI 在 PDF 上暂不可用。
+**PDF 是唯一的固定版式例外**：阅读器不走文字段落，而是用 pdf.js（懒加载独立 chunk）把每页原样画到 canvas，`book.source_file` 返回整份文件字节。提取的逐页文本仍落库，供全文检索、朗读与 AI 使用，但不负责显示。PDF 排版不走 prose 的 multicol 分栏（页盒画布进分栏必溢出一栏，读起来就是整页空白），由独立的固定高度容器承载。目录面板由 pdf.js `getOutline()` 解析（named dest、`/A` action、UTF-16 标题均已处理，映射到 0-based 页码）；没有书签的 PDF 回退到逐页列表。封面同理由前端渲染第 1 页成 PNG，经 `book.cover_save` 落盘（书库挂载时对缺封面的 PDF 自动补一次）。pdf.js 在画布之上渲染**文本层**，选区解析、划词高亮与问 AI 全走文本层：`pdfTextSelection.ts` 的 `resolveLayerSelection` / `paintPageHighlights` / `askAboutSelection` 负责选区→字符区间、`ReaderPage` 把 `onSelection` / `onAnnotationClick` / `annotations` 接给 `PdfPageView`，`createHighlight` 以 `chapterIdx = page - 1` 落库——**文字版 PDF 的标注与划词问 AI 已与 epub / 纯文本同权**（画布本身不可划选，但文本层可，二者不矛盾）。唯一的真缺口是**纯扫描件**：没有文字层，文本层为空，既不能划选也不能问 AI，OCR 不在本期范围。
 
 阅读器**一次只加载一章**，整本书既不进 React State 也不进 DOM。全局进度 `0..1` 通过 `chars` 前缀和映射到章节与章内比例（`locateChapter` / `globalProgress`），定位时不需要加载任何正文。Phase 3 之前导入的书没有 `chapters` 行，`reader_toc` 在首次读取时用 `ensure_chapters`（`with_tx` 内二次检查，防并发重复插入）惰性补建索引。
 
@@ -143,6 +143,26 @@ Provider 选型收敛为一件事：**OpenAI 兼容的 `/chat/completions`**。O
 
 安全默认值：明文 `http://` 只接受 loopback（`localhost` / `127.0.0.1` / `[::1]`），外网必须 TLS，否则 Key 明文过网。前端侧 `useAiChat` 维持一次一问：新提问替换上一轮问答，过期 `requestId` 的事件直接丢弃。
 
+### 查词与翻译
+
+划词后的动作各走最短的一条路，**离线的两条排在最前**。
+
+**词典是「平台词典 → 导入的本地词典 → AI」这条链**，全部由 `lookup_dictionary` 一个命令走完。返回 `Found{text, source}` / `Missing` / `Unavailable` 三态**标记值而非错误**——「词典里没有」和「这里根本没有词典」都是答案，前端对两者都回落到 AI，且只对前者提示。`source` 告诉弹窗这条是哪个词典给的：系统词典为 `null`（不标注），导入的词典填自己的名字。
+
+**第一级：平台词典**（macOS 的 `DictionaryServices`，`dictionary.rs`）。本地、瞬时、免 Key，返回纯文本词条（音标、词性、义项、`▸` 例句标记原样透传，没有标记要剥）。这不是「内置一份词典数据」——不打包也不下载任何数据集：中文系统查英文词给出中文义项加拼音，反之亦然。两条实测结论让它不必配启发式：**整段选中不是查询**（`hello world`、整句、长中文从句一律无词条），所以句子自然而然落到下一级；而 `"  spaced  "` 能剥掉空白命中 `space`。**这是 macOS 专属能力**：Windows / Linux 上返回 `Unavailable`，第二级于是成为那些平台唯一的离线来源。
+
+**第二级：读者导入的本地词典**（注册表 `library/dictionaries.rs` + 两个格式层 `stardict.rs` / `mdict.rs`）。读者选一个文件（`.ifo` 或 `.mdx`），bundle 收进 `<data dir>/dictionaries/<id>/`，**按元数据里的 `kind` 分派到对应读取器**。列表存 `settings` 的单个 JSON（`lookup.dictionaries`），所以**不需要迁移**；查询按列表顺序试，第一个命中即返回。
+
+**StarDict**（`.ifo` + `.idx` + `.dict`）：**`.dict.dz` 在导入时就解压**——gzip 没有随机访问，每次查词都从头解压整本，比多占一份磁盘贵得多。索引不整份驻留：扫一遍只记下**每条词条的起始偏移**（4 B/条，70 万条约 2.8 MB），查词时二分再按需 `seek` 读那一条。三处收窄（都在导入时报明确理由）：只支持 32 位偏移、`sametypesequence` 只接受单一文本类型、二进制字段（图片 / 声音）跳过。
+
+**MDict**（`.mdx`）是逆向格式——MDict 闭源、没有官方规范，所以收窄得更狠：只支持 **2.0 + UTF-8 + 未加密**。1.2 会把每个尺寸字段从 8 字节换成 4，其它编码要 GBK / Big5 解码器，加密有两条各自以邮箱 / 设备 ID 为密钥的路径；这些在读头部时**按名拒绝**，而不是半解析——猜错产出的是「看起来合理的乱码」，比拒绝更糟。键与正文都在压缩块里，所以一次查词是「**按块的首 / 末键选出键块 → 解压 → 块内扫描 → 取记录偏移 → 定位记录块 → 解压 → 读到 NUL**」，只解压两块。文件里三种字节序的校验和全部校验：头部小端、键区前言大端、每块大端且算在**解压后**的数据上。`.mdd` 资源包不导入。
+
+读取器的正确性不靠自我印证：夹具 `src-tauri/tests/fixtures/mini.mdx` 由**第三方写入器**（`writemdict`，见 `scripts/generate-mdx-fixture.py`）产出、并被**第三方读取器**接受，Rust 测试打的就是这个文件。
+
+**翻译**走 DeepL（`lookup_translate`，Key 存 `settings`，按 `:fx` 后缀选免费 / 付费主机），一次往返、不流式；没配 Key 就与词典共用同一个 AI 流式回答。**维基百科**（`lookup_wikipedia`）取 REST summary：先精确标题、再走搜索索引兜底、再换语言版本，同样不需要 Key。
+
+DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CORS 也从不适用于 webview；两条离线链则连网络都不需要。
+
 ### RAG 模型
 
 **不用向量数据库扩展，检索是 Rust 里的暴力点积。** 一个个人书库的组块量级是几千而不是几百万（600 章 ≈ 数千块），768 维归一化向量全量扫一遍是毫秒级；sqlite-vec 的加载、版本与平台问题在这个量级下全是纯开销。等数字证明需要 ANN 时再引入，`chunks` 表的形态不会因此改变。
@@ -179,9 +199,13 @@ Provider 选型收敛为一件事：**OpenAI 兼容的 `/chat/completions`**。O
 
 ### 同步模型
 
-**同步对象只有阅读进度**，以 `content_hash` 为键——同一份书文件在任何设备上哈希相同，天然对齐，无需中央注册表。云端是一个 WebDAV 目录下的单个 `state.json`（结构带 `version` 字段供未来迁移），HTTP 只用三个动词：GET 取状态、PUT 写状态、MKCOL 补缺失的祖先目录。同步凭据存 `settings` KV 表（`sync.webdav`），与 AI Key 同一安全模型：渲染层永不持有；`sync.device_id` 首次同步时生成。
+**同步对象有三样：阅读进度、标注与书签。** 进度以 `content_hash` 为键——同一份书文件在任何设备上哈希相同，天然对齐，无需中央注册表；标注与书签以各自的 UUID 为键，创建它的设备生成一次、其余设备原样沿用，所以同一个 id 处处指同一条。云端是一个 WebDAV 目录下的单个 `state.json`（`version` 现为 2；v1 旧文件仍能解析，新增的两张表默认空），HTTP 只用三个动词：GET 取状态、PUT 写状态、MKCOL 补缺失的祖先目录。同步凭据存 `settings` KV 表（`sync.webdav`），与 AI Key 同一安全模型：渲染层永不持有；`sync.device_id` 首次同步时生成。
 
-合并是逐本的 LWW 纯函数 `merge`：**两边进度相同视为一致**（不看时间戳，否则每次同步都会因时钟翻新产生无谓重传）；进度不同时时间戳新者胜、平局云端胜（两台设备同一秒写入时收敛而不是来回翻）。每本书的决策（上传 / 下载 / 云端独有 / 一致）随 `sync_now` 返回给 UI 展示。两条安全底线：**云端 JSON 解析失败直接中止同步**——绝不拿本地数据覆盖一个可能恢复的远端；PUT 前只应用「胜出」的值，本地赢时写回的是相同值，不产生回退。标注与书档同步刻意推迟：删除同步需要墓碑机制，复杂度翻倍。
+合并是三个 LWW 纯函数（`merge` / `merge_annotations` / `merge_bookmarks`）。进度逐本合并：**两边进度相同视为一致**（不看时间戳，否则每次同步都会因时钟翻新产生无谓重传），进度不同时时间戳新者胜、平局云端胜（两台设备同一秒写入时收敛而不是来回翻）。标注与书签逐条合并，规则同此，只在两处收紧：`updated_at` 相同时**删除胜过活项**（否则删掉的标注会被一个同秒的旧副本复活），且两边 `same_payload` 时只保留较新的时钟、不产生写入（同样是为了不 churn）。删除靠**墓碑**传播——`delete` 把行真删（本地所有查询因此都不需要「未删除」过滤），并在 `annotation_tombstones` / `bookmark_tombstones` 留一行，`for_sync` 把墓碑与活行一并交给合并。远端赢的条目只在本地导入了那本书时才落库（按 `content_hash` 解析出本地 `book_id`），否则留在状态里，等有这本书的设备来取。
+
+每本书的决策（上传 / 下载 / 云端独有 / 一致）连同标注、书签的计数（上传 / 下载 / 删除，只报数量、不列条目）随 `sync_now` 返回给 UI 展示。两条安全底线：**云端 JSON 解析失败直接中止同步**——绝不拿本地数据覆盖一个可能恢复的远端；PUT 前只应用「胜出」的值，本地赢时写回的是相同值，不产生回退。
+
+两处刻意的简化：墓碑不剪枝（个人量级下每次删除多几行而已，`for_sync` 的注释写了升级路径）；同一句话在两台设备离线各划一次会得到两条——uuid 不同，不做按区间折叠，罕见且可手删。
 
 ### 导入管线
 
@@ -454,12 +478,32 @@ Liquid Glass 的代价是 `backdrop-filter`：**嵌套的玻璃会把模糊一�
 
 ## 9. 尚未落地（后续阶段）
 
-阶段计划（P0–P14）已全部完成，仅剩需要外部凭据的两项：
+阶段计划（P0–P14）已全部完成。剩余项集中在下述两档；两项已于此日落地——「标注 + 书签 WebDAV 同步（墓碑）」（见「同步模型」）与「离线基础词典」（macOS 走系统词典，见「查词与翻译」）——故 P0 只余需要外部凭据的两项。
 
-| 主题     | 阻塞点                          | 补齐路径                                                                  |
-| -------- | ------------------------------- | ------------------------------------------------------------------------- |
-| 代码签名 | Apple 开发者证书 / Windows 证书 | 证书进 GitHub Secrets，`release.yml` 注入 `APPLE_CERTIFICATE` 等环境变量  |
-| 自动更新 | updater 签名密钥与更新源        | `tauri signer generate` 生成密钥，`tauri.conf.json` 开 `updater` 并填公钥 |
+### P0（发布门槛，需外部凭据）
+
+| 主题     | 阻塞点                          | 补齐路径                                                                                                      |
+| -------- | ------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| 代码签名 | Apple 开发者证书 / Windows 证书 | 证书进 GitHub Secrets，`release.yml` 注入 `APPLE_CERTIFICATE` 等环境变量                                      |
+| 自动更新 | updater 签名密钥与更新源        | `tauri signer generate` 生成密钥，`tauri.conf.json` 开 `updater` 并填公钥，前端接 `@tauri-app/plugin-updater` |
+
+### P1（高价值，中等工作量）
+
+| 主题                 | 说明                                                                                                                                                                                      |
+| -------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| epub 旧标注 CFI 回填 | 迁移前创建的 epub 标注 `cfi = NULL`，不渲染不跳转；复用 P1-4 Kindle 导入的 `text→CFI` 铸锚链路（`resolveAnchors` / `indexText` / `getCFI` / `annotation_anchor`），打开该书时批量反查落库 |
+| 其它词典格式         | StarDict 已可导入（`library/stardict.rs` + `dictionaries.rs`），三平台都有离线词典可用；MDict（MDX/MDD，压缩块 + 加密变体）、DICT、SLOB、BGL 都还没有。按需再加，格式层就是一个文件       |
+| 自定义字体导入       | 中文阅读刚需（LXGW 等），排版已抽象在 `foliateStyle.ts` / prose，加字体管理即可                                                                                                           |
+
+### P2（锦上添花）
+
+- 笔记导出到 Anki（`.apkg`）/ Obsidian（`[[wikilink]]`）
+- 知识图谱力导向可视化深化（`GraphPanel` 已有基础）
+- 金句卡片分享图 · PDF 扫描件 OCR · 快捷键自定义 · 多窗口对照 · i18n（en）
+
+### 明确不做
+
+自建云同步、自建 AI、书源加 HTML 规则（规则语言扩张是维护陷阱）、多用户协作（与 Local First 冲突）。
 
 ### 生产化基线（Phase 14）
 
@@ -467,3 +511,5 @@ Liquid Glass 的代价是 `backdrop-filter`：**嵌套的玻璃会把模糊一�
 - **打包**：`pnpm tauri build` 本地实测产出 `ColorReader.app`（arm64，ad-hoc 签名，二进制 7.7 MB）；dmg 由 CI 产出。
 - **E2E**：`pnpm test:e2e`（Playwright + chromium）对 `vite preview` 的生产构建做路由 smoke：书库 → 搜索 → 设置 → 书库各页渲染且 console/pageerror 为空，懒加载 chunk 加载失败会在此暴露。
 - **Benchmark**：`cargo test --release bench -- --ignored --nocapture`（600 章 / 2.7 MB 参考书）：导入（切章 + FTS 索引）60 ms，检索均值 1.3 ms，目录加载 0.6 ms。Apple M 系列、release profile。
+
+> 文档同步备忘：本节的 PDF 段落已据代码实际状态订正（此前写「PDF 不可标注」已失效——文字版 PDF 标注 + 划词问 AI 均已落地）；「同步模型」一节已改写为「进度 + 标注 + 书签」，P0-① 标注/书签同步随之从待办移出。

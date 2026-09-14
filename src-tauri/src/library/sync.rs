@@ -1,23 +1,28 @@
-//! WebDAV reading-progress sync.
+//! WebDAV sync for reading progress, highlights and bookmarks.
 //!
 //! One JSON document (`state.json`) lives in a user-chosen WebDAV collection.
-//! Entries are keyed by `content_hash`, so the same book file on two machines
-//! maps to the same entry with no central registry. The merge is last-writer-
-//! wins per book by `updated_at`, ties go to the remote, and every decision is
-//! reported back so "not a blind overwrite" is visible in the UI. A remote
-//! document that fails to parse aborts the sync: overwriting a corrupt-but-
-//! recoverable state file with ours would destroy the other device's data.
+//! Books are keyed by `content_hash`, so the same book file on two machines
+//! maps to the same entry with no central registry. Highlights and bookmarks
+//! are keyed by their own UUID, which the creating device mints once and every
+//! other device adopts verbatim, so the same key identifies the same item
+//! everywhere. Each is last-writer-wins by its own `updated_at`, ties go to the
+//! remote, and a deletion beats a live copy at the same timestamp so a remove
+//! is never undone by a stale record. Every decision is reported back so "not a
+//! blind overwrite" is visible in the UI. A remote document that fails to parse
+//! aborts the sync: overwriting a corrupt-but-recoverable state file with ours
+//! would destroy the other device's data.
 //!
 //! Password lives in SQLite next to the AI key, for the same reason: the
 //! renderer must never hold backend-owned secrets.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::db::Library;
 use crate::error::{AppError, AppResult};
+use crate::library::{annotations, bookmarks};
 
 /// Where the state document lives and how to sign in.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -120,7 +125,11 @@ pub struct RemoteBook {
     pub title: String,
 }
 
-/// The cloud document, version 1.
+/// State-document layout version. v2 added the annotation and bookmark maps;
+/// a v1 file (progress only) still parses because the new maps default empty.
+pub const STATE_VERSION: u32 = 2;
+
+/// The cloud document.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteState {
@@ -129,11 +138,24 @@ pub struct RemoteState {
     pub updated_at: i64,
     /// Keyed by `content_hash`; a BTreeMap keeps the serialized form stable.
     pub books: BTreeMap<String, RemoteBook>,
+    /// Keyed by annotation UUID. Absent in a v1 document.
+    #[serde(default)]
+    pub annotations: BTreeMap<String, annotations::SyncAnnotation>,
+    /// Keyed by bookmark UUID. Absent in a v1 document.
+    #[serde(default)]
+    pub bookmarks: BTreeMap<String, bookmarks::SyncBookmark>,
 }
 
 impl Default for RemoteState {
     fn default() -> Self {
-        Self { version: 1, device_id: String::new(), updated_at: 0, books: BTreeMap::new() }
+        Self {
+            version: STATE_VERSION,
+            device_id: String::new(),
+            updated_at: 0,
+            books: BTreeMap::new(),
+            annotations: BTreeMap::new(),
+            bookmarks: BTreeMap::new(),
+        }
     }
 }
 
@@ -185,7 +207,7 @@ pub fn merge(
     now: i64,
 ) -> (RemoteState, Vec<Change>) {
     let mut state = remote.unwrap_or_default();
-    state.version = 1;
+    state.version = STATE_VERSION;
     state.device_id = device_id.to_string();
     state.updated_at = now;
 
@@ -276,6 +298,172 @@ pub fn apply_downloaded(
         ],
     )?;
     Ok(changed > 0)
+}
+
+/// Counts of what a merge did to one kind of item, for the sync report.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Tally {
+    pub uploaded: usize,
+    pub downloaded: usize,
+    pub deleted: usize,
+}
+
+/// Everything one `sync.now` did: the per-book decisions plus highlight and
+/// bookmark tallies. The latter are counts, not lists — a library can hold
+/// hundreds of highlights and listing each would drown the panel.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncReport {
+    pub books: Vec<Change>,
+    pub annotations: Tally,
+    pub bookmarks: Tally,
+}
+
+/// Every `content_hash` this device has imported.
+pub fn local_hashes(conn: &rusqlite::Connection) -> AppResult<BTreeSet<String>> {
+    let mut stmt = conn.prepare("SELECT content_hash FROM books")?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<BTreeSet<_>>>()?)
+}
+
+/// Last-writer-wins by `updated_at`; a tie goes to the remote, except that a
+/// deletion beats a live copy at the same timestamp, so a removal is never
+/// undone by a stale record that happens to share its second.
+fn local_wins(local_at: i64, local_deleted: bool, remote_at: i64, remote_deleted: bool) -> bool {
+    local_at > remote_at || (local_at == remote_at && local_deleted && !remote_deleted)
+}
+
+/// Pure merge of the highlight maps: union by id, last-writer-wins, deletions
+/// carried as tombstones.
+///
+/// Returns the state to upload, what the merge did, and the writes to apply
+/// locally. A highlight is only written locally when its book is imported here;
+/// otherwise the entry stays in the state for the device that does have it.
+///
+/// ponytail: identity is the UUID, not the anchored range, so highlighting the
+/// same passage on two devices offline yields two entries. Folding by
+/// (book, chapter, range) would dedupe it at the cost of a second key model;
+/// not worth it until someone actually reports the duplicate.
+pub fn merge_annotations(
+    local: Vec<annotations::SyncAnnotation>,
+    remote: BTreeMap<String, annotations::SyncAnnotation>,
+    local_hashes: &BTreeSet<String>,
+) -> (
+    BTreeMap<String, annotations::SyncAnnotation>,
+    Tally,
+    Vec<annotations::SyncAnnotation>,
+    Vec<String>,
+) {
+    let mut state = remote;
+    let mut tally = Tally::default();
+    let mut upsert = Vec::new();
+    let mut delete = Vec::new();
+    let mut seen = HashSet::new();
+
+    for entry in local {
+        seen.insert(entry.id.clone());
+        match state.get(&entry.id) {
+            None => {
+                tally.uploaded += 1;
+                state.insert(entry.id.clone(), entry);
+            }
+            Some(cloud) => {
+                if entry.same_payload(cloud) {
+                    // Nothing to move; keep the later clock so the next
+                    // comparison is not decided by a stale timestamp.
+                    if entry.updated_at > cloud.updated_at {
+                        state.insert(entry.id.clone(), entry);
+                    }
+                } else if local_wins(
+                    entry.updated_at,
+                    entry.deleted,
+                    cloud.updated_at,
+                    cloud.deleted,
+                ) {
+                    tally.uploaded += 1;
+                    state.insert(entry.id.clone(), entry);
+                } else if cloud.deleted {
+                    tally.deleted += 1;
+                    delete.push(cloud.id.clone());
+                } else {
+                    tally.downloaded += 1;
+                    upsert.push(cloud.clone());
+                }
+            }
+        }
+    }
+
+    // Remote-only entries: downloaded when the book is here, otherwise left in
+    // the state untouched. A tombstone for something this device never had
+    // needs no local action either way.
+    for (id, cloud) in &state {
+        if seen.contains(id) || cloud.deleted {
+            continue;
+        }
+        if local_hashes.contains(&cloud.book) {
+            tally.downloaded += 1;
+            upsert.push(cloud.clone());
+        }
+    }
+
+    (state, tally, upsert, delete)
+}
+
+/// Pure merge of the bookmark maps. Same rules as [`merge_annotations`].
+pub fn merge_bookmarks(
+    local: Vec<bookmarks::SyncBookmark>,
+    remote: BTreeMap<String, bookmarks::SyncBookmark>,
+    local_hashes: &BTreeSet<String>,
+) -> (BTreeMap<String, bookmarks::SyncBookmark>, Tally, Vec<bookmarks::SyncBookmark>, Vec<String>) {
+    let mut state = remote;
+    let mut tally = Tally::default();
+    let mut upsert = Vec::new();
+    let mut delete = Vec::new();
+    let mut seen = HashSet::new();
+
+    for entry in local {
+        seen.insert(entry.id.clone());
+        match state.get(&entry.id) {
+            None => {
+                tally.uploaded += 1;
+                state.insert(entry.id.clone(), entry);
+            }
+            Some(cloud) => {
+                if entry.same_payload(cloud) {
+                    if entry.updated_at > cloud.updated_at {
+                        state.insert(entry.id.clone(), entry);
+                    }
+                } else if local_wins(
+                    entry.updated_at,
+                    entry.deleted,
+                    cloud.updated_at,
+                    cloud.deleted,
+                ) {
+                    tally.uploaded += 1;
+                    state.insert(entry.id.clone(), entry);
+                } else if cloud.deleted {
+                    tally.deleted += 1;
+                    delete.push(cloud.id.clone());
+                } else {
+                    tally.downloaded += 1;
+                    upsert.push(cloud.clone());
+                }
+            }
+        }
+    }
+
+    for (id, cloud) in &state {
+        if seen.contains(id) || cloud.deleted {
+            continue;
+        }
+        if local_hashes.contains(&cloud.book) {
+            tally.downloaded += 1;
+            upsert.push(cloud.clone());
+        }
+    }
+
+    (state, tally, upsert, delete)
 }
 
 fn state_url(dir_url: &str) -> String {
@@ -391,26 +579,57 @@ pub async fn test_connection(config: &SyncConfig) -> AppResult<()> {
     dav.pull().await.map(|_| ())
 }
 
-/// The full sync cycle: pull, merge, apply downloads, push.
-pub async fn run(library: &Library, config: &SyncConfig) -> AppResult<Vec<Change>> {
+/// The full sync cycle: pull, merge progress + highlights + bookmarks, apply
+/// what the remote won, push.
+pub async fn run(library: &Library, config: &SyncConfig) -> AppResult<SyncReport> {
     let checked = SyncConfig { url: normalize_url(&config.url)?, ..config.clone() };
     let dav = Dav::new(&checked)?;
     let device = device_id(library)?;
     let remote = dav.pull().await?;
 
-    let (local, changes) = {
-        let (state, changes) =
+    let (state, report) = {
+        let (mut state, books) =
             merge(&library.with(local_books)?, remote, &device, crate::library::now_seconds());
+
+        let hashes = library.with(local_hashes)?;
+        let (annotations_state, annotation_tally, annotation_upserts, annotation_deletes) =
+            merge_annotations(
+                library.with(annotations::for_sync)?,
+                std::mem::take(&mut state.annotations),
+                &hashes,
+            );
+        state.annotations = annotations_state;
+
+        let (bookmarks_state, bookmark_tally, bookmark_upserts, bookmark_deletes) = merge_bookmarks(
+            library.with(bookmarks::for_sync)?,
+            std::mem::take(&mut state.bookmarks),
+            &hashes,
+        );
+        state.bookmarks = bookmarks_state;
+
         library.with(|conn| {
             for (hash, book) in &state.books {
                 apply_downloaded(conn, hash, book)?;
             }
+            for entry in &annotation_upserts {
+                annotations::apply_remote(conn, entry)?;
+            }
+            for id in &annotation_deletes {
+                annotations::remove(conn, id)?;
+            }
+            for entry in &bookmark_upserts {
+                bookmarks::apply_remote(conn, entry)?;
+            }
+            for id in &bookmark_deletes {
+                bookmarks::remove(conn, id)?;
+            }
             Ok(())
         })?;
-        (state, changes)
+
+        (state, SyncReport { books, annotations: annotation_tally, bookmarks: bookmark_tally })
     };
-    dav.push(&local).await?;
-    Ok(changes)
+    dav.push(&state).await?;
+    Ok(report)
 }
 
 #[cfg(test)]
@@ -424,7 +643,7 @@ mod tests {
     #[test]
     fn a_local_only_position_goes_up() {
         let (state, changes) = merge(&[book("h1", "三体", 0.5, 100)], None, "dev", 200);
-        assert_eq!(state.version, 1);
+        assert_eq!(state.version, STATE_VERSION);
         assert_eq!(state.device_id, "dev");
         assert_eq!(state.books["h1"].progress, 0.5);
         assert_eq!(changes, vec![Change::Uploaded { title: "三体".into(), progress: 0.5 }]);
@@ -538,5 +757,206 @@ mod tests {
         assert!(normalize_url("http://localhost:8080/dav").is_ok());
         assert!(normalize_url("http://dav.x.com").is_err());
         assert!(normalize_url("  ").is_err());
+    }
+
+    fn ann(id: &str, at: i64) -> annotations::SyncAnnotation {
+        annotations::SyncAnnotation {
+            id: id.into(),
+            book: "h".into(),
+            chapter_idx: 0,
+            start_char: 0,
+            end_char: 3,
+            text: "hi".into(),
+            cfi: None,
+            color: None,
+            style: None,
+            note: None,
+            updated_at: at,
+            deleted: false,
+        }
+    }
+
+    fn grave(id: &str, at: i64) -> annotations::SyncAnnotation {
+        annotations::SyncAnnotation {
+            id: id.into(),
+            book: String::new(),
+            chapter_idx: 0,
+            start_char: 0,
+            end_char: 0,
+            text: String::new(),
+            cfi: None,
+            color: None,
+            style: None,
+            note: None,
+            updated_at: at,
+            deleted: true,
+        }
+    }
+
+    fn imported() -> BTreeSet<String> {
+        ["h".to_string()].into_iter().collect()
+    }
+
+    fn none() -> BTreeSet<String> {
+        BTreeSet::new()
+    }
+
+    #[test]
+    fn a_local_only_highlight_is_uploaded() {
+        let (state, tally, upsert, delete) =
+            merge_annotations(vec![ann("a", 100)], BTreeMap::new(), &imported());
+        assert_eq!(state["a"].updated_at, 100);
+        assert_eq!(tally, Tally { uploaded: 1, downloaded: 0, deleted: 0 });
+        assert!(upsert.is_empty(), "自己的东西不需要写回本地");
+        assert!(delete.is_empty());
+    }
+
+    #[test]
+    fn a_newer_remote_highlight_is_applied_locally() {
+        let mut cloud = ann("a", 200);
+        cloud.note = Some("云端写的".into());
+        let (state, tally, upsert, delete) = merge_annotations(
+            vec![ann("a", 100)],
+            BTreeMap::from([("a".to_string(), cloud)]),
+            &imported(),
+        );
+        assert_eq!(state["a"].note.as_deref(), Some("云端写的"));
+        assert_eq!(tally, Tally { uploaded: 0, downloaded: 1, deleted: 0 });
+        assert_eq!(upsert.len(), 1);
+        assert_eq!(upsert[0].id, "a");
+        assert!(delete.is_empty());
+    }
+
+    #[test]
+    fn a_local_edit_wins_over_an_older_remote_copy() {
+        let mut mine = ann("a", 300);
+        mine.note = Some("本地改过".into());
+        let mut cloud = ann("a", 200);
+        cloud.note = Some("旧的".into());
+        let (state, tally, upsert, _) =
+            merge_annotations(vec![mine], BTreeMap::from([("a".to_string(), cloud)]), &imported());
+        assert_eq!(state["a"].note.as_deref(), Some("本地改过"));
+        assert_eq!(tally.uploaded, 1);
+        assert!(upsert.is_empty());
+    }
+
+    #[test]
+    fn identical_highlights_do_not_churn() {
+        // Same payload, only the clock differs: nothing to move, but the later
+        // clock is kept so a future comparison is not decided by a stale stamp.
+        let (state, tally, upsert, delete) = merge_annotations(
+            vec![ann("a", 100)],
+            BTreeMap::from([("a".to_string(), ann("a", 250))]),
+            &imported(),
+        );
+        assert_eq!(state["a"].updated_at, 250);
+        assert_eq!(tally, Tally::default());
+        assert!(upsert.is_empty() && delete.is_empty());
+    }
+
+    #[test]
+    fn a_remote_tombstone_removes_the_local_highlight() {
+        let (state, tally, upsert, delete) = merge_annotations(
+            vec![ann("a", 100)],
+            BTreeMap::from([("a".to_string(), grave("a", 300))]),
+            &imported(),
+        );
+        assert!(state["a"].deleted, "墓碑要留在状态里，否则下次又会被拉回来");
+        assert_eq!(tally, Tally { uploaded: 0, downloaded: 0, deleted: 1 });
+        assert_eq!(delete, vec!["a".to_string()]);
+        assert!(upsert.is_empty());
+    }
+
+    #[test]
+    fn a_tombstone_beats_a_live_copy_at_the_same_timestamp() {
+        let (state, tally, _, delete) = merge_annotations(
+            vec![ann("a", 100)],
+            BTreeMap::from([("a".to_string(), grave("a", 100))]),
+            &imported(),
+        );
+        assert!(state["a"].deleted, "平局时删除必须获胜，否则删了又活");
+        assert_eq!(tally.deleted, 1);
+        assert_eq!(delete, vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn a_local_tombstone_propagates() {
+        let (state, tally, upsert, delete) = merge_annotations(
+            vec![grave("a", 300)],
+            BTreeMap::from([("a".to_string(), ann("a", 100))]),
+            &imported(),
+        );
+        assert!(state["a"].deleted);
+        assert_eq!(tally.uploaded, 1, "本地删除要传上去");
+        assert!(upsert.is_empty() && delete.is_empty(), "本地早已删过，不需要再删");
+    }
+
+    #[test]
+    fn a_remote_highlight_for_an_unimported_book_is_kept_but_not_applied() {
+        let mut cloud = ann("a", 200);
+        cloud.book = "elsewhere".into();
+        let (state, tally, upsert, _) =
+            merge_annotations(Vec::new(), BTreeMap::from([("a".to_string(), cloud)]), &none());
+        assert!(state.contains_key("a"), "别的设备的书上的标注不能被抹掉");
+        assert!(upsert.is_empty(), "书没导入，写不进去");
+        assert_eq!(tally, Tally::default(), "没有真的应用就不该报数");
+    }
+
+    #[test]
+    fn a_v1_document_without_the_new_maps_still_parses() {
+        let json = r#"{"version":1,"deviceId":"other","updatedAt":5,
+            "books":{"h":{"progress":0.4,"updatedAt":9,"deviceId":"other","title":"三体"}}}"#;
+        let parsed: RemoteState = serde_json::from_str(json).expect("v1 文档必须还能解析");
+        assert!(parsed.annotations.is_empty());
+        assert!(parsed.bookmarks.is_empty());
+        assert_eq!(parsed.books["h"].progress, 0.4);
+    }
+
+    #[test]
+    fn a_state_document_round_trips_through_json() {
+        let (state, ..) =
+            merge_annotations(vec![ann("a", 100), grave("b", 50)], BTreeMap::new(), &imported());
+        let json = serde_json::to_string(&state).expect("serialize");
+        assert_eq!(
+            serde_json::from_str::<BTreeMap<String, annotations::SyncAnnotation>>(&json)
+                .expect("parse"),
+            state,
+            "序列化必须稳定可逆"
+        );
+    }
+
+    #[test]
+    fn bookmarks_merge_the_same_way() {
+        let bm = |id: &str, at: i64| bookmarks::SyncBookmark {
+            id: id.into(),
+            book: "h".into(),
+            chapter_idx: 1,
+            fraction: 0.5,
+            label: "pin".into(),
+            updated_at: at,
+            deleted: false,
+        };
+        let (state, tally, upsert, _) =
+            merge_bookmarks(vec![bm("k", 100)], BTreeMap::new(), &imported());
+        assert_eq!(tally.uploaded, 1);
+        assert!(upsert.is_empty());
+        assert!(state.contains_key("k"));
+
+        let remote_grave = bookmarks::SyncBookmark {
+            id: "k".into(),
+            book: String::new(),
+            chapter_idx: 0,
+            fraction: 0.0,
+            label: String::new(),
+            updated_at: 300,
+            deleted: true,
+        };
+        let (_, tally, _, delete) = merge_bookmarks(
+            vec![bm("k", 100)],
+            BTreeMap::from([("k".to_string(), remote_grave)]),
+            &imported(),
+        );
+        assert_eq!(tally.deleted, 1);
+        assert_eq!(delete, vec!["k".to_string()]);
     }
 }

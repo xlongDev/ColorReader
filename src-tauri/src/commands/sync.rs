@@ -3,7 +3,7 @@
 use tauri::State;
 
 use crate::error::AppResult;
-use crate::library::sync::{self, Change, SyncConfig};
+use crate::library::sync::{self, SyncConfig, SyncReport};
 use crate::state::AppState;
 
 /// `sync.getConfig`
@@ -24,8 +24,8 @@ pub async fn sync_test(config: SyncConfig) -> AppResult<()> {
     sync::test_connection(&config).await
 }
 
-/// `sync.now` — pull, merge, apply and push; returns the per-book decisions.
+/// `sync.now` — pull, merge, apply and push; returns what each side kept.
 #[tauri::command]
-pub async fn sync_now(state: State<'_, AppState>, config: SyncConfig) -> AppResult<Vec<Change>> {
+pub async fn sync_now(state: State<'_, AppState>, config: SyncConfig) -> AppResult<SyncReport> {
     sync::run(&state.library, &config).await
 }
