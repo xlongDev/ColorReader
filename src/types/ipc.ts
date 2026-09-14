@@ -23,6 +23,16 @@ export interface BookQuery {
   filter?: LibraryFilter;
   sort?: LibrarySort;
   search?: string;
+  /** Restricts the shelf to one tag, matched case-insensitively. */
+  tag?: string;
+}
+
+/** Mirrors `src-tauri/src/library/tags.rs`. */
+export interface TagSummary {
+  id: string;
+  name: string;
+  /** How many books carry it. */
+  count: number;
 }
 
 export interface BookSummary {
@@ -56,6 +66,26 @@ export interface LibraryStats {
   favorites: number;
   reading: number;
   finished: number;
+}
+
+/** Mirrors `src-tauri/src/library/stats.rs`. */
+export interface DayTotal {
+  /** Local calendar day, `YYYY-MM-DD`. */
+  day: string;
+  seconds: number;
+}
+
+/** Everything the reading stats page draws. */
+export interface ReadingStats {
+  todaySeconds: number;
+  /** The last seven days, today included. */
+  weekSeconds: number;
+  totalSeconds: number;
+  /** Consecutive days read, ending today or yesterday; 0 after a gap. */
+  streak: number;
+  daysRead: number;
+  /** Trailing days, oldest first, gaps filled with zeroes. */
+  days: DayTotal[];
 }
 
 /** Mirrors `src-tauri/src/library/import.rs`. */
@@ -129,6 +159,30 @@ export interface NewAnnotation {
   cfi?: string;
   color?: string;
   style?: AnnotationStyle;
+}
+
+/** Mirrors `src-tauri/src/library/clippings.rs`. */
+export interface ClippingsBook {
+  bookId: string;
+  title: string;
+  total: number;
+  /** Not already in the library, so a preview reports what a run would write. */
+  imported: number;
+  duplicates: number;
+  /** Text the book no longer contains, so nothing could be anchored. */
+  unlocated: number;
+}
+
+export interface ClippingsOutcome {
+  total: number;
+  notes: number;
+  bookmarks: number;
+  matched: number;
+  located: number;
+  imported: number;
+  duplicates: number;
+  books: ClippingsBook[];
+  unknownTitles: string[];
 }
 
 /** Mirrors `src-tauri/src/library/bookmarks.rs`. */

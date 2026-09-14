@@ -3,14 +3,18 @@
 pub mod annotations;
 pub mod bookmarks;
 pub mod chapters;
+pub mod clippings;
 pub mod graph;
+pub mod guide;
 pub mod import;
 pub mod pack;
 pub mod rag;
 pub mod repository;
 pub mod search;
 pub mod source;
+pub mod stats;
 pub mod sync;
+pub mod tags;
 
 #[cfg(test)]
 mod bench;

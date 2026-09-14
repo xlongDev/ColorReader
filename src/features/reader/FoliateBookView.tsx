@@ -9,6 +9,8 @@ import type { SpeechUnit, Span } from "./speech";
 import { buildStyleSheet } from "./foliateStyle";
 import type { FoliateStyle } from "./foliateStyle";
 import { inkWash } from "./selection";
+import { findRange, indexText } from "./textAnchor";
+import type { TextIndex } from "./textAnchor";
 
 /** Where the reader is. `cfi` is opaque — hand it back to foliate verbatim. */
 export type FoliateLocation = {
@@ -232,15 +234,25 @@ type Props = {
   /** Reader typography and palette, injected as a stylesheet. */
   style: FoliateStyle;
   /**
-   * Saved highlights. Only the ones carrying a `cfi` can be painted — a
-   * Kindle annotation made before CFI support has no anchor foliate can
-   * resolve, and is skipped rather than misplaced.
+   * Saved highlights. Only the ones carrying a `cfi` can be painted: foliate
+   * anchors on CFIs, so a highlight imported from a clippings file is searched
+   * for by its text the first time its section mounts and gains one through
+   * `onAnchor`. It sits in the highlight list until then rather than being
+   * painted in the wrong place.
    */
   annotations?: readonly Annotation[];
   /** A completed selection, or `null` when the user cleared it. */
   onSelect?: (selection: FoliateSelection | null) => void;
   /** A click on a painted highlight: `cfi` plus viewport coordinates. */
   onAnnotationClick?: (cfi: string, x: number, y: number) => void;
+  /**
+   * A highlight that arrived without a foliate anchor — an import from a Kindle
+   * clippings file knows only the text it quotes — once it has been located in
+   * the section that carries it. The reader stores the CFI, so the next open
+   * paints it straight away; until then it is a row in the highlight list with
+   * nothing on the page.
+   */
+  onAnchor?: (id: string, cfi: string) => void;
   /**
    * A click on a picture in the book, with its archive entry path — the key
    * `book_images` hands out. Only raised for images big enough to be worth
@@ -536,6 +548,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     annotations,
     onSelect,
     onAnnotationClick,
+    onAnchor,
     onImageOpen,
     onLocationChange,
     onTocLoaded,
@@ -566,8 +579,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     selectReport.current = onSelect;
     clickReport.current = onAnnotationClick;
     imageReport.current = onImageOpen;
-  }, [onSelect, onAnnotationClick, onImageOpen]);
-  // Read through a ref inside the open effect: layout and style changes are
+  }, [onSelect, onAnnotationClick, onImageOpen]); // Read through a ref inside the open effect: layout and style changes are
   // applied by the dedicated effects below, and reopening the book on a
   // settings switch would lose the reading position.
   const layoutRef = useRef(layout);
@@ -583,6 +595,17 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   }, [onTocLoaded]);
   // Highlights and read-aloud units, read by the section handlers below.
   const annotationsRef = useRef<readonly Annotation[]>(annotations ?? []);
+  // Finding an anchor for a highlight that arrived without one. The callback
+  // goes through a ref for the same reason as the others: the search runs from
+  // the section handlers, which are created once.
+  const anchorReport = useRef(onAnchor);
+  useEffect(() => {
+    anchorReport.current = onAnchor;
+  }, [onAnchor]);
+  // `id|section` pairs already looked at. A section re-mounts on every layout
+  // and style change, and re-searching the whole list each time is the one cost
+  // of this that a reader would feel.
+  const searchedRef = useRef<Set<string>>(new Set());
   // Painted highlights: CFI → the ink signature it was painted with, so a
   // restyle repaints even though the anchor has not changed.
   const paintedRef = useRef<Map<string, string>>(new Map());
@@ -590,6 +613,51 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   // Where the last selection started, parked for 「朗读此处」: the pill clears
   // the browser's own selection the instant it is tapped.
   const spotAnchor = useRef<{ node: Node; offset: number } | null>(null);
+
+  /**
+   * Locates the highlights that have no anchor yet.
+   *
+   * An import from a Kindle clippings file knows a highlight's text and nothing
+   * else, and foliate cannot paint what it cannot anchor. The text is the one
+   * handle that survives the move, so every section the paginator mounts is
+   * searched for it and the CFI that comes out is handed back to be stored —
+   * after that the highlight is an ordinary one everywhere: painting, clicking,
+   * jumping to it, and the next open has it before the first page renders.
+   *
+   * Sections that are not on screen yet are simply not searched yet, so this
+   * converges as the book is read rather than loading the whole book up front.
+   * Until it lands, the highlight is in the list, which is where the reader
+   * finds it either way.
+   */
+  const resolveAnchors = useCallback(() => {
+    const view = viewRef.current;
+    const announce = anchorReport.current;
+    const renderer = view?.renderer;
+    if (!view || !renderer || !announce) return;
+    const pending = annotationsRef.current.filter(
+      (annotation) => !annotation.cfi && annotation.text !== "",
+    );
+    if (pending.length === 0) return;
+
+    for (const { index, doc } of renderer.getContents()) {
+      if (!doc || index === undefined) continue;
+      const body = doc.body ?? doc.documentElement;
+      if (!body) continue;
+      // Flattened on the first annotation that actually needs it: a section
+      // with nothing left to look for pays for a filter, not a walk.
+      let searched: TextIndex | null = null;
+      for (const annotation of pending) {
+        const key = `${annotation.id}|${index}`;
+        if (searchedRef.current.has(key)) continue;
+        searched ??= indexText(body);
+        searchedRef.current.add(key);
+        const range = findRange(searched, annotation.text);
+        if (!range) continue;
+        const cfi = view.getCFI(index, range);
+        if (cfi) announce(annotation.id, cfi);
+      }
+    }
+  }, []);
 
   /**
    * Paints every CFI-bearing highlight and unpaints the ones that are gone.
@@ -621,7 +689,11 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       }
     }
     paintedRef.current = new Map([...next.entries()].map(([cfi, saved]) => [cfi, ink(saved)]));
-  }, []);
+    // Runs after the anchored ones are painted, so a highlight that gained its
+    // CFI since the last pass is drawn in the same breath rather than a frame
+    // later.
+    resolveAnchors();
+  }, [resolveAnchors]);
 
   /** Turns a section's DOM selection into a CFI-anchored `FoliateSelection`. */
   const captureSelection = useCallback((doc: Document) => {
@@ -866,6 +938,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       cancelled = true;
       viewRef.current = null;
       paintedRef.current = new Map();
+      searchedRef.current = new Set();
       ttsRef.current = null;
       if (view) {
         view.renderer?.removeEventListener("load", attachSection);

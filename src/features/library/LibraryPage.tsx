@@ -7,11 +7,13 @@ import {
   CaretDown,
   FilePlus,
   Globe,
+  Highlighter,
   MagnifyingGlass,
   Sparkle,
   SquaresFour,
   Star,
   Sun,
+  Tag,
   Upload,
   X,
 } from "@phosphor-icons/react";
@@ -29,7 +31,9 @@ import {
   titleForFilter,
 } from "@/features/library/format";
 import { batchNeedsPassword, PACK_EXTENSIONS } from "@/features/library/pack";
+import { TagBar } from "@/features/library/TagBar";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
+import { useAssignTags, useTags } from "@/hooks/useTags";
 
 // Dialog chunks load on first open; local disk, so no spinner is needed.
 const ExportPackDialog = lazy(() =>
@@ -40,6 +44,12 @@ const PackPasswordDialog = lazy(() =>
 );
 const SourceDialog = lazy(() =>
   import("@/features/source/SourceDialog").then((m) => ({ default: m.SourceDialog })),
+);
+const TagDialog = lazy(() =>
+  import("@/features/library/TagDialog").then((m) => ({ default: m.TagDialog })),
+);
+const ClippingsDialog = lazy(() =>
+  import("@/features/library/ClippingsDialog").then((m) => ({ default: m.ClippingsDialog })),
 );
 
 import {
@@ -76,12 +86,18 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const [lockedBatch, setLockedBatch] = useState<string[] | null>(null);
   const [lastOutcomes, setLastOutcomes] = useState<ImportOutcome[] | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
+  /** The Kindle clippings sheet; a file picker plus a preview lives inside. */
+  const [clippingsOpen, setClippingsOpen] = useState(false);
   /** True when the import button was clicked in the browser, which has no backend. */
   const [webNotice, setWebNotice] = useState(false);
   /** Batch-manage mode: cards toggle selection instead of opening. */
   const [managing, setManaging] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const [batchDeleteOpen, setBatchDeleteOpen] = useState(false);
+  /** Tag shelf: the tag being shown, `null` for the whole shelf. */
+  const [tag, setTag] = useState<string | null>(null);
+  /** Books the label sheet is open for; one book = edit, several = add. */
+  const [tagTarget, setTagTarget] = useState<BookSummary[] | null>(null);
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 60_000);
@@ -93,12 +109,15 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       filter: filter === "recent" || filter === "favorites" ? filter : "all",
       sort: filter === "recent" ? "recentlyRead" : sort,
       search: search.trim() || undefined,
+      tag: filter === "tags" ? (tag ?? undefined) : undefined,
     }),
-    [filter, sort, search],
+    [filter, sort, search, tag],
   );
 
   const books = useBooks(query);
   const stats = useLibraryStats();
+  const tags = useTags();
+  const assignTags = useAssignTags();
   const importBooks = useImportBooks();
   const exportPack = useExportPack();
   const deleteBook = useDeleteBook();
@@ -149,6 +168,8 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     setSelected(new Set());
     setBatchDeleteOpen(false);
   };
+  /** Labels the whole selection: the sheet only ever adds in this mode. */
+  const openBatchTags = () => setTagTarget(list.filter((book) => selected.has(book.id)));
 
   // The browser build has no Rust backend: picking files would silently fail,
   // so the button surfaces an explanation instead of doing nothing.
@@ -170,6 +191,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             <p className="text-text-2 mt-1 text-sm">{meta.subtitle}</p>
           </div>
           <div className="flex items-center gap-2">
+            <GlassButton size="md" onClick={() => setClippingsOpen(true)}>
+              <Highlighter size={15} /> 导入摘录
+            </GlassButton>
             <GlassButton size="md" onClick={() => setSourceOpen(true)}>
               <Globe size={15} /> 在线找书
             </GlassButton>
@@ -205,6 +229,8 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
 
       <div className="flex-1 overflow-y-auto px-8 pb-8">
         {filter === "all" && <ContinueReadingCard book={continueReading} />}
+
+        {filter === "tags" && <TagBar tags={tags.data ?? []} selected={tag} onSelect={setTag} />}
 
         <div className="mb-4 flex flex-wrap items-center gap-2">
           <div className="relative w-full max-w-64">
@@ -312,6 +338,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
                   }
                   onAskDelete={setDeleteTarget}
                   onAskExport={setExportTarget}
+                  onEditTags={(target) => setTagTarget([target])}
                 />
               ))}
             </AnimatePresence>
@@ -343,6 +370,14 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             </span>
             <GlassButton size="sm" variant="subtle" onClick={toggleSelectAll}>
               {allSelected ? "取消全选" : "全选"}
+            </GlassButton>
+            <GlassButton
+              size="sm"
+              variant="subtle"
+              disabled={selected.size === 0}
+              onClick={openBatchTags}
+            >
+              <Tag size={13} /> 打标签
             </GlassButton>
             <GlassButton
               size="sm"
@@ -379,6 +414,14 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       {sourceOpen && (
         <Suspense fallback={null}>
           <SourceDialog open onClose={() => setSourceOpen(false)} />
+        </Suspense>
+      )}
+
+      {clippingsOpen && (
+        <Suspense fallback={null}>
+          {/* Unmounted when closed: the sheet holds a picked path and a preview
+              report, and reopening it should start from an empty picker. */}
+          <ClippingsDialog open onClose={() => setClippingsOpen(false)} />
         </Suspense>
       )}
 
@@ -427,6 +470,26 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
               exportPack.mutate(
                 { id: book.id, path, password },
                 { onSuccess: () => setExportTarget(null) },
+              )
+            }
+          />
+        </Suspense>
+      )}
+
+      {tagTarget && (
+        <Suspense fallback={null}>
+          {/* Keyed by the target: reopening for another book must not inherit
+              the previous book's chip selection. */}
+          <TagDialog
+            key={tagTarget.map((book) => book.id).join(",")}
+            books={tagTarget}
+            allTags={tags.data ?? []}
+            busy={assignTags.isPending}
+            onCancel={() => setTagTarget(null)}
+            onSave={(change) =>
+              assignTags.mutate(
+                { ids: tagTarget.map((book) => book.id), ...change },
+                { onSuccess: () => setTagTarget(null) },
               )
             }
           />

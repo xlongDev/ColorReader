@@ -17,13 +17,14 @@ use aes_gcm::Nonce;
 use aes_gcm::aead::rand_core::RngCore;
 use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
 use argon2::{Algorithm, Argon2, Params, Version};
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use super::annotations;
 use super::repository;
+use super::tags;
 use crate::db::Library;
 use crate::error::{AppError, AppResult};
 
@@ -63,6 +64,11 @@ pub struct Reading {
     pub favorite: bool,
     #[serde(default)]
     pub annotations: Vec<PackedAnnotation>,
+    /// Labels the book carried. Shelf organisation still counts as state the
+    /// reader built up by hand, so it travels with the book for the same
+    /// reason the favourite flag does.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// A highlight without the ids the database assigns.
@@ -131,7 +137,12 @@ pub fn export(
                 style: annotation.style,
             })
             .collect();
-        Ok(Reading { progress: book.progress, favorite: book.favorite, annotations })
+        Ok(Reading {
+            progress: book.progress,
+            favorite: book.favorite,
+            annotations,
+            tags: book.tags.clone(),
+        })
     })?;
 
     let archive = build(&source, book.format.extension(), &reading)?;
@@ -161,18 +172,24 @@ pub fn unpack(path: &Path, password: Option<&str>) -> AppResult<Unpacked> {
 ///
 /// Highlights already present are kept rather than duplicated, so re-importing
 /// a pack over a shelf that already holds the book is idempotent.
-pub fn apply_reading(conn: &Connection, book_id: &str, reading: &Reading) -> AppResult<()> {
+pub fn apply_reading(tx: &Transaction<'_>, book_id: &str, reading: &Reading) -> AppResult<()> {
     // Skipped at zero: recording progress also stamps `last_read_at`, which
     // would drop an unread book onto the "recently read" shelf.
     if reading.progress > 0.0 {
-        repository::set_progress(conn, book_id, reading.progress, None)?;
+        repository::set_progress(tx, book_id, reading.progress, None)?;
     }
-    repository::set_favorite(conn, book_id, reading.favorite)?;
+    repository::set_favorite(tx, book_id, reading.favorite)?;
+
+    // Adding rather than replacing: a pack can only know the labels it was
+    // exported with, and the shelf it lands on may already have its own.
+    if !reading.tags.is_empty() {
+        tags::assign(tx, &[book_id.to_string()], &reading.tags, &[])?;
+    }
 
     for packed in &reading.annotations {
-        if !has_highlight(conn, book_id, packed)? {
+        if !has_highlight(tx, book_id, packed)? {
             annotations::create(
-                conn,
+                tx,
                 book_id,
                 packed.chapter_idx,
                 packed.start_char,
@@ -428,7 +445,8 @@ mod tests {
         }
     }
 
-    /// A book on the shelf with progress, a favourite flag and one highlight.
+    /// A book on the shelf with progress, a favourite flag, one highlight and
+    /// one label.
     fn seed_book(harness: &Harness) -> String {
         let epub = fixture::write_epub(
             &harness.dir,
@@ -448,6 +466,10 @@ mod tests {
                 Ok(())
             })
             .expect("seed reading state");
+        harness
+            .library
+            .with_tx(|tx| tags::assign(tx, std::slice::from_ref(&id), &["科幻".into()], &[]))
+            .expect("seed tag");
         id
     }
 
@@ -488,6 +510,7 @@ mod tests {
         assert!(reading.favorite);
         assert_eq!(reading.annotations.len(), 1);
         assert_eq!(reading.annotations[0].text, "你好");
+        assert_eq!(reading.tags, vec!["科幻".to_string()]);
     }
 
     #[test]
@@ -505,6 +528,7 @@ mod tests {
         assert_eq!(shelf[0].authors, ["刘慈欣"]);
         assert_eq!(shelf[0].progress, 0.25);
         assert!(shelf[0].favorite);
+        assert_eq!(shelf[0].tags, vec!["科幻".to_string()]);
         let restored =
             target.library.with(|conn| annotations::list(conn, &shelf[0].id)).expect("list");
         assert_eq!(restored.len(), 1);

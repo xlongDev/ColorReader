@@ -124,6 +124,11 @@ pub struct BookQuery {
     /// Case-insensitive substring matched against title and author names.
     #[serde(default)]
     pub search: Option<String>,
+    /// Restricts the shelf to one tag (matched case-insensitively). Orthogonal
+    /// to `filter`: the tag browser is the "标签" shelf, but a future caller
+    /// could ask for a tag inside 收藏 without a second query type.
+    #[serde(default)]
+    pub tag: Option<String>,
 }
 
 /// Aggregate counts shown above the shelf.
@@ -168,18 +173,31 @@ const SELECT_COLUMNS: &str = "b.id, b.title, b.subtitle, b.description, b.langua
 /// Loads the shelf for the given query.
 pub fn list(conn: &Connection, query: &BookQuery) -> AppResult<Vec<BookSummary>> {
     let mut sql = format!("SELECT {SELECT_COLUMNS} FROM books b");
+    // Every added clause is a literal from this file; user input only ever
+    // arrives as a bound parameter.
     let mut conditions: Vec<&str> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+
     if let Some(predicate) = query.filter.predicate() {
         conditions.push(predicate);
     }
-    let needle = normalized_search(&query.search);
-    if needle.is_some() {
+    if let Some(tag) = query.tag.as_deref().map(str::trim).filter(|tag| !tag.is_empty()) {
         conditions.push(
-            "(b.title LIKE :needle ESCAPE '\\' OR b.sort_title LIKE :needle ESCAPE '\\' OR EXISTS (\
-               SELECT 1 FROM book_authors ba JOIN authors a ON a.id = ba.author_id \
-                WHERE ba.book_id = b.id AND a.name LIKE :needle ESCAPE '\\'))",
+            "EXISTS (SELECT 1 FROM book_tags bt JOIN tags t ON t.id = bt.tag_id \
+              WHERE bt.book_id = b.id AND t.name = ? COLLATE NOCASE)",
         );
+        binds.push(tag.to_string());
     }
+    if let Some(needle) = normalized_search(&query.search) {
+        conditions.push(
+            "(b.title LIKE ? ESCAPE '\\' OR b.sort_title LIKE ? ESCAPE '\\' OR EXISTS (\
+               SELECT 1 FROM book_authors ba JOIN authors a ON a.id = ba.author_id \
+                WHERE ba.book_id = b.id AND a.name LIKE ? ESCAPE '\\'))",
+        );
+        // One needle, three placeholders.
+        binds.extend([needle.clone(), needle.clone(), needle]);
+    }
+
     if !conditions.is_empty() {
         sql.push_str(" WHERE ");
         sql.push_str(&conditions.join(" AND "));
@@ -188,11 +206,7 @@ pub fn list(conn: &Connection, query: &BookQuery) -> AppResult<Vec<BookSummary>>
     sql.push_str(query.sort.order_by());
 
     let mut stmt = conn.prepare(&sql)?;
-    let mut rows = if let Some(needle) = needle.as_deref() {
-        stmt.query(rusqlite::named_params! { ":needle": needle })?
-    } else {
-        stmt.query([])?
-    };
+    let mut rows = stmt.query(rusqlite::params_from_iter(binds.iter()))?;
 
     let mut books = Vec::new();
     while let Some(row) = rows.next()? {
@@ -605,6 +619,36 @@ mod tests {
                 .expect("list");
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0].id, "b2");
+    }
+
+    #[test]
+    fn the_tag_filter_narrows_the_shelf_case_insensitively() {
+        let conn = seed();
+        add(&conn, "b1", "三体", &[], "h1");
+        add(&conn, "b2", "Dune", &[], "h2");
+        conn.execute("INSERT INTO tags (id, name) VALUES ('t1', '科幻'), ('t2', 'Novel')", [])
+            .expect("tags");
+        conn.execute(
+            "INSERT INTO book_tags (book_id, tag_id) VALUES ('b1', 't1'), ('b2', 't2')",
+            [],
+        )
+        .expect("book_tags");
+
+        let sci_fi = list(&conn, &BookQuery { tag: Some("科幻".into()), ..Default::default() })
+            .expect("list");
+        assert_eq!(sci_fi.len(), 1);
+        assert_eq!(sci_fi[0].id, "b1");
+
+        // Spelling must not decide whether a label is found.
+        let novel = list(&conn, &BookQuery { tag: Some("novel".into()), ..Default::default() })
+            .expect("list");
+        assert_eq!(novel.len(), 1);
+        assert_eq!(novel[0].id, "b2");
+
+        // A blank tag is not a filter, it is no filter.
+        let all =
+            list(&conn, &BookQuery { tag: Some("  ".into()), ..Default::default() }).expect("list");
+        assert_eq!(all.len(), 2);
     }
 
     #[test]

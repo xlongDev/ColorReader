@@ -72,3 +72,28 @@ export function useUpdateAnnotation(bookId: string | null) {
     },
   });
 }
+
+/**
+ * Gives a highlight imported from a clippings file the foliate anchor it was
+ * written without. The reader calls this the first time it renders the section
+ * holding the highlight's text; from then on every path — painting, clicking,
+ * jumping to it — treats it like any other highlight.
+ *
+ * The cache is patched rather than invalidated: this fires while the reader is
+ * looking at the page, and refetching the list would repaint every highlight.
+ */
+export function useAnchorAnnotation(bookId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, cfi }: { id: string; cfi: string }) => {
+      if (!bookId || !isDesktopRuntime) return Promise.resolve<Annotation | null>(null);
+      return ipc.annotationAnchor(id, cfi);
+    },
+    onSuccess: (updated) => {
+      if (!bookId || !updated) return;
+      queryClient.setQueryData<Annotation[]>(annotationsKey(bookId), (old = []) =>
+        old.map((annotation) => (annotation.id === updated.id ? updated : annotation)),
+      );
+    },
+  });
+}

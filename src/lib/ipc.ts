@@ -12,6 +12,7 @@ import type {
   Bookmark,
   ChapterContent,
   ChapterMeta,
+  ClippingsOutcome,
   EdgeClip,
   EdgeVoice,
   GraphProgress,
@@ -24,6 +25,7 @@ import type {
   NewBookmark,
   RagProgress,
   RagStatus,
+  ReadingStats,
   SearchHit,
   SourceBook,
   SourceChapter,
@@ -34,6 +36,7 @@ import type {
   SyncChange,
   SyncConfig,
   SystemInfo,
+  TagSummary,
   Translation,
   WikiSummary,
 } from "@/types/ipc";
@@ -69,6 +72,15 @@ export const ipc = {
 
   bookStats(): Promise<LibraryStats> {
     return invoke<LibraryStats>("book_stats");
+  },
+
+  /** Adds `seconds` to today's reading time for `bookId`. */
+  statsRecordSession(bookId: string, seconds: number): Promise<void> {
+    return invoke<void>("stats_record_session", { bookId, seconds });
+  },
+
+  statsReading(): Promise<ReadingStats> {
+    return invoke<ReadingStats>("stats_reading");
   },
 
   /** Raw bytes of one image inside a book's source EPUB (binary channel). */
@@ -116,6 +128,30 @@ export const ipc = {
     return invoke<void>("book_set_favorite", { id, favorite });
   },
 
+  /** Every tag in use, with its book count. */
+  tagList(): Promise<TagSummary[]> {
+    return invoke<TagSummary[]>("tag_list");
+  },
+
+  /**
+   * Reads a Kindle `My Clippings.txt` and turns its highlights into annotations
+   * on the books it can match. `dryRun` returns the same report and writes
+   * nothing, which is what the dialog shows before the reader commits.
+   */
+  clippingsImport(path: string, dryRun: boolean): Promise<ClippingsOutcome> {
+    return invoke<ClippingsOutcome>("clippings_import", { path, dryRun });
+  },
+
+  /** Removes one tag from every book that carries it. */
+  tagDelete(id: string): Promise<void> {
+    return invoke<void>("tag_delete", { id });
+  },
+
+  /** Applies a set difference to `ids`: attach `add`, detach `remove`. */
+  bookSetTags(ids: string[], add: string[], remove: string[]): Promise<void> {
+    return invoke<void>("book_set_tags", { ids, add, remove });
+  },
+
   readerToc(bookId: string): Promise<ChapterMeta[]> {
     return invoke<ChapterMeta[]>("reader_toc", { bookId });
   },
@@ -146,6 +182,12 @@ export const ipc = {
   /** Restyles one highlight; `null` keeps that field as stored. */
   annotationUpdate(id: string, color: string | null, style: string | null): Promise<Annotation> {
     return invoke<Annotation>("annotation_update", { id, color, style });
+  },
+
+  /** Hands a highlight imported from a Kindle clippings file the foliate CFI it
+   * was written without. Only the reader, with the book loaded, can mint one. */
+  annotationAnchor(id: string, cfi: string): Promise<Annotation> {
+    return invoke<Annotation>("annotation_anchor", { id, cfi });
   },
 
   annotationList(bookId: string): Promise<Annotation[]> {
@@ -207,6 +249,15 @@ export const ipc = {
    */
   aiChat(requestId: string, messages: AiMessage[]): Promise<void> {
     return invoke<void>("ai_chat", { requestId, messages });
+  },
+
+  /**
+   * Streams a reading guide for one book through `ai://stream`. The backend
+   * answers from its cache when one exists, so a stored guide arrives as a
+   * single delta; `refresh` writes a new one over it.
+   */
+  aiDigest(requestId: string, bookId: string, refresh: boolean): Promise<void> {
+    return invoke<void>("ai_digest", { requestId, bookId, refresh });
   },
 
   /** Index status for one book plus library totals. */

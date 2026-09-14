@@ -371,6 +371,27 @@ ALTER TABLE annotations ADD COLUMN color TEXT;
 ALTER TABLE annotations ADD COLUMN style TEXT;
 "#,
     },
+    Migration {
+        version: 13,
+        name: "reading_sessions",
+        // Reading time per book per local day, one row per (day, book). The
+        // reader reports elapsed wall-clock seconds in batches; the row is
+        // upserted, so a crash loses at most one batch and no history is
+        // rewritten. `day` is a local `YYYY-MM-DD` string produced in Rust
+        // rather than a timestamp: the heat map and the streak both count
+        // calendar days, and only the machine knows its own timezone offset.
+        // Rows go with their book: deleting one drops its history.
+        sql: r#"
+CREATE TABLE reading_sessions (
+  day     TEXT NOT NULL,
+  book_id TEXT NOT NULL REFERENCES books (id) ON DELETE CASCADE,
+  seconds INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE UNIQUE INDEX reading_sessions_day_book ON reading_sessions (day, book_id);
+CREATE INDEX reading_sessions_day ON reading_sessions (day DESC);
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

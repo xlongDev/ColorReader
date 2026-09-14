@@ -48,6 +48,18 @@ pub fn annotation_update(
     state.library.with(|conn| annotations::update(conn, &id, color.as_deref(), style.as_deref()))
 }
 
+/// `annotation.anchor` — hands a highlight the foliate CFI it was imported
+/// without. The reader calls it once it has located the highlight's text in a
+/// section, which is the only place a CFI can be minted.
+#[tauri::command]
+pub fn annotation_anchor(
+    state: State<'_, AppState>,
+    id: String,
+    cfi: String,
+) -> AppResult<Annotation> {
+    state.library.with(|conn| annotations::anchor(conn, &id, &cfi))
+}
+
 /// `annotation.list` — every highlight for a book, in reading order.
 #[tauri::command]
 pub fn annotation_list(state: State<'_, AppState>, book_id: String) -> AppResult<Vec<Annotation>> {

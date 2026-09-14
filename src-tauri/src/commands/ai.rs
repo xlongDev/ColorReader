@@ -12,10 +12,14 @@ use tauri::{AppHandle, Emitter, State};
 use crate::ai::chat::{self, ChatMessage, Role, StreamEvent};
 use crate::ai::{AiConfig, is_ready};
 use crate::error::{AppError, AppResult};
+use crate::library::guide;
 use crate::state::AppState;
 
 /// Streamed chunks for one request.
 pub const AI_STREAM_EVENT: &str = "ai://stream";
+
+/// Said whenever a command needs a model that has not been configured yet.
+pub(crate) const NOT_CONFIGURED: &str = "还没有配置 AI 模型，先到设置里填写接口地址与模型名称";
 
 /// Connect and per-read timeouts.
 ///
@@ -99,9 +103,7 @@ pub async fn ai_chat(
 ) -> AppResult<()> {
     let config = crate::ai::config(&state.library)?;
     if !is_ready(&config) {
-        return Err(AppError::InvalidArgument(
-            "还没有配置 AI 模型，先到设置里填写接口地址与模型名称".into(),
-        ));
+        return Err(AppError::InvalidArgument(NOT_CONFIGURED.into()));
     }
     if messages.is_empty() {
         return Err(AppError::InvalidArgument("没有要发送的内容".into()));
@@ -126,14 +128,17 @@ pub async fn ai_chat(
 }
 
 /// Streams one answer to [`AI_STREAM_EVENT`], attaching `citations` to the
-/// final event. Shared by plain chat and RAG-backed chat.
+/// final event. Shared by plain chat, RAG-backed chat and the reading guide.
+///
+/// Returns the assembled answer: callers that cache it (the guide) need the
+/// whole text, and the one that streams it to a reader ignores the value.
 pub(crate) async fn run_stream(
     app: &AppHandle,
     request_id: &str,
     config: &AiConfig,
     messages: Vec<ChatMessage>,
     citations: Vec<crate::library::rag::RagHit>,
-) -> AppResult<()> {
+) -> AppResult<String> {
     let client = client()?;
     let mut full = String::new();
     let mut finished = false;
@@ -192,7 +197,96 @@ pub(crate) async fn run_stream(
         );
     }
     tracing::info!(request_id, chars = full.chars().count(), "AI 回答完成");
-    Ok(())
+    Ok(full)
+}
+
+/// `ai.digest` — streams a reading guide for one book.
+///
+/// The cache is consulted first, and a hit is replayed as a single delta: the
+/// panel then has exactly one code path whether or not a guide already existed.
+/// `refresh` skips the cache and writes a new one over the old.
+///
+/// Only a complete answer is cached. A stream that failed half way through is
+/// left out, so the next open regenerates instead of showing the stump forever.
+#[tauri::command]
+pub async fn ai_digest(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    request_id: String,
+    book_id: String,
+    refresh: bool,
+) -> AppResult<()> {
+    let config = crate::ai::config(&state.library)?;
+    if !is_ready(&config) {
+        return Err(AppError::InvalidArgument(NOT_CONFIGURED.into()));
+    }
+
+    if !refresh && let Some(cached) = state.library.with(|conn| guide::cached(conn, &book_id))? {
+        replay(&app, &request_id, cached);
+        return Ok(());
+    }
+
+    let material = state.library.with(|conn| guide::material(conn, &book_id))?;
+    // The guide carries its own instructions, and `with_system` leaves a
+    // conversation alone when it already opens with one: the reader's general
+    // assistant prompt must not reshape this.
+    let messages = vec![
+        ChatMessage { role: Role::System, content: guide::PROMPT.to_string() },
+        ChatMessage { role: Role::User, content: material },
+    ];
+
+    match run_stream(&app, &request_id, &config, messages, Vec::new()).await {
+        Ok(text) => {
+            // Not `guide`: that name is the module this writes through.
+            let written = text.trim();
+            if written.is_empty() {
+                return Err(AppError::Message("模型没有返回内容".into()));
+            }
+            state.library.with(|conn| guide::store(conn, &book_id, written))?;
+            Ok(())
+        }
+        Err(err) => {
+            emit(
+                &app,
+                AiDelta {
+                    request_id,
+                    text: None,
+                    done: true,
+                    finish_reason: None,
+                    error: Some(err.to_string()),
+                    citations: Vec::new(),
+                },
+            );
+            Err(err)
+        }
+    }
+}
+
+/// Emits a stored answer as "one delta, then done", which is what a stream that
+/// arrived instantly looks like.
+fn replay(app: &AppHandle, request_id: &str, text: String) {
+    emit(
+        app,
+        AiDelta {
+            request_id: request_id.to_string(),
+            text: Some(text),
+            done: false,
+            finish_reason: None,
+            error: None,
+            citations: Vec::new(),
+        },
+    );
+    emit(
+        app,
+        AiDelta {
+            request_id: request_id.to_string(),
+            text: None,
+            done: true,
+            finish_reason: None,
+            error: None,
+            citations: Vec::new(),
+        },
+    );
 }
 
 /// Prepends the configured system prompt, unless the caller already sent one.

@@ -4,6 +4,7 @@ import type { Icon } from "@phosphor-icons/react";
 import {
   Books,
   ClockCounterClockwise,
+  ChartLine,
   MagnifyingGlass,
   Star,
   Tag,
@@ -36,6 +37,7 @@ const ITEMS: NavItem[] = [
   { to: "/recent", label: "最近", icon: ClockCounterClockwise },
   { to: "/favorites", label: "收藏", icon: Star },
   { to: "/tags", label: "标签", icon: Tag },
+  { to: "/stats", label: "统计", icon: ChartLine },
   { to: "/search", label: "搜索", icon: MagnifyingGlass },
 ];
 

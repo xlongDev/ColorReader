@@ -87,9 +87,7 @@ pub async fn rag_chat(
     }
     let config = ai::config(&state.library)?;
     if !ai::is_ready(&config) {
-        return Err(AppError::InvalidArgument(
-            "还没有配置 AI 模型，先到设置里填写接口地址与模型名称".into(),
-        ));
+        return Err(AppError::InvalidArgument(super::ai::NOT_CONFIGURED.into()));
     }
     if config.embedding_model.trim().is_empty() {
         return Err(AppError::InvalidArgument("先到设置里填写向量模型，才能全书检索问答".into()));
@@ -144,7 +142,8 @@ pub async fn rag_chat(
     }
 
     let messages = vec![ChatMessage { role: Role::User, content: build_prompt(&question, &hits) }];
-    super::ai::run_stream(&app, &request_id, &config, messages, hits).await
+    // The assembled answer is only of interest to callers that cache it.
+    super::ai::run_stream(&app, &request_id, &config, messages, hits).await.map(|_| ())
 }
 
 /// Builds the retrieval prompt. Sources are numbered so the model can refer to

@@ -36,6 +36,7 @@ import {
   Pause,
   Plus,
   SpeakerHigh,
+  Sparkle,
   Trash,
   X,
 } from "@phosphor-icons/react";
@@ -43,8 +44,10 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { EmptyState } from "@/components/common/EmptyState";
+import { Markdown } from "@/components/common/Markdown";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { GraphPanel } from "@/features/graph/GraphPanel";
+import { GuidePanel } from "@/features/reader/GuidePanel";
 import {
   globalProgress,
   locateChapter,
@@ -86,6 +89,7 @@ import {
 import { SearchPanel } from "@/features/search/SearchPanel";
 import {
   useAnnotations,
+  useAnchorAnnotation,
   useCreateAnnotation,
   useDeleteAnnotation,
   useUpdateAnnotation,
@@ -102,6 +106,7 @@ import {
   useReaderToc,
   useSetProgress,
 } from "@/hooks/useReader";
+import { useReadingClock } from "@/hooks/useReading";
 import {
   LINE_HEIGHTS,
   MAX_FONT_SIZE,
@@ -240,7 +245,7 @@ function unitAtOffset(queue: readonly SpeechUnit[], paragraphs: string[], offset
 }
 
 /** Which side panel is open. Only one at a time, so they never stack. */
-type Panel = "none" | "annotations" | "search" | "ai" | "graph" | "toc" | "settings";
+type Panel = "none" | "annotations" | "search" | "ai" | "guide" | "graph" | "toc" | "settings";
 
 /** Distance between neighbouring column boundaries in a paged layout (px).
  * `margin` is the final applied side margin. */
@@ -442,9 +447,13 @@ function ReaderView({
   const createAnnotation = useCreateAnnotation(bookId);
   const deleteAnnotation = useDeleteAnnotation(bookId);
   const updateAnnotation = useUpdateAnnotation(bookId);
+  const anchorAnnotation = useAnchorAnnotation(bookId);
   const bookmarksQuery = useBookmarks(bookId);
   const createBookmark = useCreateBookmark(bookId);
   const deleteBookmark = useDeleteBookmark(bookId);
+  // Reading time: accumulates while this book is the open one and hands the
+  // total to the backend once a minute.
+  useReadingClock(bookId);
   // Destructure: each action is a stable useCallback, so effects that depend
   // on them individually never re-fire when speech state changes.
   const {
@@ -2000,6 +2009,19 @@ function ReaderView({
     [annotations],
   );
 
+  /**
+   * Stores the anchor a foliate-rendered highlight was missing.
+   *
+   * An import from a Kindle clippings file only knows the text it quotes, so its
+   * row lands without a CFI and foliate has nothing to paint. The view finds the
+   * text once the section carrying it is on screen and hands the CFI here; the
+   * row is the same highlight it was a moment ago, now paintable.
+   */
+  const onFoliateAnchor = useCallback(
+    (id: string, cfi: string) => anchorAnnotation.mutate({ id, cfi }),
+    [anchorAnnotation],
+  );
+
   /** Reveals a character offset of the chapter already on screen. */
   const focusOffset = useCallback(
     (offset: number) => {
@@ -2370,6 +2392,14 @@ function ReaderView({
           <Graph size={16} />
         </GlassIconButton>
         <GlassIconButton
+          label="AI 导读"
+          size="sm"
+          className={chromeBtn}
+          onClick={() => setPanel((open) => (open === "guide" ? "none" : "guide"))}
+        >
+          <Sparkle size={16} />
+        </GlassIconButton>
+        <GlassIconButton
           label="阅读设置"
           size="sm"
           className={chromeBtn}
@@ -2681,6 +2711,7 @@ function ReaderView({
                 annotations={annotations}
                 onSelect={onFoliateSelection}
                 onAnnotationClick={onFoliateAnnotationClick}
+                onAnchor={onFoliateAnchor}
                 onImageOpen={openBookImage}
                 onLocationChange={rememberFoliateLocation}
                 onTocLoaded={setFoliateToc}
@@ -3044,7 +3075,9 @@ function ReaderView({
                       ? "搜索正文"
                       : panel === "graph"
                         ? "知识图谱"
-                        : "AI 助手"
+                        : panel === "guide"
+                          ? "AI 导读"
+                          : "AI 助手"
             }
             onClose={() => {
               if (panel === "search") {
@@ -3133,6 +3166,7 @@ function ReaderView({
                 onJump={jumpToCitation}
               />
             )}
+            {panel === "guide" && <GuidePanel bookId={bookId} />}
           </ReaderDrawer>
         )}
       </AnimatePresence>
@@ -3480,7 +3514,7 @@ function AskAiPanel({
         )}
 
         {ai.error && <p className="text-danger mb-3 text-[12.5px] leading-relaxed">{ai.error}</p>}
-        {ai.text && <p className="text-text-1 text-[13px] leading-relaxed">{ai.text}</p>}
+        {ai.text && <Markdown text={ai.text} />}
         {ai.streaming && !ai.text && <p className="text-text-3 text-[12.5px]">正在思考…</p>}
         {!ai.text && !ai.streaming && !ai.error && (
           <p className="text-text-3 text-[13px] leading-relaxed">

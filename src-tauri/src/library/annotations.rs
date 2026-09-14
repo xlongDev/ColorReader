@@ -120,50 +120,62 @@ pub fn update(
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
     }
-    let mut stmt = conn.prepare(
-        "SELECT id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, \
-         created_at FROM annotations WHERE id = ?1",
-    )?;
-    stmt.query_row(params![id], |row| {
-        Ok(Annotation {
-            id: row.get(0)?,
-            book_id: row.get(1)?,
-            chapter_idx: row.get::<_, i64>(2)? as usize,
-            start_char: row.get::<_, i64>(3)? as usize,
-            end_char: row.get::<_, i64>(4)? as usize,
-            text: row.get(5)?,
-            cfi: row.get(6)?,
-            color: row.get(7)?,
-            style: row.get(8)?,
-            created_at: row.get(9)?,
-        })
+    read(conn, id)
+}
+
+/// Sets the foliate anchor of an imported highlight.
+///
+/// A clipping from `My Clippings.txt` arrives as text alone, so its row is
+/// written without a CFI and the reader — the only party that has the book
+/// loaded — calls this once it has located that text in a section. Deliberately
+/// not folded into [`update`], which owns the ink: sharing one `UPDATE` would
+/// let a re-colour blank the anchor, or an anchor blank the colour.
+pub fn anchor(conn: &Connection, id: &str, cfi: &str) -> AppResult<Annotation> {
+    if cfi.trim().is_empty() {
+        return Err(AppError::InvalidArgument("标注锚点不能为空".into()));
+    }
+    let changed =
+        conn.execute("UPDATE annotations SET cfi = ?2 WHERE id = ?1", params![id, cfi.trim()])?;
+    if changed == 0 {
+        return Err(AppError::NotFound(id.to_string()));
+    }
+    read(conn, id)
+}
+
+/// The annotation columns, in the order [`from_row`] reads them.
+const COLUMNS: &str = "id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, \
+                       created_at";
+
+fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
+    Ok(Annotation {
+        id: row.get(0)?,
+        book_id: row.get(1)?,
+        chapter_idx: row.get::<_, i64>(2)? as usize,
+        start_char: row.get::<_, i64>(3)? as usize,
+        end_char: row.get::<_, i64>(4)? as usize,
+        text: row.get(5)?,
+        cfi: row.get(6)?,
+        color: row.get(7)?,
+        style: row.get(8)?,
+        created_at: row.get(9)?,
     })
-    .map_err(|_| AppError::NotFound(id.to_string()))
+}
+
+/// One annotation by id, as the database holds it.
+fn read(conn: &Connection, id: &str) -> AppResult<Annotation> {
+    let sql = format!("SELECT {COLUMNS} FROM annotations WHERE id = ?1");
+    let mut stmt = conn.prepare(&sql)?;
+    stmt.query_row(params![id], from_row).map_err(|_| AppError::NotFound(id.to_string()))
 }
 
 /// Every highlight for a book, ordered by chapter then position.
 pub fn list(conn: &Connection, book_id: &str) -> AppResult<Vec<Annotation>> {
-    let mut stmt = conn.prepare(
-        "SELECT id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, \
-         created_at FROM annotations WHERE book_id = ?1 ORDER BY chapter_idx, start_char",
-    )?;
-    let mut rows = stmt.query(params![book_id])?;
-    let mut annotations = Vec::new();
-    while let Some(row) = rows.next()? {
-        annotations.push(Annotation {
-            id: row.get(0)?,
-            book_id: row.get(1)?,
-            chapter_idx: row.get::<_, i64>(2)? as usize,
-            start_char: row.get::<_, i64>(3)? as usize,
-            end_char: row.get::<_, i64>(4)? as usize,
-            text: row.get(5)?,
-            cfi: row.get(6)?,
-            color: row.get(7)?,
-            style: row.get(8)?,
-            created_at: row.get(9)?,
-        });
-    }
-    Ok(annotations)
+    let sql = format!(
+        "SELECT {COLUMNS} FROM annotations WHERE book_id = ?1 ORDER BY chapter_idx, start_char"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![book_id], from_row)?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Deletes one highlight; `NotFound` when it does not exist.
@@ -252,6 +264,32 @@ mod tests {
             Err(AppError::InvalidArgument(_))
         ));
         assert!(matches!(update(&conn, "nope", Some("#fff"), None), Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn anchoring_an_imported_highlight_leaves_its_ink_alone() {
+        let conn = seed();
+        // An imported clipping: text, no CFI, and the reader has since coloured it.
+        let made = create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
+        update(&conn, &made.id, Some("#7cd92c"), Some("underline")).expect("update");
+
+        let cfi = "epubcfi(/6/4!/4/2/2:3)";
+        let anchored = anchor(&conn, &made.id, cfi).expect("anchor");
+        assert_eq!(anchored.cfi.as_deref(), Some(cfi));
+        assert_eq!(anchored.color.as_deref(), Some("#7cd92c"), "写锚点不能抹掉颜色");
+        assert_eq!(anchored.style.as_deref(), Some("underline"), "写锚点不能抹掉样式");
+
+        // And the other way round: a re-colour keeps the anchor.
+        let restyled = update(&conn, &made.id, Some("#ffd12e"), None).expect("update");
+        assert_eq!(restyled.cfi.as_deref(), Some(cfi), "改样式不能抹掉锚点");
+    }
+
+    #[test]
+    fn anchoring_validates_its_input_and_reports_a_missing_row() {
+        let conn = seed();
+        let made = create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
+        assert!(matches!(anchor(&conn, &made.id, "  "), Err(AppError::InvalidArgument(_))));
+        assert!(matches!(anchor(&conn, "nope", "epubcfi(/6/4)"), Err(AppError::NotFound(_))));
     }
 
     #[test]

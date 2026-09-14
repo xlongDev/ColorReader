@@ -1,5 +1,5 @@
 import { motion, useReducedMotion } from "motion/react";
-import { BookOpen, Check, Export, Star, Trash } from "@phosphor-icons/react";
+import { BookOpen, Check, Export, Star, Tag, Trash } from "@phosphor-icons/react";
 
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
@@ -14,6 +14,7 @@ interface BookCardProps {
   onToggleFavorite: (book: BookSummary) => void;
   onAskDelete: (book: BookSummary) => void;
   onAskExport: (book: BookSummary) => void;
+  onEditTags: (book: BookSummary) => void;
   /** Batch-manage mode: clicks toggle selection instead of opening. */
   selecting?: boolean;
   selected?: boolean;
@@ -28,6 +29,7 @@ export function BookCard({
   onToggleFavorite,
   onAskDelete,
   onAskExport,
+  onEditTags,
   selecting = false,
   selected = false,
   onToggleSelect,
@@ -80,6 +82,14 @@ export function BookCard({
           {authors || book.format.toUpperCase()}
           {book.fileSize > 0 && ` · ${formatFileSize(book.fileSize)}`}
         </p>
+        {/* Only when there are labels: an untagged shelf keeps the two-line
+            rhythm it had, and a tagged one gets a single extra line that
+            truncates rather than reflowing the grid. */}
+        {book.tags.length > 0 && (
+          <p className="text-accent mt-1 truncate text-[11px]">
+            {book.tags.map((tag) => `#${tag}`).join("  ")}
+          </p>
+        )}
       </button>
 
       {selecting ? (
@@ -112,6 +122,20 @@ export function BookCard({
               size={14}
               weight={book.favorite ? "fill" : "regular"}
               className={book.favorite ? "text-accent" : "text-text-2"}
+            />
+          </GlassIconButton>
+          <GlassIconButton
+            label="标签"
+            size="sm"
+            onClick={(event) => {
+              event.stopPropagation();
+              onEditTags(book);
+            }}
+          >
+            <Tag
+              size={14}
+              weight={book.tags.length > 0 ? "fill" : "regular"}
+              className={book.tags.length > 0 ? "text-accent" : "text-text-2"}
             />
           </GlassIconButton>
           <GlassIconButton

@@ -134,7 +134,7 @@ fn import_pack(
 
     let imported = outcome?;
     if let Some(reading) = &unpacked.reading {
-        library.with(|conn| pack::apply_reading(conn, imported.id(), reading))?;
+        library.with_tx(|tx| pack::apply_reading(tx, imported.id(), reading))?;
     }
     Ok(imported)
 }

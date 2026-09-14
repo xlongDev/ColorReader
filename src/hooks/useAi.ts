@@ -103,10 +103,21 @@ export function useAiChat() {
     [start],
   );
 
+  /**
+   * The reading guide for one book. The backend answers from its own cache when
+   * a guide exists, so this is safe to call on every panel open; `refresh`
+   * writes a new one.
+   */
+  const sendDigest = useCallback(
+    (bookId: string, refresh = false) =>
+      start((requestId) => ipc.aiDigest(requestId, bookId, refresh)),
+    [start],
+  );
+
   const reset = useCallback(() => {
     activeRequest.current = null;
     setState(IDLE);
   }, []);
 
-  return { ...state, send, askRag, reset };
+  return { ...state, send, askRag, sendDigest, reset };
 }

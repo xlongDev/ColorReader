@@ -16,6 +16,9 @@ const SearchPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import("@/features/settings/SettingsPage").then((m) => ({ default: m.SettingsPage })),
 );
+const StatsPage = lazy(() =>
+  import("@/features/stats/StatsPage").then((m) => ({ default: m.StatsPage })),
+);
 
 const routes: RouteObject[] = [
   {
@@ -28,6 +31,7 @@ const routes: RouteObject[] = [
       { path: "tags", element: <LibraryPage filter="tags" /> },
       { path: "reader", element: <ReaderPage /> },
       { path: "search", element: <SearchPage /> },
+      { path: "stats", element: <StatsPage /> },
       { path: "settings", element: <SettingsPage /> },
     ],
   },

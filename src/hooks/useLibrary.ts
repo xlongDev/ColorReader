@@ -8,7 +8,7 @@ import type { BookQuery, BookSummary, ImportProgress } from "@/types/ipc";
 /** Shelf contents for one filter/sort/search combination. */
 export function useBooks(query: BookQuery) {
   return useQuery<BookSummary[]>({
-    queryKey: ["books", query.filter, query.sort, query.search ?? ""],
+    queryKey: ["books", query.filter, query.sort, query.search ?? "", query.tag ?? ""],
     queryFn: () => {
       // Browser dev mode has no backend: show an empty shelf instead of erroring.
       if (!isDesktopRuntime) return Promise.resolve([]);
