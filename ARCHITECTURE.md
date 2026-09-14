@@ -213,7 +213,17 @@ DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CO
 
 ### 资源协议
 
-封面不经过 `file://`，走 `Builder::register_uri_scheme_protocol` 注册的 `colorreader://`。URL 形态因平台而异（macOS `colorreader://localhost/cover/{id}`，Windows/Linux `http://colorreader.localhost/cover/{id}`），由 `resource::resource_origin()` 在编译期编码，前端只拿后端拼好的 `coverUrl`。处理链：校验 id 形态（UUID 字符集、长度上限、拒绝 `..`）→ 查库定位封面路径 → 读文件按 MIME 返回，非法 id 一律 404。
+封面不经过 `file://`，走 `Builder::register_uri_scheme_protocol` 注册的 `colorreader://`。URL 形态因平台而异（macOS `colorreader://localhost/cover/{id}`，Windows/Linux `http://colorreader.localhost/cover/{id}`），由 `resource::resource_origin()` 在编译期编码，前端只拿后端拼好的 `coverUrl`。处理链：校验 id 形态（UUID 字符集、长度上限、拒绝 `..`）→ 查库定位封面路径 → 读文件按 MIME 返回，非法 id 一律 404。同一协议还承担两件事：**书籍源文件**（`/book/{id}`，支持 `Range`，让开书不再随文件体积增长）与**导入的字体**（`/font/{id}`）。字体那条多了两个必须的头：`Access-Control-Allow-Origin: *` —— 字体是跨源加载且受 CORS 约束，漏了就是静默回退到别的字体；`Cache-Control: immutable` —— URL 里是导入时新生成的 UUID，内容不可能变，而一个 20 MB 的中文字体若每上一屏就重取一次，就是肉眼可见的卡顿。
+
+### 自定义字体
+
+中文字体是几十兆字节、许可也各自独立，所以**不内置任何字体**，读者把自己已有的文件导入进来（`font.import`，接受 `.ttf` / `.otf` / `.ttc` / `.woff` / `.woff2`）。副本落在 `<data dir>/fonts/<uuid>.<ext>`，列表存 `settings` 的单个 JSON（`reading.fonts`），与词典同一套零迁移做法。`.ttc` 收进来了但只加载其中第一个字面形：CSS 无法指定集合里的第几个，拒绝文件则是把一种能用的字体变成不能用。
+
+命名是这条链的关键一步：字体在 CSS 里叫 `cr-<id>`，设置里选中它用 `custom:<id>`，**两个名字都由 id 推出来**。这让 `resolveFont` 保持成一个对设置值的纯函数——选择器有列表，样式构建器没有。
+
+`@font-face` 要**分别**声明在两处，因为书的一节是一个独立文档，应用文档里的声明进不去它：书的那份随注入的样式表一起进 section（`FoliateStyle.fontFaces`），应用侧这份在 `AppShell` 里渲染一个 `<style>`，覆盖 prose 通路与设置界面。`font-display: swap` 是必需的：默认行为会在字体下载完之前不显示文字，而中文面孔有几十兆。
+
+最后两处容易漏：CSP 的 `font-src` 必须放行资源协议的源，否则 iframe 里的字体被策略挡掉；删除一个正在使用的字体时，`useDeleteFont` 会把设置退回 `system` —— 否则阅读面会去请求一个再也没有 `@font-face` 声明过的族名，文字悄悄变成浏览器的兜底字体，屏幕上没有任何解释。
 
 ### 演进为 Workspace 的触发条件
 
@@ -494,12 +504,14 @@ capability 只放行实际用到的三条：`updater:allow-check`、`updater:all
 
 ### P1（高价值，中等工作量）
 
-| 主题                   | 说明                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| epub 旧标注 CFI 回填   | 迁移前创建的 epub 标注 `cfi = NULL`，不渲染不跳转；复用 P1-4 Kindle 导入的 `text→CFI` 铸锚链路（`resolveAnchors` / `indexText` / `getCFI` / `annotation_anchor`），打开该书时批量反查落库                                                                                                                                                                                                                                                                                     |
-| 其它词典格式           | **评估后不做**，判据是「先有具体文件，再写解析器」。StarDict 与 MDict `.mdx`（2.0 + UTF-8 + 未加密）已可导入，已覆盖中文圈实际流通的两种；DICT（`.index` + `.dict.dz`）结构最接近 StarDict，但流通面只是 Linux 发行版 / FreeDict 的英文词库；SLOB 是 Aard2 的维基容器（内容是维基标记，且与在线 Wiktionary 能力重叠）；BGL 专有编码成本最高而 Babylon 已退场。`.mdd` 同理不做：弹窗是纯文本容器，读出 `Vec<u8>` 无人消费，而 `<img>` 被剥掉后词条仍是连续文本、不出现裂图占位 |
-| StarDict `.syn` 变形词 | 🔴 同一批文件里**真正被丢掉的一件**：`.ifo` 的 `synwordcount=` 所声明的可选第四文件 `.syn`（格式 = `synonym_word\0` + 4 B 的 `.idx` 条目索引）；导入只收 `.ifo`/`.idx`/`.dict`，`synwordcount` 也落在解析的兜底分支里没读 → 词典只收 `run` 时划 `ran` 会落空。成本是「一个文本索引 + 一条 精确 → 小写 → `.syn` 的查找支路」，复用现有 `entry_offsets` / `find`                                                                                                                |
-| 自定义字体导入         | 中文阅读刚需（LXGW 等），排版已抽象在 `foliateStyle.ts` / prose，加字体管理即可                                                                                                                                                                                                                                                                                                                                                                                               |
+| 主题                   | 说明                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| StarDict `.syn` 变形词 | 🔴 同一批文件里**真正被丢掉的一件**：`.ifo` 的 `synwordcount=` 所声明的可选第四文件 `.syn`（格式 = `synonym_word\0` + 4 B 的 `.idx` 条目索引）；导入只收 `.ifo`/`.idx`/`.dict`，`synwordcount` 也落在解析的兜底分支里没读 → 词典只收 `run` 时划 `ran` 会落空。成本是「一个文本索引 + 一条 精确 → 小写 → `.syn` 的查找支路」，复用现有 `entry_offsets` / `find` |
+
+**两项已于此日落地**（2026-09-15）：
+
+- **epub 旧标注 CFI 回填。** 原本写的是「打开时批量反查落库」，实际缺口比想象的小、也更具体：`resolveAnchors` 的过滤条件是「有文本且没有 CFI」，本来就覆盖任何无锚标注，不只是 Kindle 导入。真正坏掉的只有**跳转**这一条 —— `if (annotation.cfi)` 让无锚标注点下去什么也不发生。修法是 `FoliateHandle::goToHighlight`：先用**章的 fraction** 落到那一章（不走 section 序号，因为 foliate 的 section 与导入器的章是两套编号，`rememberFoliateLocation` 那条 fraction 桥才是既有的换算），再轮询 `getContents()` 用文本铸出 CFI、落库、跳过去。铸锚用的是新抽出的 `textAnchor.ts::findInSections`，与 Kindle 导入共用 `indexText` / `findRange`。
+- **自定义字体导入**（见「自定义字体」一节）。
 
 ### P2（锦上添花）
 

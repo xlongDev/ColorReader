@@ -23,6 +23,7 @@ import type {
   ImportProgress,
   LibraryStats,
   LocalDictionary,
+  LocalFont,
   NewAnnotation,
   NewBookmark,
   RagProgress,
@@ -278,6 +279,21 @@ export const ipc = {
   /** Forgets one dictionary and deletes its files. */
   dictionaryDelete(id: string): Promise<void> {
     return invoke<void>("dictionary_delete", { id });
+  },
+
+  /** Every font the reader imported, in the order they were added. */
+  fontList(): Promise<LocalFont[]> {
+    return invoke<LocalFont[]>("font_list");
+  },
+
+  /** Copies the font file at `path` in, and records it. */
+  fontImport(path: string): Promise<LocalFont> {
+    return invoke<LocalFont>("font_import", { path });
+  },
+
+  /** Forgets one font and deletes its bytes. */
+  fontDelete(id: string): Promise<void> {
+    return invoke<void>("font_delete", { id });
   },
 
   /**

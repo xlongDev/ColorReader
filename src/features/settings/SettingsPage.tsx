@@ -11,6 +11,7 @@ import {
   Sparkle,
   BookOpenText,
   Trash,
+  TextAa,
 } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -23,6 +24,7 @@ import { useSystemInfo } from "@/hooks/useSystemInfo";
 import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
 import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from "@/hooks/useSync";
 import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
+import { useDeleteFont, useFonts, useImportFont } from "@/hooks/useFonts";
 import { useUpdater, type UpdateState } from "@/hooks/useUpdater";
 import type {
   AiConfig,
@@ -62,6 +64,7 @@ export function SettingsPage() {
         />
         <AiSection />
         <DictionarySection />
+        <FontSection />
         <SyncSection />
         <AboutSection />
       </div>
@@ -469,6 +472,96 @@ function DictionarySection() {
       <div className="mt-4 flex items-center gap-2">
         <GlassButton size="sm" onClick={() => void pick()} disabled={upload.isPending}>
           {upload.isPending ? "正在导入…" : "导入词典…"}
+        </GlassButton>
+        {status && (
+          <output
+            className={cn(
+              "text-xs leading-relaxed",
+              status.tone === "ok" ? "text-text-2" : "text-danger",
+            )}
+          >
+            {status.text}
+          </output>
+        )}
+      </div>
+    </GlassPanel>
+  );
+}
+
+/**
+ * Fonts for the reading surface.
+ *
+ * Nothing ships with the app: CJK faces are tens of megabytes and their
+ * licences belong to their authors, so the reader brings the file they already
+ * have. Importing copies it next to the library and the reader picks it from
+ * the same 字体 row as the built-in stacks.
+ */
+function FontSection() {
+  const fonts = useFonts();
+  const upload = useImportFont();
+  const remove = useDeleteFont();
+  const [status, setStatus] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+
+  const pick = async () => {
+    setStatus(null);
+    try {
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "字体", extensions: ["ttf", "otf", "ttc", "woff", "woff2"] }],
+      });
+      if (typeof picked !== "string") return;
+      upload.mutate(picked, {
+        onSuccess: (added) => setStatus({ tone: "ok", text: `已导入「${added.name}」。` }),
+        onError: (error) => setStatus({ tone: "bad", text: String(error) }),
+      });
+    } catch (error) {
+      // Same reasoning as the dictionary row: an ACL denial is a real failure,
+      // and swallowing it reads as a button that does nothing.
+      setStatus({ tone: "bad", text: `无法打开文件选择器：${String(error)}` });
+    }
+  };
+
+  const list = fonts.data ?? [];
+
+  return (
+    <GlassPanel className="px-5 pt-5 pb-4">
+      <div className="mb-3 flex items-center gap-2">
+        <TextAa size={16} weight="duotone" className="text-text-2" />
+        <h2 className="text-text-1 text-sm font-semibold">字体</h2>
+      </div>
+      <p className="text-text-3 text-[12px] leading-relaxed">
+        导入 .ttf / .otf / .ttc / .woff / .woff2 字体后，可以在阅读器的「字体」里选用（如 LXGW
+        文楷、 霞鹜文楷等）。字体只存在本机，不随应用分发。
+      </p>
+
+      {list.length === 0 ? (
+        <p className="text-text-3 mt-3 text-[12.5px] leading-relaxed">还没有导入字体。</p>
+      ) : (
+        <ul className="mt-3 grid gap-2">
+          {list.map((font) => (
+            <li
+              key={font.id}
+              className="border-hairline flex items-center justify-between gap-3 border-t pt-2"
+            >
+              <span className="text-text-1 min-w-0 truncate text-[13px]">{font.name}</span>
+              <button
+                type="button"
+                aria-label={`删除 ${font.name}`}
+                onClick={() => remove.mutate(font.id)}
+                disabled={remove.isPending}
+                className="text-text-3 hover:text-danger focus-ring shrink-0 rounded-md transition-colors disabled:opacity-50"
+              >
+                <Trash size={14} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-4 flex items-center gap-2">
+        <GlassButton size="sm" onClick={() => void pick()} disabled={upload.isPending}>
+          {upload.isPending ? "正在导入…" : "导入字体…"}
         </GlassButton>
         {status && (
           <output

@@ -81,6 +81,7 @@ import {
 } from "@/features/reader/speech";
 import { FoliateSearchPanel } from "./FoliateSearchPanel";
 import {
+  fontFaceCss,
   resolveFont,
   resolveSurface,
   readerGlassVars,
@@ -101,6 +102,7 @@ import { useBookmarks, useCreateBookmark, useDeleteBookmark } from "@/hooks/useB
 import { useAiChat } from "@/hooks/useAi";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import { useIndexBook, useRagStatus } from "@/hooks/useRag";
+import { useFonts } from "@/hooks/useFonts";
 import {
   useBook,
   useBookImages,
@@ -131,6 +133,7 @@ import type {
   BookImage,
   Bookmark,
   ChapterMeta,
+  LocalFont,
   RagHit,
   SearchHit,
 } from "@/types/ipc";
@@ -194,6 +197,12 @@ const FULLSCREEN_MARGIN_BONUS = 48;
  * `[]` per render would re-create every callback that reads it.
  */
 const NO_IMAGES: BookImage[] = [];
+
+/**
+ * Stand-in for the imported fonts while the query is in flight. A fresh `[]`
+ * per render would rebuild the stylesheet handed to foliate on every render.
+ */
+const NO_FONTS: LocalFont[] = [];
 
 /**
  * Stand-in for a PDF's bookmark outline before (or without) the query. A fresh
@@ -786,6 +795,8 @@ function ReaderView({
   const wallpaperPath = chapterData?.wallpaper ?? null;
   const bookImagesQuery = useBookImages(bookId);
   const bookImages = bookImagesQuery.data ?? NO_IMAGES;
+  const fontsQuery = useFonts();
+  const fonts = fontsQuery.data ?? NO_FONTS;
   // A picture clicked inside the book's own rendering. foliate reports the
   // archive entry it came from (see `FoliateBookView`), which is what the
   // book-wide list is keyed by; the entry itself is the lightbox's position.
@@ -2164,6 +2175,9 @@ function ReaderView({
       dark: surface.mode === "dark",
       // Inverting a book's pictures is the reader's call, not the surface's.
       invertImages: invertBookImages,
+      // A section is its own document, so the imported faces have to travel
+      // with the sheet rather than come from the app's own style.
+      fontFaces: fontFaceCss(fonts),
     }),
     [
       fontSize,
@@ -2175,6 +2189,7 @@ function ReaderView({
       surface.mode,
       surface.tint,
       invertBookImages,
+      fonts,
     ],
   );
   // The TOC panel reads chapters; foliate books are driven by its own
@@ -3203,7 +3218,18 @@ function ReaderView({
                   useFoliate
                     ? (annotation) => {
                         setPanel("none");
-                        if (annotation.cfi) foliateRef.current?.goToCfi(annotation.cfi);
+                        // A highlight with no anchor still has its text and the
+                        // chapter it was recorded in, and those are enough: the
+                        // chapter's own start is the landmark foliate can use,
+                        // and the view mints the anchor from the text once it
+                        // is there. The fraction is how the two numbering
+                        // schemes meet (see `rememberFoliateLocation`).
+                        foliateRef.current?.goToHighlight({
+                          id: annotation.id,
+                          cfi: annotation.cfi,
+                          text: annotation.text,
+                          fraction: globalProgress(chapters, annotation.chapterIdx, 0),
+                        });
                       }
                     : undefined
                 }
@@ -3891,8 +3917,10 @@ function AnnotationList({
   onExport: () => void;
   /**
    * Makes a row navigate to its highlight. foliate books need it: their
-   * highlights are anchored by CFI and the list cannot scroll a chapter that
-   * was never on screen. Prose rows already sit in the chapter on screen.
+   * sections are the container's own spine items, so a row has to ask the view
+   * to go somewhere rather than scroll a chapter the surrounding list drives.
+   * A highlight with no anchor is still reachable — the text and its chapter
+   * are enough (see `FoliateHandle::goToHighlight`).
    */
   onJump?: (annotation: Annotation) => void;
 }) {

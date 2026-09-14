@@ -22,6 +22,10 @@ export type FoliateStyle = {
    *  palette already makes the page dark, and an inverted photograph is a
    *  defect rather than a feature. */
   invertImages: boolean;
+  /** `@font-face` rules for the fonts the reader imported, from
+   *  [`fontFaceCss`]. A section is a document of its own, so the app's own
+   *  declarations do not reach inside it — the sheet has to carry them. */
+  fontFaces: string;
 };
 
 /**
@@ -59,8 +63,10 @@ export const buildStyleSheet = ({
   bg,
   dark,
   invertImages,
+  fontFaces,
 }: FoliateStyle) => {
-  const typography = `:root {
+  const typography = `${fontFaces}
+:root {
   /* The system stack resolves to var(--font-sans) from the app shell,
      which does not exist inside a book iframe — define it here. */
   --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto,

@@ -6,6 +6,7 @@ pub mod chapters;
 pub mod clippings;
 pub mod dictionaries;
 pub mod export;
+pub mod fonts;
 pub mod graph;
 pub mod guide;
 pub mod import;
@@ -81,6 +82,14 @@ pub const fn resource_origin() -> &'static str {
 /// Absolute URL for a book's cover, valid only when the book has one.
 pub fn cover_url(book_id: &str) -> String {
     format!("{}/cover/{book_id}", resource_origin())
+}
+
+/// Absolute URL for an imported font's bytes.
+///
+/// Built here rather than in the renderer for the same reason as the cover URL:
+/// the origin differs by platform and only this side knows the target.
+pub fn font_url(id: &str) -> String {
+    format!("{}/font/{id}", resource_origin())
 }
 
 /// Absolute URL for a book's source file, streamed by the reader over HTTP

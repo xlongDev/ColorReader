@@ -25,6 +25,9 @@ const COVERS_DIR: &str = "covers";
 /// Directory holding imported dictionaries, one subdirectory per bundle.
 const DICTIONARIES_DIR: &str = "dictionaries";
 
+/// Directory holding fonts the reader imported for the reading surface.
+const FONTS_DIR: &str = "fonts";
+
 /// Resolved locations under the data directory.
 #[derive(Debug, Clone)]
 pub struct Layout {
@@ -32,6 +35,7 @@ pub struct Layout {
     pub books_dir: PathBuf,
     pub covers_dir: PathBuf,
     pub dictionaries_dir: PathBuf,
+    pub fonts_dir: PathBuf,
 }
 
 impl Layout {
@@ -40,10 +44,12 @@ impl Layout {
         let books_dir = data_dir.join(BOOKS_DIR);
         let covers_dir = data_dir.join(COVERS_DIR);
         let dictionaries_dir = data_dir.join(DICTIONARIES_DIR);
+        let fonts_dir = data_dir.join(FONTS_DIR);
         std::fs::create_dir_all(&books_dir)?;
         std::fs::create_dir_all(&covers_dir)?;
         std::fs::create_dir_all(&dictionaries_dir)?;
-        Ok(Self { data_dir, books_dir, covers_dir, dictionaries_dir })
+        std::fs::create_dir_all(&fonts_dir)?;
+        Ok(Self { data_dir, books_dir, covers_dir, dictionaries_dir, fonts_dir })
     }
 }
 

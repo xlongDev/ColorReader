@@ -13,6 +13,7 @@ const style = (over: Partial<FoliateStyle> = {}): FoliateStyle => ({
   bg: "#181c23",
   dark: true,
   invertImages: false,
+  fontFaces: "",
   ...over,
 });
 
@@ -46,6 +47,13 @@ describe("buildStyleSheet", () => {
 
   it("caps replaced elements the paginator would let overflow the column", () => {
     expect(buildStyleSheet(style({ dark: false }))).toContain("max-width: 100% !important");
+  });
+
+  it("carries the imported faces into the section, which is its own document", () => {
+    // A book section is a document: the app's own @font-face never reaches it,
+    // so the sheet has to bring the declaration along with the family name.
+    const css = buildStyleSheet(style({ fontFaces: '@font-face { font-family: "cr-1" }' }));
+    expect(css).toContain('@font-face { font-family: "cr-1" }');
   });
 
   it("inverts a book's pictures only when asked, and only on a night page", () => {

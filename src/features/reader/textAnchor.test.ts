@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { condense, findRange, indexText } from "./textAnchor";
+import { condense, findInSections, findRange, indexText } from "./textAnchor";
 
 /** A paragraph carrying `text`, in a document that can host a Range. */
 function paragraph(text: string): HTMLParagraphElement {
@@ -77,5 +77,44 @@ describe("findRange", () => {
     const index = indexText(element);
     expect(index.flat).toBe("visibleprose");
     expect(findRange(index, "hiddenneedle")).toBeNull();
+  });
+});
+
+/** One section, as its own document: foliate hands them out as documents, so
+ *  the search must cross realms rather than stay in the test page. */
+function section(text: string): Document {
+  const doc = document.implementation.createHTMLDocument();
+  const prose = doc.createElement("p");
+  prose.textContent = text;
+  doc.body.append(prose);
+  return doc;
+}
+
+describe("findInSections", () => {
+  it("reports which section carries the text", () => {
+    const found = findInSections(
+      [
+        { index: 0, doc: section("nothing to see") },
+        { index: 1, doc: section("the House said hello") },
+      ],
+      "the House said hello",
+    );
+    expect(found?.index).toBe(1);
+    expect(found?.range.toString()).toBe("the House said hello");
+  });
+
+  it("reports nothing when no mounted section carries it", () => {
+    expect(findInSections([{ index: 0, doc: section("别的句子") }], "moonlight")).toBeNull();
+  });
+
+  it("skips entries whose section has not resolved yet", () => {
+    // The paginator emits an entry before its document exists; reading `doc`
+    // off it would throw instead of moving on.
+    const found = findInSections(
+      [{ index: 0 }, { index: 1, doc: section("moonlight") }],
+      "moonlight",
+    );
+    expect(found?.index).toBe(1);
+    expect(found?.range.toString()).toBe("moonlight");
   });
 });

@@ -1,4 +1,4 @@
-import { Suspense, useEffect, type CSSProperties } from "react";
+import { Suspense, useEffect, useMemo, type CSSProperties } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { CaretRight } from "@phosphor-icons/react";
@@ -11,13 +11,14 @@ import { GlassPanel } from "@/components/glass/panel";
 import { GlassIconButton } from "@/components/glass/button";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
-import { readerGlassVars, resolveSurface } from "@/features/reader/theme";
+import { fontFaceCss, readerGlassVars, resolveSurface } from "@/features/reader/theme";
 import { useCommandPalette } from "@/stores/command-palette";
 import { useSettings } from "@/stores/settings";
 import { useReaderSettings } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import { useDeepLink } from "@/hooks/useDeepLink";
+import { useFonts } from "@/hooks/useFonts";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
 
@@ -76,6 +77,14 @@ export function AppShell() {
 
   const sidebarGone = sidebarHidden || readerFullscreen;
 
+  // `@font-face` for the fonts the reader imported, declared once for the app
+  // document. A book section is a document of its own and gets its own copy
+  // with the injected sheet, but everything rendered *here* — the prose path,
+  // the settings picker, the popup — needs this one. The empty list is inside
+  // the memo so it cannot re-create the sheet on every render.
+  const fonts = useFonts();
+  const fontFaces = useMemo(() => fontFaceCss(fonts.data ?? []), [fonts.data]);
+
   // Navigating out of the reader ends the immersive chrome even if the OS
   // window is still fullscreen — the shell must never be left chrome-less.
   const setReaderFullscreen = useChrome((s) => s.setReaderFullscreen);
@@ -89,6 +98,7 @@ export function AppShell() {
       data-theme={reading ? surface.mode : undefined}
       style={shellStyle}
     >
+      <style>{fontFaces}</style>
       <div className="app-backdrop" />
       <div className="app-grain" />
       {!readerFullscreen && <TitleBar />}

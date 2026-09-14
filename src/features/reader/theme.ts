@@ -10,6 +10,8 @@
 
 import type { CSSProperties } from "react";
 
+import type { LocalFont } from "@/types/ipc";
+
 export interface ReadingSurface {
   key: string;
   label: string;
@@ -185,8 +187,54 @@ export const FONT_STACKS: FontOption[] = [
   },
 ];
 
+/**
+ * An imported font is selected as `custom:<id>` and declared in CSS as
+ * `cr-<id>`. Both names come from the id alone, which is what keeps
+ * [`resolveFont`] a pure function of the stored settings value: the picker has
+ * the list of imported fonts, the style builders do not.
+ */
+const CUSTOM_FONT = "custom:";
+const CUSTOM_FAMILY = "cr-";
+
+/** The settings key that selects an imported font. */
+export function customFontKey(id: string): string {
+  return `${CUSTOM_FONT}${id}`;
+}
+
+/** The `font-family` an imported font is declared and used under. */
+export function customFontFamily(id: string): string {
+  return `${CUSTOM_FAMILY}${id}`;
+}
+
 export function resolveFont(key: string): string {
+  if (key.startsWith(CUSTOM_FONT)) {
+    // Quoted: a uuid is not a valid bare family name, and an unquoted one makes
+    // the whole declaration invalid rather than merely wrong.
+    return `"${customFontFamily(key.slice(CUSTOM_FONT.length))}"`;
+  }
   return (FONT_STACKS.find((font) => font.key === key) ?? FONT_STACKS[0]!).stack;
+}
+
+/**
+ * `@font-face` for the fonts the reader imported.
+ *
+ * Each document needs its own copy: a book section is a document of its own, so
+ * neither the app's declarations nor another section's reach into it. Taking
+ * ids and urls rather than whole records lets the picker build the same rules
+ * without the list the reader page holds.
+ *
+ * `font-display: swap` is load-bearing, not decoration: an imported CJK face
+ * can be twenty megabytes, and the alternative is a page of invisible text
+ * while it arrives. The URL is the resource protocol's — the backend builds it
+ * because the origin depends on the platform the app was compiled for.
+ */
+export function fontFaceCss(fonts: readonly Pick<LocalFont, "id" | "url">[]): string {
+  return fonts
+    .map(
+      (font) =>
+        `@font-face { font-family: "${customFontFamily(font.id)}"; src: url("${font.url}"); font-display: swap; }`,
+    )
+    .join("\n");
 }
 
 export const PAGE_TRANSITIONS: { key: PageTransition; label: string }[] = [

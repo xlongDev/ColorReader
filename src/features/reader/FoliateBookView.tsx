@@ -9,7 +9,7 @@ import type { SpeechUnit, Span } from "./speech";
 import { buildStyleSheet } from "./foliateStyle";
 import type { FoliateStyle } from "./foliateStyle";
 import { inkWash } from "./selection";
-import { findRange, indexText } from "./textAnchor";
+import { findInSections, findRange, indexText } from "./textAnchor";
 import type { TextIndex } from "./textAnchor";
 
 /** Where the reader is. `cfi` is opaque — hand it back to foliate verbatim. */
@@ -66,6 +66,17 @@ export type FoliateTocEntry = {
   depth: number;
 };
 
+/** One highlight the parent wants the view to navigate to. */
+export type FoliateHighlight = {
+  id: string;
+  /** The stored anchor, `null` while the highlight has never been anchored. */
+  cfi: string | null;
+  /** The highlight's text: the only handle an unanchored one has. */
+  text: string;
+  /** Where the chapter it was recorded in begins, as a whole-book fraction. */
+  fraction: number;
+};
+
 /** Imperative navigation the parent drives from the chrome. */
 export type FoliateHandle = {
   /** One page (paginated) or one scroll step, like the flip arrows. */
@@ -76,6 +87,16 @@ export type FoliateHandle = {
   atEdge: (dir: 1 | -1) => boolean;
   /** Jump to a TOC entry by its index in the flattened list. */
   goToEntry: (index: number) => void;
+  /**
+   * Navigates to a highlight, minting its anchor on the way when it has none.
+   *
+   * A highlight made before foliate rendered this format — or imported from a
+   * clippings file — carries text and a chapter, not a CFI. The way there is
+   * the chapter's fraction (the two index schemes do not agree), then the text
+   * search that ends in an anchor; from that point the highlight is an ordinary
+   * one, stored and painted like any other.
+   */
+  goToHighlight: (highlight: FoliateHighlight) => void;
   /** Advances the scrolled flow by whole `delta` px, `subpixel` carried as a
    *  composited transform; no-op outside the scroll layout. */
   scrollByPx: (delta: number, subpixel: number) => void;
@@ -617,17 +638,19 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   /**
    * Locates the highlights that have no anchor yet.
    *
-   * An import from a Kindle clippings file knows a highlight's text and nothing
-   * else, and foliate cannot paint what it cannot anchor. The text is the one
-   * handle that survives the move, so every section the paginator mounts is
-   * searched for it and the CFI that comes out is handed back to be stored —
-   * after that the highlight is an ordinary one everywhere: painting, clicking,
-   * jumping to it, and the next open has it before the first page renders.
+   * Two kinds arrive that way: one imported from a Kindle clippings file, and
+   * one made before foliate rendered this format — both know their text, and
+   * foliate cannot paint what it cannot anchor. The text is the one handle that
+   * survives, so every section the paginator mounts is searched for it and the
+   * CFI that comes out is handed back to be stored — after that the highlight
+   * is an ordinary one everywhere: painting, clicking, jumping to it, and the
+   * next open has it before the first page renders.
    *
    * Sections that are not on screen yet are simply not searched yet, so this
    * converges as the book is read rather than loading the whole book up front.
    * Until it lands, the highlight is in the list, which is where the reader
-   * finds it either way.
+   * finds it either way — and `goToHighlight` is how the list reaches one that
+   * is not on screen.
    */
   const resolveAnchors = useCallback(() => {
     const view = viewRef.current;
@@ -658,6 +681,34 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       }
     }
   }, []);
+
+  /**
+   * The anchor for `text`, minted from whichever section is on screen.
+   *
+   * `goToFraction` resolves before the paginator has rendered the section it
+   * landed on, so this looks a few times before giving up — the same wait
+   * `collectBlocks` does, and for the same reason. Giving up is not a failure:
+   * the reader is already standing in the right chapter by then, and the
+   * highlight stays in the list either way.
+   */
+  const mintAnchor = useCallback(
+    (text: string): Promise<{ index: number; range: Range } | null> => {
+      const renderer = viewRef.current?.renderer;
+      if (!renderer) return Promise.resolve(null);
+      // The recursive poll `collectBlocks` uses: the section can still be a
+      // frame away, and the same rule applies — look a few times, then stop.
+      const poll = (attempt: number): Promise<{ index: number; range: Range } | null> => {
+        const found = findInSections(renderer.getContents(), text);
+        if (found) return Promise.resolve(found);
+        if (attempt >= 15) return Promise.resolve(null);
+        return new Promise((resolve) => window.setTimeout(resolve, 100)).then(() =>
+          poll(attempt + 1),
+        );
+      };
+      return poll(0);
+    },
+    [],
+  );
 
   /**
    * Paints every CFI-bearing highlight and unpaints the ones that are gone.
@@ -1132,6 +1183,28 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         if (!view?.book?.splitTOCHref) return;
         void view.goToFraction(fraction);
       },
+      goToHighlight: (highlight) => {
+        const view = viewRef.current;
+        if (!view) return;
+        if (highlight.cfi) {
+          void view.goTo(highlight.cfi);
+          return;
+        }
+        // Unanchored: foliate cannot resolve a position it has never been
+        // given, so the chapter is as far as it can be told to go. The text
+        // search that follows is what turns the rest of the way into an
+        // ordinary anchored highlight, and it is the only thing stored.
+        if (highlight.text === "" || !view.book?.splitTOCHref) return;
+        void (async () => {
+          await view.goToFraction(highlight.fraction);
+          const found = await mintAnchor(highlight.text);
+          if (!found) return;
+          const cfi = view.getCFI(found.index, found.range);
+          if (!cfi) return;
+          anchorReport.current?.(highlight.id, cfi);
+          void view.goTo(cfi);
+        })();
+      },
       search: async (query) => {
         const view = viewRef.current;
         if (!view || query.trim() === "") return [];
@@ -1207,7 +1280,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       },
       clearTts,
     }),
-    [paintTts, clearTts, collectBlocks, selectionSpot],
+    [paintTts, clearTts, collectBlocks, selectionSpot, mintAnchor],
   );
 
   if (error) {

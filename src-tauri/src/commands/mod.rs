@@ -9,6 +9,7 @@ pub mod bookmark;
 pub mod clippings;
 pub mod dictionary;
 pub mod export;
+pub mod font;
 pub mod graph;
 pub mod lookup;
 pub mod rag;

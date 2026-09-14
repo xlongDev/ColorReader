@@ -98,3 +98,34 @@ export function findRange(index: TextIndex, needle: string): Range | null {
   range.setEnd(last.node, last.offset + 1);
   return range;
 }
+
+/** One mounted section, as foliate hands them out. */
+export type Section = { index?: number; doc?: Document };
+
+/**
+ * The mounted section that carries `text`, with the range for it.
+ *
+ * This is the other half of [`findRange`], for the callers that have one needle
+ * and do not know which section holds it — a highlight whose anchor has never
+ * been minted. Foliate's section numbering and the importer's chapter numbering
+ * do not agree, so guessing a section from a stored chapter index would land on
+ * the wrong one; trying what is mounted, and letting the caller check the answer
+ * against the text, is the honest way round.
+ *
+ * The index is built per section until something hits, which is fine for a
+ * single needle. Callers searching many needles should hold one [`TextIndex`]
+ * per section instead.
+ */
+export function findInSections(
+  sections: readonly Section[],
+  text: string,
+): { index: number; range: Range } | null {
+  for (const { index, doc } of sections) {
+    if (index === undefined || !doc) continue;
+    const body = doc.body ?? doc.documentElement;
+    if (!body) continue;
+    const range = findRange(indexText(body), text);
+    if (range) return { index, range };
+  }
+  return null;
+}

@@ -7,20 +7,21 @@
 
 use std::borrow::Cow;
 use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tauri::Builder;
 use tauri::http::{
     HeaderValue, Request, Response, StatusCode,
     header::{
-        ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_ORIGIN, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
+        ACCEPT_RANGES, ACCESS_CONTROL_ALLOW_ORIGIN, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE,
+        CONTENT_TYPE,
     },
 };
 
 use crate::db::Library;
 use crate::document::{BookFormat, image_mime};
-use crate::library::{cover_file, repository};
+use crate::library::{cover_file, fonts, repository};
 
 /// Scheme registered with Tauri. Also the host prefix on Windows and Android,
 /// where custom protocols are served as `http://<scheme>.localhost`.
@@ -34,24 +35,45 @@ const COVER_PREFIX: &str = "/cover/";
 /// whole file over IPC (see `Registry::book`).
 const BOOK_PREFIX: &str = "/book/";
 
+/// Path prefix under which imported font files are addressed. Fonts are an
+/// order of magnitude larger than covers, so they are cached hard (see
+/// `Registry::font`).
+const FONT_PREFIX: &str = "/font/";
+
+/// How long a font response may be reused. The URL carries a UUID minted at
+/// import, so this content can never change under it.
+const FONT_CACHE: &str = "public, max-age=31536000, immutable";
+
 /// Slot the protocol handler reads from.
 ///
 /// Tauri runs the setup hook on the event loop's `Ready` event, which is after
 /// the webview has been created, so the browser can ask for a cover before the
 /// database exists. Until setup publishes the library, requests answer 503 and
 /// the browser retries on the next render.
+///
+/// The fonts directory rides along because it is the one thing here that cannot
+/// be read off the database: covers and book files carry their absolute paths
+/// in a row, while a font is recorded by name inside that directory — which is
+/// what keeps the font list portable and the renderer ignorant of paths.
 #[derive(Clone, Default)]
-pub struct Registry(Arc<Mutex<Option<Library>>>);
+pub struct Registry(Arc<Mutex<Option<Ready>>>);
+
+/// The library plus the directory the protocol resolves on its own.
+#[derive(Clone)]
+struct Ready {
+    library: Library,
+    fonts_dir: PathBuf,
+}
 
 impl Registry {
     /// Publishes the opened library. Called once, from setup.
-    pub fn set(&self, library: Library) {
+    pub fn set(&self, library: Library, fonts_dir: PathBuf) {
         if let Ok(mut slot) = self.0.lock() {
-            *slot = Some(library);
+            *slot = Some(Ready { library, fonts_dir });
         }
     }
 
-    fn library(&self) -> Option<Library> {
+    fn ready(&self) -> Option<Ready> {
         self.0.lock().ok().and_then(|slot| slot.clone())
     }
 }
@@ -77,13 +99,16 @@ fn serve(registry: &Registry, request: &Request<Vec<u8>>) -> Response<Cow<'stati
     if let Some(id) = book_id(path) {
         return registry.book(id, request);
     }
+    if let Some(id) = font_id(path) {
+        return registry.font(id, &uri);
+    }
     tracing::warn!(uri = %uri, "资源协议收到无法识别的路径");
     empty(StatusCode::NOT_FOUND)
 }
 
 impl Registry {
     fn cover(&self, id: &str, uri: &str) -> Response<Cow<'static, [u8]>> {
-        let Some(library) = self.library() else {
+        let Some(Ready { library, .. }) = self.ready() else {
             tracing::debug!(uri = %uri, "书库尚未就绪，拒绝资源请求");
             return empty(StatusCode::SERVICE_UNAVAILABLE);
         };
@@ -114,12 +139,54 @@ impl Registry {
         }
     }
 
+    /// Serves one imported font.
+    ///
+    /// Two of these headers carry weight rather than decoration. A font is
+    /// fetched cross-origin — the app document and every book section have an
+    /// origin of their own — and `@font-face` obeys CORS, so without the
+    /// allow-origin header the face is refused and the reading surface quietly
+    /// falls back to another font. And the cache lasts a year: the URL holds a
+    /// UUID minted at import time, so it is immutable by construction, while
+    /// refetching a 20 MB CJK face once per section would be visible as stutter.
+    fn font(&self, id: &str, uri: &str) -> Response<Cow<'static, [u8]>> {
+        let Some(Ready { library, fonts_dir }) = self.ready() else {
+            tracing::debug!(uri = %uri, "书库尚未就绪，拒绝资源请求");
+            return empty(StatusCode::SERVICE_UNAVAILABLE);
+        };
+
+        let path = match fonts::path(&library, &fonts_dir, id) {
+            Ok(path) => path,
+            Err(err) => {
+                tracing::warn!(uri = %uri, error = %err, "查询字体失败");
+                return empty(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
+        let Some(path) = path else {
+            return empty(StatusCode::NOT_FOUND);
+        };
+
+        match std::fs::read(&path) {
+            Ok(bytes) => {
+                let mut response = Response::new(Cow::Owned(bytes));
+                let headers = response.headers_mut();
+                headers.insert(CONTENT_TYPE, HeaderValue::from_static(font_mime(&path)));
+                headers.insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+                headers.insert(CACHE_CONTROL, HeaderValue::from_static(FONT_CACHE));
+                response
+            }
+            Err(err) => {
+                tracing::warn!(path = %path.display(), error = %err, "读取字体失败");
+                empty(StatusCode::NOT_FOUND)
+            }
+        }
+    }
+
     /// Streams a book's source file, honouring `Range` so the reader downloads
     /// only the bytes it needs (the OPF, a section, the central directory) and
     /// the open time stops scaling with the file size. A `fetch` from the
     /// webview is cross-origin, so `Access-Control-Allow-Origin` is set.
     fn book(&self, id: &str, request: &Request<Vec<u8>>) -> Response<Cow<'static, [u8]>> {
-        let Some(library) = self.library() else {
+        let Some(Ready { library, .. }) = self.ready() else {
             tracing::debug!(id, "书库尚未就绪，拒绝资源请求");
             return empty(StatusCode::SERVICE_UNAVAILABLE);
         };
@@ -176,28 +243,46 @@ impl Registry {
     }
 }
 
-/// Book id from a request path, or `None` when the path is not a cover we own.
+/// The id after `prefix`, or `None` when the path is not a resource we own.
 ///
 /// Ids are v4 UUIDs, so anything outside hex and dashes is rejected outright:
-/// the id is never used to build a path, but refusing early keeps a malformed
-/// or hostile URL from reaching a query at all.
-fn cover_id(path: &str) -> Option<&str> {
-    let id = path.strip_prefix(COVER_PREFIX)?;
+/// an id is never used to build a path on its own, but refusing early keeps a
+/// malformed or hostile URL from reaching a query at all.
+fn resource_id<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
+    let id = path.strip_prefix(prefix)?;
     let valid = !id.is_empty()
         && id.len() <= 64
         && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-');
     valid.then_some(id)
 }
 
-/// Book id from a request path, or `None` when the path is not a source file
-/// we own. Mirrors `cover_id`'s validation so a malformed or hostile URL never
-/// reaches a query.
+/// Cover id from a request path.
+fn cover_id(path: &str) -> Option<&str> {
+    resource_id(path, COVER_PREFIX)
+}
+
+/// Book id from a request path.
 fn book_id(path: &str) -> Option<&str> {
-    let id = path.strip_prefix(BOOK_PREFIX)?;
-    let valid = !id.is_empty()
-        && id.len() <= 64
-        && id.bytes().all(|byte| byte.is_ascii_hexdigit() || byte == b'-');
-    valid.then_some(id)
+    resource_id(path, BOOK_PREFIX)
+}
+
+/// Imported font id from a request path.
+fn font_id(path: &str) -> Option<&str> {
+    resource_id(path, FONT_PREFIX)
+}
+
+/// Content type announced for a served font, from the extension the import
+/// kept. Getting this wrong is a silent failure: a face announced as the wrong
+/// flavour is one the webview may drop without a word of explanation.
+fn font_mime(path: &Path) -> &'static str {
+    let extension = path.extension().and_then(|ext| ext.to_str()).map(str::to_ascii_lowercase);
+    match extension.as_deref() {
+        Some("otf") => "font/otf",
+        Some("ttc") => "font/collection",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        _ => "font/ttf",
+    }
 }
 
 /// Content type announced for a served source file.

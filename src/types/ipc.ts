@@ -288,6 +288,21 @@ export interface LocalDictionary {
   addedAt: number;
 }
 
+/**
+ * One imported font (mirrors `src-tauri/src/library/fonts.rs`).
+ *
+ * `url` is absolute and built by the backend on purpose: the resource origin
+ * differs by platform, and only the Rust side knows which one it was compiled
+ * for. The face itself is declared as `cr-<id>` — see [`fontFaceCss`].
+ */
+export interface LocalFont {
+  id: string;
+  name: string;
+  addedAt: number;
+  /** Where the resource protocol serves the bytes from. */
+  url: string;
+}
+
 export type AiRole = "system" | "user" | "assistant";
 
 export interface AiMessage {

@@ -58,6 +58,7 @@
 | 深链 `colorreader://book/<id>?annotation=<aid>` | ✅   | 三种位置模型（CFI / 章+偏移 / 页码）通解，macOS 需打包安装 `/Applications`                                                      |
 | single-instance 深链合流                        | ✅   | Windows / Linux 由 `tauri-plugin-single-instance` 把第二进程 argv 交给先到实例                                                  |
 | 自动更新（设置 → 关于，手动检查）               | ✅   | Tauri updater + process 插件，读 GitHub Releases 的 `latest.json`；签名用**自生成** minisign 密钥，不需要平台证书               |
+| 自定义字体导入（阅读器「字体」里选用）          | ✅   | 导入 .ttf / .otf / .ttc / .woff / .woff2，经资源协议 `/font/{id}` 加载；不内置字体（体积与许可各自独立）                        |
 
 ### 支持的格式
 

@@ -19,7 +19,9 @@ import {
   PARA_GAPS,
   useReaderSettings,
 } from "@/stores/reader";
+import { useFonts } from "@/hooks/useFonts";
 import {
+  customFontKey,
   FONT_STACKS,
   LAYOUT_MODES,
   PAGE_TRANSITIONS,
@@ -36,6 +38,7 @@ import { SPEECH_GRANULARITIES } from "@/features/reader/speech";
 export function SettingsPanel() {
   const settings = useReaderSettings();
   const { update } = settings;
+  const fonts = useFonts().data ?? [];
   const appTheme = useResolvedTheme();
   // The picker edits the surface of the appearance currently active.
   const surfaceField = appTheme === "dark" ? "nightSurface" : "surface";
@@ -77,7 +80,14 @@ export function SettingsPanel() {
 
       <Group label="字体">
         <Chips
-          options={FONT_STACKS}
+          // The stacks every machine already has first, then whatever the
+          // reader imported. A custom entry carries no `stack` of its own:
+          // `resolveFont` derives the family from the key, which is what keeps
+          // the picker a plain list of names.
+          options={[
+            ...FONT_STACKS,
+            ...fonts.map((font) => ({ key: customFontKey(font.id), label: font.name })),
+          ]}
           value={settings.fontFamily}
           onChange={(key) => update({ fontFamily: key })}
         />

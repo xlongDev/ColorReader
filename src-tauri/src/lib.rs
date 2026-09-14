@@ -120,6 +120,9 @@ pub fn run() -> tauri::Result<()> {
             commands::dictionary::dictionary_list,
             commands::dictionary::dictionary_import,
             commands::dictionary::dictionary_delete,
+            commands::font::font_list,
+            commands::font::font_import,
+            commands::font::font_delete,
             commands::rag::rag_status,
             commands::rag::rag_index_book,
             commands::rag::rag_chat,
@@ -156,7 +159,9 @@ pub fn run() -> tauri::Result<()> {
 
                 let layout = db::Layout::create(data_dir)?;
                 let library = db::Library::open(&layout.data_dir)?;
-                registry.set(library.clone());
+                // The fonts directory goes with it: it is the one resource the
+                // protocol has to resolve itself (see `resource::Registry`).
+                registry.set(library.clone(), layout.fonts_dir.clone());
 
                 tracing::info!(path = %layout.data_dir.display(), "application data directory ready");
                 app.manage(AppState { started_at: Instant::now(), layout, library });
