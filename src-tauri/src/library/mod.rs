@@ -4,6 +4,7 @@ pub mod annotations;
 pub mod bookmarks;
 pub mod chapters;
 pub mod clippings;
+pub mod export;
 pub mod graph;
 pub mod guide;
 pub mod import;
@@ -19,11 +20,22 @@ pub mod tags;
 #[cfg(test)]
 mod bench;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::db::Library;
 use crate::error::AppResult;
+
+/// Whether `path`'s extension is one of `candidates`, compared case-insensitively.
+///
+/// Shared by both exporters, which pick their format from the destination
+/// extension: one function decides what the save dialog promised and what gets
+/// written, so the two cannot disagree.
+pub fn has_extension(path: &Path, candidates: &[&str]) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| candidates.iter().any(|candidate| candidate.eq_ignore_ascii_case(ext)))
+}
 
 /// English articles ignored when building a sort key.
 const LEADING_ARTICLES: [&str; 3] = ["the ", "a ", "an "];

@@ -8,6 +8,7 @@ import {
   GlobeSimple,
   Highlighter,
   MagnifyingGlass,
+  NotePencil,
   Sparkle,
   SpeakerHigh,
   Trash,
@@ -32,6 +33,11 @@ import { inkWash } from "./selection";
  *
  * With `annotation` set the toolbar edits an existing highlight instead: the
  * same bottom row restyles it in place and the top row gains a delete.
+ *
+ * 记笔记 opens a field under the two rows, so a thought about the passage can
+ * be written where the reader is looking instead of in the side panel. It
+ * commits on the way out — focus leaving the toolbar, or ⌘/Ctrl+Enter — and
+ * Esc rewinds.
  */
 
 type Props = {
@@ -49,16 +55,22 @@ type Props = {
   onLookup: (kind: LookupKind) => void;
   onHighlight: (color: string, style: AnnotationStyle) => void;
   onRestyle: (color: string, style: AnnotationStyle) => void;
+  /** Writes — or clears, with `null` — the reader's note on the selection. A
+   *  bare selection gets a highlight created behind it (see `ReaderPage`). */
+  onNote: (note: string | null) => void;
   onDelete: () => void;
   onClose: () => void;
 };
 
 /** Viewport insets that keep the toolbar on screen (px). */
 const EDGE = 12;
-/** Approximate half-width, for clamping the centred anchor. */
-const HALF = 190;
+/** Approximate half-width, for clamping the centred anchor. Wide enough for
+ *  the action row plus the close button at its widest (a tapped highlight). */
+const HALF = 215;
 /** Approximate toolbar height (two rows), for the above/below flip. */
 const HEIGHT = 92;
+/** Height once the note field is open, its own row under the ink row. */
+const NOTE_HEIGHT = 158;
 
 const STYLES: { key: AnnotationStyle; label: string }[] = [
   { key: "highlight", label: "背景高亮" },
@@ -79,6 +91,7 @@ export function SelectionToolbar({
   onLookup,
   onHighlight,
   onRestyle,
+  onNote,
   onDelete,
   onClose,
 }: Props) {
@@ -88,6 +101,14 @@ export function SelectionToolbar({
   // highlight's own values, a fresh selection from the reader's last pick.
   const [color, setColor] = useState(annotation?.color ?? defaultColor);
   const [style, setStyle] = useState<AnnotationStyle>(annotation?.style ?? defaultStyle);
+  // The note field, open on demand and pre-filled from the highlight's own
+  // note: `null` means closed, a string (even empty) means open. Escape
+  // rewinds, so the blur that closing triggers must not commit what it just
+  // threw away.
+  const [draft, setDraft] = useState<string | null>(null);
+  const rewound = useRef(false);
+  const field = useRef<HTMLTextAreaElement>(null);
+  const noting = draft !== null;
   const copiedTimer = useRef<number | null>(null);
   useEffect(
     () => () => {
@@ -95,6 +116,25 @@ export function SelectionToolbar({
     },
     [],
   );
+  // Focus the field as it appears — the reader asked for it by clicking. Not
+  // via `autoFocus`: the a11y rule bans it for the page-load case it cannot
+  // tell this apart from.
+  useEffect(() => {
+    if (noting) field.current?.focus();
+  }, [noting]);
+
+  /**
+   * The one commit path: focus leaving the panel, its close button and
+   * ⌘/Ctrl+Enter all land here. Esc deliberately does not — it closes
+   * through `rewound` above. An unchanged draft costs no write, which is also
+   * what makes clearing an absent note a no-op instead of a request.
+   */
+  const commitNote = () => {
+    if (draft === null) return;
+    const next = draft.trim();
+    setDraft(null);
+    if (next !== (annotation?.note ?? "").trim()) onNote(next === "" ? null : next);
+  };
 
   const apply = (nextColor: string, nextStyle: AnnotationStyle) => {
     if (annotation) onRestyle(nextColor, nextStyle);
@@ -109,10 +149,17 @@ export function SelectionToolbar({
   };
 
   // Clamp: keep the panel over the page even near the edges, and flip below
-  // the selection when there is no room above.
-  const left = Math.min(Math.max(x, EDGE + HALF), window.innerWidth - EDGE - HALF);
-  const above = y >= HEIGHT + EDGE + 8;
-  const top = above ? y - HEIGHT - 8 : y + 24;
+  // the selection when there is no room above. The note row makes the panel
+  // taller, so the flip is measured against the height it currently has; on a
+  // window too narrow for the panel the two horizontal bounds cross and the
+  // left edge wins, which is the best a fixed-size panel can do.
+  const height = noting ? NOTE_HEIGHT : HEIGHT;
+  const left = Math.min(
+    Math.max(x, EDGE + HALF),
+    Math.max(window.innerWidth - EDGE - HALF, EDGE + HALF),
+  );
+  const above = y >= height + EDGE + 8;
+  const top = above ? y - height - 8 : y + 24;
 
   const iconBtn =
     "text-text-1 hover:text-accent hover:bg-(--glass-btn) flex h-9 w-9 items-center justify-center rounded-xl transition-colors";
@@ -124,6 +171,19 @@ export function SelectionToolbar({
       // rendering paths agree on.
       className="glass-solid shadow-panel fixed z-40 flex flex-col gap-1 rounded-2xl p-1.5"
       style={{ left, top, width: HALF * 2 }}
+      // One blur handler for the whole panel, because only the panel knows
+      // whether focus left it: stepping between the toolbar's own controls
+      // keeps the draft, and an Escape that closed the field itself must not
+      // commit what it just rewound.
+      onBlur={(event) => {
+        if (event.currentTarget.contains(event.relatedTarget)) return;
+        if (rewound.current) {
+          rewound.current = false;
+          setDraft(null);
+          return;
+        }
+        commitNote();
+      }}
       initial={reduce ? false : { opacity: 0, scale: 0.92, y: above ? 6 : -6 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={reduce ? undefined : { opacity: 0, scale: 0.95, y: 4 }}
@@ -174,6 +234,21 @@ export function SelectionToolbar({
         <button type="button" aria-label="问 AI" className={iconBtn} onClick={onAsk}>
           <Sparkle size={16} />
         </button>
+        <button
+          type="button"
+          aria-label="记笔记"
+          aria-expanded={noting}
+          className={cn(iconBtn, noting && "text-accent bg-(--glass-btn)")}
+          onClick={() => {
+            // Open on the highlight's own note. Closing re-enters here only
+            // after the blur has already committed, which `commitNote` treats
+            // as a no-op rather than a second write.
+            if (noting) setDraft(null);
+            else setDraft(annotation?.note ?? "");
+          }}
+        >
+          <NotePencil size={16} />
+        </button>
         {annotation && (
           <button
             type="button"
@@ -188,7 +263,13 @@ export function SelectionToolbar({
           type="button"
           aria-label="关闭"
           className={cn(iconBtn, "text-text-3 h-7 w-7")}
-          onClick={onClose}
+          onClick={() => {
+            // Closing the panel is the reader saying "done", not "discard":
+            // a note in the field is written on the way out. Escape is the
+            // one way to leave without it.
+            commitNote();
+            onClose();
+          }}
         >
           <X size={12} />
         </button>
@@ -245,6 +326,32 @@ export function SelectionToolbar({
           ))}
         </div>
       </div>
+
+      {/* The note row. Its own line under the ink row, so writing about the
+          passage never covers the controls that drew the highlight under it. */}
+      {draft !== null && (
+        <textarea
+          ref={field}
+          aria-label="笔记"
+          rows={2}
+          value={draft}
+          placeholder="写下你的想法"
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              // Closes the field, keeps the toolbar: the reader is one step
+              // back, not out — hence the event never reaches the page's own
+              // Escape handling.
+              event.stopPropagation();
+              rewound.current = true;
+              event.currentTarget.blur();
+            } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.currentTarget.blur();
+            }
+          }}
+          className="border-hairline text-text-1 placeholder:text-text-3 focus-visible:border-accent w-full resize-none rounded-lg border bg-(--glass-btn) px-2.5 py-2 text-[12.5px] leading-relaxed transition-colors focus-visible:outline-none"
+        />
+      )}
     </motion.div>
   );
 }

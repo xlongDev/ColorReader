@@ -1,4 +1,5 @@
-//! `annotation.*` commands: create, list and delete highlights.
+//! `annotation.*` commands: create, restyle, anchor, note, list and delete
+//! highlights.
 
 use tauri::State;
 
@@ -58,6 +59,17 @@ pub fn annotation_anchor(
     cfi: String,
 ) -> AppResult<Annotation> {
     state.library.with(|conn| annotations::anchor(conn, &id, &cfi))
+}
+
+/// `annotation.note` — writes the reader's own note on a highlight, or clears
+/// it when `note` is absent or blank.
+#[tauri::command]
+pub fn annotation_note(
+    state: State<'_, AppState>,
+    id: String,
+    note: Option<String>,
+) -> AppResult<Annotation> {
+    state.library.with(|conn| annotations::set_note(conn, &id, note.as_deref()))
 }
 
 /// `annotation.list` — every highlight for a book, in reading order.

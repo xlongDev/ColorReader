@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { save } from "@tauri-apps/plugin-dialog";
 import { Lock, Package } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput, GlassSwitch } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
+import { useSavePath } from "@/hooks/useSavePath";
+import { filename } from "@/lib/filename";
 import type { BookSummary } from "@/types/ipc";
 
 interface ExportDialogProps {
@@ -26,23 +27,23 @@ interface ExportDialogProps {
 export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: ExportDialogProps) {
   const [encrypted, setEncrypted] = useState(false);
   const [password, setPassword] = useState("");
+  const { choose: choosePath, error: panelError } = useSavePath();
 
   if (!book) return null;
   const extension = encrypted ? "ctzx" : "ctz";
   const ready = !encrypted || password.length > 0;
 
+  /** The panel's own failure outranks the write's: it happens first. */
+  const message = error ?? panelError;
+
   const choose = async () => {
-    try {
-      const path = await save({
-        title: "导出书档",
-        defaultPath: `${book.title}.${extension}`,
-        filters: [{ name: "书档", extensions: [extension] }],
-      });
-      if (path === null) return;
-      onConfirm({ book, path, password: encrypted ? password : undefined });
-    } catch {
-      // No native dialog outside the shell; nothing to export to.
-    }
+    const path = await choosePath({
+      title: "导出书档",
+      defaultPath: `${filename(book.title, "书档")}.${extension}`,
+      filters: [{ name: "书档", extensions: [extension] }],
+    });
+    if (path === null) return;
+    onConfirm({ book, path, password: encrypted ? password : undefined });
   };
 
   return (
@@ -84,7 +85,7 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
           </div>
         )}
 
-        {error && <p className="text-danger text-xs">{error}</p>}
+        {message && <p className="text-danger text-xs">{message}</p>}
       </div>
 
       <div className="mt-5 flex justify-end gap-2">

@@ -85,6 +85,10 @@ pub struct PackedAnnotation {
     pub color: Option<String>,
     #[serde(default)]
     pub style: Option<String>,
+    /// The reader's own note on this highlight. Carried with the pack because
+    /// it is the one thing in a reading state that the book cannot regenerate.
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 /// A pack's contents, pulled out of the archive.
@@ -99,7 +103,7 @@ pub struct Unpacked {
 
 /// `true` when `path` names a book pack rather than a raw book.
 pub fn is_pack(path: &Path) -> bool {
-    has_extension(path, &PACK_EXTENSIONS)
+    super::has_extension(path, &PACK_EXTENSIONS)
 }
 
 /// Writes one book to `dest`.
@@ -112,7 +116,7 @@ pub fn export(
     dest: &Path,
     password: Option<&str>,
 ) -> AppResult<()> {
-    let encrypted = has_extension(dest, &[ENCRYPTED_EXT]);
+    let encrypted = super::has_extension(dest, &[ENCRYPTED_EXT]);
     if encrypted && password.is_none() {
         return Err(AppError::InvalidArgument("加密书档需要设置密码".into()));
     }
@@ -135,6 +139,7 @@ pub fn export(
                 text: annotation.text,
                 color: annotation.color,
                 style: annotation.style,
+                note: annotation.note,
             })
             .collect();
         Ok(Reading {
@@ -157,7 +162,7 @@ pub fn export(
 /// Reads a pack, decrypting it first when the extension says it is encrypted.
 pub fn unpack(path: &Path, password: Option<&str>) -> AppResult<Unpacked> {
     let raw = std::fs::read(path)?;
-    let archive = if has_extension(path, &[ENCRYPTED_EXT]) {
+    let archive = if super::has_extension(path, &[ENCRYPTED_EXT]) {
         let password = password
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::InvalidArgument("导入加密书档需要提供密码".into()))?;
@@ -188,7 +193,7 @@ pub fn apply_reading(tx: &Transaction<'_>, book_id: &str, reading: &Reading) -> 
 
     for packed in &reading.annotations {
         if !has_highlight(tx, book_id, packed)? {
-            annotations::create(
+            let created = annotations::create(
                 tx,
                 book_id,
                 packed.chapter_idx,
@@ -199,6 +204,11 @@ pub fn apply_reading(tx: &Transaction<'_>, book_id: &str, reading: &Reading) -> 
                 packed.color.as_deref(),
                 packed.style.as_deref(),
             )?;
+            // `create` takes no note, so the pack's note goes through the one
+            // writer that owns them — after the row exists to hang it on.
+            if let Some(note) = packed.note.as_deref() {
+                annotations::set_note(tx, &created.id, Some(note))?;
+            }
         }
     }
     Ok(())
@@ -257,12 +267,6 @@ fn read(archive: &[u8]) -> AppResult<Unpacked> {
     };
 
     Ok(Unpacked { source, source_ext, reading })
-}
-
-fn has_extension(path: &Path, candidates: &[&str]) -> bool {
-    path.extension()
-        .and_then(|ext| ext.to_str())
-        .is_some_and(|ext| candidates.iter().any(|candidate| candidate.eq_ignore_ascii_case(ext)))
 }
 
 /// Whether this highlight is already on the shelf, so a re-import is a no-op.
@@ -445,8 +449,8 @@ mod tests {
         }
     }
 
-    /// A book on the shelf with progress, a favourite flag, one highlight and
-    /// one label.
+    /// A book on the shelf with progress, a favourite flag, one highlight
+    /// (carrying a note) and one label.
     fn seed_book(harness: &Harness) -> String {
         let epub = fixture::write_epub(
             &harness.dir,
@@ -462,7 +466,8 @@ mod tests {
             .with(|conn| {
                 repository::set_progress(conn, &id, 0.25, None)?;
                 repository::set_favorite(conn, &id, true)?;
-                annotations::create(conn, &id, 0, 1, 3, "你好", None, None, None)?;
+                let highlight = annotations::create(conn, &id, 0, 1, 3, "你好", None, None, None)?;
+                annotations::set_note(conn, &highlight.id, Some("第三章的伏笔"))?;
                 Ok(())
             })
             .expect("seed reading state");
@@ -510,6 +515,7 @@ mod tests {
         assert!(reading.favorite);
         assert_eq!(reading.annotations.len(), 1);
         assert_eq!(reading.annotations[0].text, "你好");
+        assert_eq!(reading.annotations[0].note.as_deref(), Some("第三章的伏笔"), "笔记要随档走");
         assert_eq!(reading.tags, vec!["科幻".to_string()]);
     }
 
@@ -533,6 +539,7 @@ mod tests {
             target.library.with(|conn| annotations::list(conn, &shelf[0].id)).expect("list");
         assert_eq!(restored.len(), 1);
         assert_eq!(restored[0].text, "你好");
+        assert_eq!(restored[0].note.as_deref(), Some("第三章的伏笔"), "导入要把笔记落到行上");
     }
 
     #[test]

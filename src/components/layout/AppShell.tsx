@@ -17,6 +17,7 @@ import { useSettings } from "@/stores/settings";
 import { useReaderSettings } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
 import { useResolvedTheme } from "@/hooks/useTheme";
+import { useDeepLink } from "@/hooks/useDeepLink";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
 
@@ -42,6 +43,9 @@ function sidebarBody(collapsed: boolean) {
 export function AppShell() {
   useHotkeys();
   useNavigationBridge();
+  // Lives here rather than on the reader route: a link opens a book from
+  // wherever the reader is, and /reader is not where it arrives.
+  useDeepLink();
   const collapsed = useSettings((s) => s.sidebarCollapsed);
   const sidebarHidden = useSettings((s) => s.sidebarHidden);
   const showSidebar = useSettings((s) => s.setSidebarHidden);

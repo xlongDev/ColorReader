@@ -146,6 +146,8 @@ export interface Annotation {
   color: string | null;
   /** Paint style; `null` reads as `"highlight"`. */
   style: AnnotationStyle | null;
+  /** The reader's own words on this highlight; `null` = never written. */
+  note: string | null;
   createdAt: number;
 }
 

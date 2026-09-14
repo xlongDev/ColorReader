@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+	Merged into the generated Info.plist at bundle time (the Tauri CLI adds the
+	keys below to the ones it writes itself).
+
+	This is the macOS half of the `colorreader://` deep link: LaunchServices only
+	routes a scheme to an app that declares it here, and unlike Windows and Linux
+	there is no way to register one at runtime. The scheme is deliberately the
+	one the app's own resource protocol already answers to — different host,
+	different job (`colorreader://localhost/cover/<id>` is streamed by
+	`resource.rs` and never leaves the webview).
+
+	Consequence worth knowing: the scheme exists for the *bundled, installed*
+	app, so a `tauri dev` window never receives a link. The other half is
+	`plugins.deep-link` in tauri.conf.json, which is what the plugin reads to
+	know the scheme exists.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>dev.xlong.colorreader</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>colorreader</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

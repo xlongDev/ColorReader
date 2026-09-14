@@ -97,3 +97,42 @@ export function useAnchorAnnotation(bookId: string | null) {
     },
   });
 }
+
+/**
+ * Writes — or clears — the reader's own note on a highlight. Patched into the
+ * cache rather than invalidated, for the same reason anchoring is: it happens
+ * while the reader is looking at the page, and a refetch would repaint every
+ * highlight on it.
+ */
+export function useSetAnnotationNote(bookId: string | null) {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, note }: { id: string; note: string | null }) => {
+      if (!bookId || !isDesktopRuntime) return Promise.resolve<Annotation | null>(null);
+      return ipc.annotationNote(id, note);
+    },
+    onSuccess: (updated) => {
+      if (!bookId || !updated) return;
+      queryClient.setQueryData<Annotation[]>(annotationsKey(bookId), (old = []) =>
+        old.map((annotation) => (annotation.id === updated.id ? updated : annotation)),
+      );
+    },
+  });
+}
+
+/**
+ * Writes one book's highlights and notes out as a file the reader keeps.
+ *
+ * It lives here rather than with the shelf's own export because it exports
+ * *annotations*: the reader reaches it from the annotation list, and pulling
+ * the library module in for one mutation would drag the shelf's cover-rendering
+ * import along with it.
+ */
+export function useExportNotes() {
+  return useMutation({
+    mutationFn: ({ id, path }: { id: string; path: string }) => {
+      if (!isDesktopRuntime) return Promise.resolve();
+      return ipc.notesExport(id, path);
+    },
+  });
+}

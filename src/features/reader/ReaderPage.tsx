@@ -47,6 +47,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { Markdown } from "@/components/common/Markdown";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { GraphPanel } from "@/features/graph/GraphPanel";
+import { AnnotationNote } from "@/features/reader/AnnotationNote";
 import { GuidePanel } from "@/features/reader/GuidePanel";
 import {
   globalProgress,
@@ -92,6 +93,8 @@ import {
   useAnchorAnnotation,
   useCreateAnnotation,
   useDeleteAnnotation,
+  useExportNotes,
+  useSetAnnotationNote,
   useUpdateAnnotation,
 } from "@/hooks/useAnnotations";
 import { useBookmarks, useCreateBookmark, useDeleteBookmark } from "@/hooks/useBookmarks";
@@ -143,6 +146,13 @@ const PdfScrollView = lazy(() =>
 /** The original-layout renderer; fetched for the two container formats it
  *  serves — Kindle (KF6/7/8) and EPUB (reflowable and fixed-layout). */
 const FoliateBookView = lazy(() => import("@/features/reader/FoliateBookView"));
+/** Notes export reaches for the native save dialog; kept out of the reader's
+ *  own chunk so the reader still loads without it. */
+const ExportNotesDialog = lazy(() =>
+  import("@/features/reader/ExportNotesDialog").then((module) => ({
+    default: module.ExportNotesDialog,
+  })),
+);
 
 /** How long to wait after scrolling stops before persisting the position. */
 const SAVE_DELAY_MS = 600;
@@ -390,6 +400,12 @@ interface ReaderViewProps {
   initialQuery: string;
   /** Character offset of a search hit, scrolled into view once rendered. */
   initialOffset: number | null;
+  /**
+   * A highlight named by a `colorreader://` link the reader followed. Wins
+   * over the saved position: following a link means "show me this", not
+   * "carry on where I left off".
+   */
+  initialAnnotation: string | null;
   onBack: () => void;
 }
 
@@ -410,6 +426,7 @@ function ReaderView({
   initialChapter,
   initialQuery,
   initialOffset,
+  initialAnnotation,
   onBack,
 }: ReaderViewProps) {
   // Destructure `mutate`: the mutation result object gets a new identity on
@@ -448,9 +465,11 @@ function ReaderView({
   const deleteAnnotation = useDeleteAnnotation(bookId);
   const updateAnnotation = useUpdateAnnotation(bookId);
   const anchorAnnotation = useAnchorAnnotation(bookId);
+  const setAnnotationNote = useSetAnnotationNote(bookId);
   const bookmarksQuery = useBookmarks(bookId);
   const createBookmark = useCreateBookmark(bookId);
   const deleteBookmark = useDeleteBookmark(bookId);
+  const exportNotes = useExportNotes();
   // Reading time: accumulates while this book is the open one and hands the
   // total to the backend once a minute.
   useReadingClock(bookId);
@@ -523,10 +542,25 @@ function ReaderView({
   // localStorage key it used to park in is read once as a fallback and
   // cleared the moment the database has the value.
   const cfiKey = `colorreader:foliate:${bookId}`;
-  const startCfi = useMemo(
-    () => (useFoliate ? (initialCfi ?? localStorage.getItem(cfiKey)) : null),
-    [initialCfi, useFoliate, cfiKey],
+  // The highlight a followed `colorreader://` link names. A link carries an id,
+  // not a position, so the row has to be in hand before anything can be
+  // anchored to it.
+  const deepLinkTarget = useMemo(
+    () =>
+      initialAnnotation === null
+        ? null
+        : ((annotations ?? []).find((annotation) => annotation.id === initialAnnotation) ?? null),
+    [annotations, initialAnnotation],
   );
+  // foliate opens at a CFI or not at all, and a link's CFI only exists once the
+  // annotation list has landed — the route holds the reader back until it has,
+  // so this is settled by the time the view mounts. A link whose highlight is
+  // gone, deleted, or never anchored falls through to the saved position,
+  // which is the right degradation: the book still opens.
+  const startCfi = useMemo(() => {
+    if (!useFoliate) return null;
+    return deepLinkTarget?.cfi ?? initialCfi ?? localStorage.getItem(cfiKey);
+  }, [deepLinkTarget, initialCfi, useFoliate, cfiKey]);
   const outlineQuery = usePdfOutline(bookId, isPdf);
   const outline = outlineQuery.data ?? EMPTY_OUTLINE;
   const [panel, setPanel] = useState<Panel>("none");
@@ -546,6 +580,8 @@ function ReaderView({
   } | null>(null);
   // Quoted text for the AI drawer; `null` means "use the whole chapter".
   const [aiContext, setAiContext] = useState<string | null>(null);
+  // Notes export: the format picker is open and waiting for a destination.
+  const [exportingNotes, setExportingNotes] = useState(false);
   // 词典 / 翻译 / 维基百科 popup over the selection; `null` = closed. The
   // toolbar closes when it opens — one floating surface at a time.
   const [lookup, setLookup] = useState<{
@@ -562,14 +598,22 @@ function ReaderView({
   const [tail, setTail] = useState<TailPad | null>(null);
   const tailRef = useRef<TailPad | null>(null);
 
+  // A followed link into a book that renders as prose opens on the chapter that
+  // quotes the passage. The chapter is all this path can promise: an
+  // annotation's character offset counts the text the importer stored, not the
+  // paragraphs the page actually paints, so scrolling by it would land nowhere
+  // in particular. foliate books do better — they open at the mark itself.
+  const linkedChapter = !useFoliate && deepLinkTarget ? deepLinkTarget.chapterIdx : null;
   // A chapter named in the URL wins over the saved position: arriving from a
   // search result means "open here", not "resume".
   const start = useMemo(
     () =>
-      initialChapter === null
-        ? locateChapter(chapters, initialProgress)
-        : { idx: Math.min(initialChapter, chapters.length - 1), fraction: 0 },
-    [chapters, initialProgress, initialChapter],
+      initialChapter !== null
+        ? { idx: Math.min(initialChapter, chapters.length - 1), fraction: 0 }
+        : linkedChapter !== null
+          ? { idx: Math.min(linkedChapter, chapters.length - 1), fraction: 0 }
+          : locateChapter(chapters, initialProgress),
+    [chapters, initialProgress, initialChapter, linkedChapter],
   );
 
   const [chapterIdx, setChapterIdx] = useState(start.idx);
@@ -1888,7 +1932,14 @@ function ReaderView({
     return () => el.removeEventListener("mouseup", onMouseUp);
   }, [chapterData]);
 
-  const createHighlight = (range: TextRange, color: string, style: AnnotationStyle) => {
+  const createHighlight = (
+    range: TextRange,
+    color: string,
+    style: AnnotationStyle,
+    /** Runs with the new row. The note path hangs its note on the id here,
+     *  inside the same round trip the highlight was created in. */
+    onCreated?: (created: Annotation) => void,
+  ) => {
     createAnnotation.mutate(
       {
         chapterIdx: pending?.chapterIdx ?? chapterIdx,
@@ -1900,12 +1951,13 @@ function ReaderView({
         ...(pending?.cfi !== undefined ? { cfi: pending.cfi } : {}),
       },
       {
-        onSuccess: () => {
+        onSuccess: (created) => {
           // The ink becomes the reader's default, so the next highlight
           // starts where this one left off.
           settings.update({ highlightColor: color, highlightStyle: style });
           window.getSelection()?.removeAllRanges();
           setPending(null);
+          if (created) onCreated?.(created);
         },
       },
     );
@@ -2565,6 +2617,33 @@ function ReaderView({
     ? ((annotations ?? []).find((annotation) => annotation.id === pending.annotationId) ?? null)
     : null;
 
+  /**
+   * The toolbar's note field. A note hangs off a highlight, so a bare
+   * selection gets one first — painted in the ink the toolbar is showing,
+   * which is also what the reader's next selection starts from.
+   *
+   * Clearing never creates anything: an empty field over an un-highlighted
+   * passage is a thought the reader changed their mind about, not a request
+   * for an invisible annotation.
+   */
+  const noteOnSelection = (note: string | null) => {
+    if (!pending) return;
+    if (pendingAnnotation) {
+      if (note !== pendingAnnotation.note) {
+        setAnnotationNote.mutate({ id: pendingAnnotation.id, note });
+      }
+      setPending(null);
+      return;
+    }
+    if (note === null) {
+      setPending(null);
+      return;
+    }
+    createHighlight(pending.range, settings.highlightColor, settings.highlightStyle, (created) =>
+      setAnnotationNote.mutate({ id: created.id, note }),
+    );
+  };
+
   return (
     <div className="flex h-full flex-col" style={readerVars}>
       {!fullscreen ? (
@@ -3042,6 +3121,7 @@ function ReaderView({
                   if (!pendingAnnotation) return;
                   restyleHighlight(pendingAnnotation.id, color, style);
                 },
+                onNote: noteOnSelection,
                 onDelete: () => {
                   if (!pendingAnnotation) return;
                   deleteAnnotation.mutate(pendingAnnotation.id);
@@ -3115,8 +3195,10 @@ function ReaderView({
             {panel === "annotations" && (
               <AnnotationList
                 annotations={annotations ?? []}
-                busy={deleteAnnotation.isPending}
+                busy={deleteAnnotation.isPending || setAnnotationNote.isPending}
                 onDelete={(id) => deleteAnnotation.mutate(id)}
+                onNote={(id, note) => setAnnotationNote.mutate({ id, note })}
+                onExport={() => setExportingNotes(true)}
                 onJump={
                   useFoliate
                     ? (annotation) => {
@@ -3188,6 +3270,31 @@ function ReaderView({
           />
         )}
       </AnimatePresence>
+
+      {/* Exporting happens over the book, not instead of it: the drawer stays
+          where it was, and closing the dialog puts the reader back on the list
+          they were reading from. */}
+      {exportingNotes && bookId && (
+        <Suspense fallback={null}>
+          <ExportNotesDialog
+            title={title}
+            highlights={(annotations ?? []).length}
+            notes={(annotations ?? []).filter((annotation) => annotation.note !== null).length}
+            busy={exportNotes.isPending}
+            error={exportNotes.error ? String(exportNotes.error) : null}
+            onCancel={() => {
+              setExportingNotes(false);
+              exportNotes.reset();
+            }}
+            onConfirm={(path) =>
+              exportNotes.mutate(
+                { id: bookId, path },
+                { onSuccess: () => setExportingNotes(false) },
+              )
+            }
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -3771,11 +3878,17 @@ function AnnotationList({
   annotations,
   busy,
   onDelete,
+  onNote,
+  onExport,
   onJump,
 }: {
   annotations: Annotation[];
   busy: boolean;
   onDelete: (id: string) => void;
+  /** Writes (or clears, with `null`) the reader's note on one highlight. */
+  onNote: (id: string, note: string | null) => void;
+  /** Opens the export dialog for this book's highlights and notes. */
+  onExport: () => void;
   /**
    * Makes a row navigate to its highlight. foliate books need it: their
    * highlights are anchored by CFI and the list cannot scroll a chapter that
@@ -3784,50 +3897,73 @@ function AnnotationList({
   onJump?: (annotation: Annotation) => void;
 }) {
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-      {annotations.length === 0 ? (
-        <p className="text-text-3 text-[13px] leading-relaxed">
-          选中正文即可添加标注，标注会按章节归类在这里。
-        </p>
-      ) : (
-        <ul className="space-y-3">
-          {annotations.map((annotation) => (
-            <li
-              key={annotation.id}
-              className="border-hairline border-b pb-3 last:border-0 last:pb-0"
-            >
-              <div className="flex items-start justify-between gap-2">
-                {/* foliate sections are the container's own, so the index this
-                    list groups by is a section, not an imported chapter. */}
-                <p className="text-text-3 text-xs">
-                  第 {annotation.chapterIdx + 1}
-                  {onJump ? " 节" : " 章"}
-                </p>
-                <button
-                  type="button"
-                  aria-label="删除标注"
-                  disabled={busy}
-                  onClick={() => onDelete(annotation.id)}
-                  className="text-text-3 hover:text-danger transition-colors disabled:opacity-50"
-                >
-                  <Trash size={14} />
-                </button>
-              </div>
-              {onJump ? (
-                <button
-                  type="button"
-                  onClick={() => onJump(annotation)}
-                  className="hover:bg-surface-1 -mx-1 mt-1 block w-full rounded-md px-1 py-0.5 text-left transition-colors"
-                >
-                  <p className="text-text-1 text-[13px] leading-relaxed">{annotation.text}</p>
-                </button>
-              ) : (
-                <p className="text-text-1 mt-1 text-[13px] leading-relaxed">{annotation.text}</p>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* The count and the way out of the app, on the list's own header: the
+          drawer's title bar is shared with every other panel. */}
+      <div className="border-hairline flex items-center justify-between gap-2 border-b px-4 py-2">
+        <p className="text-text-3 text-xs">{annotations.length} 条标注</p>
+        <button
+          type="button"
+          disabled={annotations.length === 0}
+          onClick={onExport}
+          className="text-text-3 hover:text-text-1 disabled:hover:text-text-3 inline-flex items-center gap-1 text-xs transition-colors disabled:opacity-40"
+        >
+          <DownloadSimple size={13} />
+          导出
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
+        {annotations.length === 0 ? (
+          <p className="text-text-3 text-[13px] leading-relaxed">
+            选中正文即可添加标注，标注会按章节归类在这里。
+          </p>
+        ) : (
+          <ul className="space-y-3">
+            {annotations.map((annotation) => (
+              <li
+                key={annotation.id}
+                className="border-hairline border-b pb-3 last:border-0 last:pb-0"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  {/* foliate sections are the container's own, so the index this
+                      list groups by is a section, not an imported chapter. */}
+                  <p className="text-text-3 text-xs">
+                    第 {annotation.chapterIdx + 1}
+                    {onJump ? " 节" : " 章"}
+                  </p>
+                  <button
+                    type="button"
+                    aria-label="删除标注"
+                    disabled={busy}
+                    onClick={() => onDelete(annotation.id)}
+                    className="text-text-3 hover:text-danger transition-colors disabled:opacity-50"
+                  >
+                    <Trash size={14} />
+                  </button>
+                </div>
+                {onJump ? (
+                  <button
+                    type="button"
+                    onClick={() => onJump(annotation)}
+                    className="hover:bg-surface-1 -mx-1 mt-1 block w-full rounded-md px-1 py-0.5 text-left transition-colors"
+                  >
+                    <p className="text-text-1 text-[13px] leading-relaxed">{annotation.text}</p>
+                  </button>
+                ) : (
+                  <p className="text-text-1 mt-1 text-[13px] leading-relaxed">{annotation.text}</p>
+                )}
+                <div className="mt-1.5">
+                  <AnnotationNote
+                    note={annotation.note}
+                    disabled={busy}
+                    onSave={(note) => onNote(annotation.id, note)}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </div>
   );
 }
@@ -3846,9 +3982,18 @@ export function ReaderPage() {
   const initialChapter = readOffset(searchParams.get("chapter"));
   const initialOffset = readOffset(searchParams.get("at"));
   const initialQuery = searchParams.get("q") ?? "";
+  // A `colorreader://` link lands here as a plain query parameter, so the deep
+  // link and a search result reach the reader the same way.
+  const initialAnnotation = searchParams.get("annotation");
 
   const book = useBook(bookId);
   const toc = useReaderToc(bookId);
+  // Only when a link named a highlight: the row carries the position, and the
+  // reader has to be arranged around it *before* it mounts. Resolving it later
+  // would mean opening the book in the wrong place and then jumping — a scroll
+  // the reader would see. `null` leaves the query idle, so an ordinary open
+  // pays for nothing.
+  const linkedAnnotations = useAnnotations(initialAnnotation === null ? null : bookId);
 
   const content = useMemo(() => {
     if (!bookId) {
@@ -3879,8 +4024,20 @@ export function ReaderPage() {
         />
       );
     }
+    if (initialAnnotation !== null && linkedAnnotations.isPending) {
+      return <p className="text-text-3 text-sm">正在定位这条标注…</p>;
+    }
     return null;
-  }, [bookId, book.isPending, book.isError, toc.isPending, toc.isError, navigate]);
+  }, [
+    bookId,
+    book.isPending,
+    book.isError,
+    toc.isPending,
+    toc.isError,
+    navigate,
+    initialAnnotation,
+    linkedAnnotations.isPending,
+  ]);
 
   if (content) {
     return <div className="flex h-full flex-col px-8 py-6">{content}</div>;
@@ -3920,6 +4077,7 @@ export function ReaderPage() {
       initialChapter={initialChapter}
       initialQuery={initialQuery}
       initialOffset={initialOffset}
+      initialAnnotation={initialAnnotation}
       onBack={() => navigate("/")}
     />
   );

@@ -29,6 +29,10 @@ pub struct Annotation {
     /// How the ink paints: "highlight" (translucent wash), "underline" or
     /// "squiggly"; `None` reads as "highlight".
     pub style: Option<String>,
+    /// The reader's own words about this highlight. `None` = no note, which is
+    /// the common case; blanks are folded to `None` on the way in, so a cleared
+    /// note reads exactly like one that was never written.
+    pub note: Option<String>,
     pub created_at: i64,
 }
 
@@ -80,6 +84,9 @@ pub fn create(
         cfi: cfi.map(str::to_string),
         color: color.map(str::to_string),
         style,
+        // Born without one: `set_note` is the only writer of notes, so this
+        // path takes no parameter for it and the column stays `NULL`.
+        note: None,
         created_at: super::now_seconds(),
     };
     conn.execute(
@@ -142,9 +149,25 @@ pub fn anchor(conn: &Connection, id: &str, cfi: &str) -> AppResult<Annotation> {
     read(conn, id)
 }
 
+/// Writes — or clears — the reader's own note on a highlight.
+///
+/// A third dedicated `UPDATE`, for the reason [`anchor`] is one plus a second
+/// that is specific to notes: `update` folds its arguments with `COALESCE`,
+/// which cannot express "set this back to nothing". A blank or absent note
+/// clears the column; anything else is trimmed and stored.
+pub fn set_note(conn: &Connection, id: &str, note: Option<&str>) -> AppResult<Annotation> {
+    let note = note.map(str::trim).filter(|value| !value.is_empty());
+    let changed =
+        conn.execute("UPDATE annotations SET note = ?2 WHERE id = ?1", params![id, note])?;
+    if changed == 0 {
+        return Err(AppError::NotFound(id.to_string()));
+    }
+    read(conn, id)
+}
+
 /// The annotation columns, in the order [`from_row`] reads them.
 const COLUMNS: &str = "id, book_id, chapter_idx, start_char, end_char, text, cfi, color, style, \
-                       created_at";
+                       note, created_at";
 
 fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
     Ok(Annotation {
@@ -157,7 +180,8 @@ fn from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
         cfi: row.get(6)?,
         color: row.get(7)?,
         style: row.get(8)?,
-        created_at: row.get(9)?,
+        note: row.get(9)?,
+        created_at: row.get(10)?,
     })
 }
 
@@ -290,6 +314,58 @@ mod tests {
         let made = create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
         assert!(matches!(anchor(&conn, &made.id, "  "), Err(AppError::InvalidArgument(_))));
         assert!(matches!(anchor(&conn, "nope", "epubcfi(/6/4)"), Err(AppError::NotFound(_))));
+    }
+
+    #[test]
+    fn a_note_is_written_trimmed_and_cleared() {
+        let conn = seed();
+        let made = create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
+        assert_eq!(made.note, None, "新高亮默认没有笔记");
+
+        let noted = set_note(&conn, &made.id, Some("  第 4 章讲到这里  ")).expect("note");
+        assert_eq!(noted.note.as_deref(), Some("第 4 章讲到这里"), "笔记要裁剪首尾空白");
+        assert_eq!(
+            list(&conn, "b").expect("list")[0].note.as_deref(),
+            Some("第 4 章讲到这里"),
+            "笔记要能读回来"
+        );
+
+        // Blank input clears rather than storing an empty string, so "has a
+        // note" stays one `IS NOT NULL` test.
+        let blanked = set_note(&conn, &made.id, Some("   \n  ")).expect("blank");
+        assert_eq!(blanked.note, None);
+        set_note(&conn, &made.id, Some("再来一条")).expect("note");
+        let cleared = set_note(&conn, &made.id, None).expect("clear");
+        assert_eq!(cleared.note, None, "传 None 也要能清空");
+    }
+
+    #[test]
+    fn writing_a_note_leaves_ink_and_anchor_alone() {
+        let conn = seed();
+        let made = create(&conn, "b", 0, 0, 2, "hi", None, None, None).expect("create");
+        let cfi = "epubcfi(/6/4!/4/2/2:3)";
+        anchor(&conn, &made.id, cfi).expect("anchor");
+        update(&conn, &made.id, Some("#7cd92c"), Some("underline")).expect("update");
+
+        let noted = set_note(&conn, &made.id, Some("记一笔")).expect("note");
+        assert_eq!(noted.cfi.as_deref(), Some(cfi), "写笔记不能抹掉锚点");
+        assert_eq!(noted.color.as_deref(), Some("#7cd92c"), "写笔记不能抹掉颜色");
+        assert_eq!(noted.style.as_deref(), Some("underline"), "写笔记不能抹掉样式");
+
+        // And the note survives the other two writers.
+        update(&conn, &made.id, Some("#ffd12e"), None).expect("update");
+        anchor(&conn, &made.id, "epubcfi(/6/6!/4/2/2:1)").expect("anchor");
+        assert_eq!(
+            read(&conn, &made.id).expect("read").note.as_deref(),
+            Some("记一笔"),
+            "改样式或写锚点都不能抹掉笔记"
+        );
+    }
+
+    #[test]
+    fn noting_an_unknown_id_is_not_found() {
+        let conn = seed();
+        assert!(matches!(set_note(&conn, "nope", Some("x")), Err(AppError::NotFound(_))));
     }
 
     #[test]

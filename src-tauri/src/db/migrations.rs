@@ -392,6 +392,18 @@ CREATE UNIQUE INDEX reading_sessions_day_book ON reading_sessions (day, book_id)
 CREATE INDEX reading_sessions_day ON reading_sessions (day DESC);
 "#,
     },
+    Migration {
+        version: 14,
+        name: "annotations_note",
+        // The reader's own words about a highlight. Nullable and `NULL` by
+        // default: most highlights never get one. The setter folds blank input
+        // to `NULL` rather than storing "", so "has a note" stays a single
+        // `IS NOT NULL` test and clearing one is indistinguishable from never
+        // having written it.
+        sql: r#"
+ALTER TABLE annotations ADD COLUMN note TEXT;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

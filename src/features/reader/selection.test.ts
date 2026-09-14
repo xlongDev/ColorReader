@@ -24,6 +24,7 @@ function annotation(chapterIdx: number, startChar: number, endChar: number): Ann
     cfi: null,
     color: null,
     style: null,
+    note: null,
     createdAt: 0,
   };
 }

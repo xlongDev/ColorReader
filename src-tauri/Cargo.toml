@@ -48,6 +48,7 @@ base64 = "0.23.1"
 tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"] }
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 tokio = { version = "1.53.1", features = ["time"] }
+tauri-plugin-deep-link = "2.4.10"
 
 [dev-dependencies]
 

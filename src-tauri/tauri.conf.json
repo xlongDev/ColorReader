@@ -30,6 +30,13 @@
     },
     "withGlobalTauri": false
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["colorreader"]
+      }
+    }
+  },
   "bundle": {
     "active": true,
     "targets": ["dmg", "app", "nsis", "deb", "appimage"],

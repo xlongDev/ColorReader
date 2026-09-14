@@ -36,6 +36,12 @@ pub fn run() -> tauri::Result<()> {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        // Answers `colorreader://book/<id>?annotation=<id>` — the links the
+        // notes export writes. macOS delivers them through `RunEvent::Opened`,
+        // which the plugin turns into a `deep-link://new-url` event; the shell
+        // is already running by then (or was launched for it) and follows it
+        // from `AppShell`.
+        .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             commands::system::system_info,
             commands::book::book_list,
@@ -56,9 +62,11 @@ pub fn run() -> tauri::Result<()> {
             commands::annotation::annotation_create,
             commands::annotation::annotation_update,
             commands::annotation::annotation_anchor,
+            commands::annotation::annotation_note,
             commands::annotation::annotation_list,
             commands::annotation::annotation_delete,
             commands::clippings::clippings_import,
+            commands::export::notes_export,
             commands::bookmark::bookmark_create,
             commands::bookmark::bookmark_list,
             commands::bookmark::bookmark_delete,

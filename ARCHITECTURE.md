@@ -37,16 +37,16 @@
 
 单 crate（`src-tauri`），按职责分模块：
 
-| 模块          | 职责                                                                                                                                                                                                                                                                 |
-| ------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `commands/`   | Tauri 命令，按域分文件（`system.rs` / `book.rs` / `reader.rs` / `annotation.rs` / `search.rs` / `ai.rs` / `rag.rs` / `graph.rs` / `source.rs` / `sync.rs`），在 `lib.rs` 统一注册                                                                                    |
-| `db/`         | SQLite 连接（WAL、单写者 `Arc<Mutex<Connection>>`）+ `user_version` 迁移运行器                                                                                                                                                                                       |
-| `ai/`         | AI 配置仓储（`settings` KV 表）+ OpenAI 兼容流式聊天客户端（SSE 解析为纯函数）+ embedding 客户端（批量、归一化、f32 序列化）+ rerank 客户端（Cohere 兼容）                                                                                                           |
-| `library/`    | 导入管线（去重、文件落盘、元数据提取）+ 书籍仓储（查询 / 统计）+ 章节仓储 + 标注仓储 + 全文检索 + 书档（导入 / 导出 / 加密）+ RAG（组块 / 索引 / 暴力检索）+ 知识图谱（LLM 抽取 / 存储 / 邻域查询）+ 书源（JSON 规则 / 搜索 / 下载）+ WebDAV 同步（进度 / LWW 合并） |
-| `document/`   | 七种格式的元数据、封面与章节正文提取：`epub`（OPF / spine）、`pdf`（逐页文本）、`mobi`（PDB 容器 + PalmDOC / HUFF-CDIC + EXTH）、`fb2`（XML，含 `.fb2.zip`）、`cbz`（图片页）、`plain`（TXT / Markdown），`html.rs` 为前三者共用的 HTML → 段落解析器                 |
-| `resource.rs` | `colorreader://` 自定义协议：封面图片按 id 从 Rust 流式返回                                                                                                                                                                                                          |
-| `error.rs`    | `AppError`：thiserror 定义，实现 `Serialize`，统一转成 `{ message }` 交给前端                                                                                                                                                                                        |
-| `state.rs`    | `AppState`（启动时间、数据目录布局、书库句柄），通过 `app.manage` 注入                                                                                                                                                                                               |
+| 模块          | 职责                                                                                                                                                                                                                                                                                             |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `commands/`   | Tauri 命令，按域分文件（`system.rs` / `book.rs` / `reader.rs` / `annotation.rs` / `search.rs` / `export.rs` / `ai.rs` / `rag.rs` / `graph.rs` / `source.rs` / `sync.rs`），在 `lib.rs` 统一注册                                                                                                  |
+| `db/`         | SQLite 连接（WAL、单写者 `Arc<Mutex<Connection>>`）+ `user_version` 迁移运行器                                                                                                                                                                                                                   |
+| `ai/`         | AI 配置仓储（`settings` KV 表）+ OpenAI 兼容流式聊天客户端（SSE 解析为纯函数）+ embedding 客户端（批量、归一化、f32 序列化）+ rerank 客户端（Cohere 兼容）                                                                                                                                       |
+| `library/`    | 导入管线（去重、文件落盘、元数据提取）+ 书籍仓储（查询 / 统计）+ 章节仓储 + 标注仓储 + 全文检索 + 书档（导入 / 导出 / 加密）+ 笔记导出（Markdown / CSV）+ RAG（组块 / 索引 / 暴力检索）+ 知识图谱（LLM 抽取 / 存储 / 邻域查询）+ 书源（JSON 规则 / 搜索 / 下载）+ WebDAV 同步（进度 / LWW 合并） |
+| `document/`   | 七种格式的元数据、封面与章节正文提取：`epub`（OPF / spine）、`pdf`（逐页文本）、`mobi`（PDB 容器 + PalmDOC / HUFF-CDIC + EXTH）、`fb2`（XML，含 `.fb2.zip`）、`cbz`（图片页）、`plain`（TXT / Markdown），`html.rs` 为前三者共用的 HTML → 段落解析器                                             |
+| `resource.rs` | `colorreader://` 自定义协议：封面图片按 id 从 Rust 流式返回                                                                                                                                                                                                                                      |
+| `error.rs`    | `AppError`：thiserror 定义，实现 `Serialize`，统一转成 `{ message }` 交给前端                                                                                                                                                                                                                    |
+| `state.rs`    | `AppState`（启动时间、数据目录布局、书库句柄），通过 `app.manage` 注入                                                                                                                                                                                                                           |
 
 ### 数据层
 
@@ -110,6 +110,28 @@ chapters_fts（FTS5 外部内容表，内容指向 chapters，由触发器维护
 导入路径：`import_files` 按扩展名分流，书档先解包、把原文件**暂存进书库自己的目录**（与落盘同盘，避免跨卷复制）再走既有管线，最后套用 `reading.json`；暂存文件无论成败都在返回前删除。标注按 `(chapter_idx, start, end)` 去重，重复导入同一份书档是幂等的。
 
 `password` 作为 `book_import` 的**参数**而非回调里的提示传入：整批文件在一条 `spawn_blocking` 任务上跑完，中途弹窗会打断批处理。前端只在批次里出现 `.ctzx` 时先要一次密码，明文文件照常导入。
+
+### 笔记导出
+
+标注与笔记可以导出成两种**不依赖本应用**的文件，格式由目标扩展名决定（`notes.export`，与书档同一套契约）：`.md` 按章节分组、引用原文、笔记跟在引用下面；`.csv` 一行一条，带原文 / 笔记 / 颜色 / 样式。目标扩展名不认识就直接拒绝，不猜。
+
+它和书档回答的是两个问题：书档为了把**阅读状态还原**回去（装原文件与 `reading.json`），导出文件为了**在应用之外被读**（纯文本，没有 schema，不需要本应用打开）。
+
+两个刻意的取舍：**章节只写序号**，不查 `chapters` 表取标题——foliate 书籍的标注按 section 编号，用这个序号去取标题会整体错位，而序号与阅读器标注面板显示的完全一致；**CSV 带 UTF-8 BOM**，否则 Excel 按系统代码页猜编码，中文直接变乱码。颜色与样式为空的条目留空而不填默认值：「从没选过」和「选了黄色」是两件事，文件不该替用户编一个。
+
+每条标注还带一个点回本应用的深链，见下节。
+
+### 深链
+
+导出文件里每条标注都带一个 `colorreader://book/<bookId>?annotation=<annotationId>`：点击即回到应用并定位到那条高亮。生产端是 `library/export.rs::link`，消费端是 `AppShell` 挂的 `useDeepLink`，中间由 `tauri-plugin-deep-link` 把系统递来的 URL 变成事件。
+
+**链接只带身份，不带位置**，这是被证据逼出来的设计。本应用有三种互不通约的位置模型——foliate 用 CFI、纯文本用「章节 + 字符偏移」、PDF 用页码——写进 URL 的无论哪一种，用另外两种打开就是错的。而标注行自己知道它属于哪一种，所以 URL 只写 id，位置由应用查出来。同一个链接因此对三种通路都成立，将来加第四种也不用改。
+
+解析分两层：`src/lib/deeplink.ts::parseDeepLink` 是纯函数，对系统递来的任何字符串都不信，解析不了就丢弃；`useDeepLink` 把它变成 `/reader?book=…&annotation=…`，与搜索结果走同一套查询参数，不另开一条进入阅读器的通路。阅读器侧有一条硬约束：**初始位置必须在 render 期确定，不能靠 effect 回填**（`ReaderView` 的既有判据），所以路由层在链接指名了标注时先等标注列表加载完再挂载阅读视图——foliate 书把该标注的 CFI 喂给 `startCfi`，视图 `init()` 时就落在高亮上（改成挂载后再滚会是一次看得见的跳），纯文本书则把章节喂给初始 `chapterIdx`。链接指向的标注已删除或尚未铸锚时退化为「打开这本书」，而不是打不开。
+
+scheme 与资源协议同名（`resource.rs` 的 `colorreader`），靠 host 区分：`book` 是链接，`localhost` 是资源。两者职责不重叠——资源 URL 只在 webview 内部被 `src` 消费，从不外流。
+
+**macOS 只能在打包并安装后实测**：`CFBundleURLTypes` 由 `src-tauri/Info.plist` 声明、打包时被 CLI 合并，而运行时注册在 macOS 上被明确标记为不支持（插件源码里 `register` 对该平台直接返回 `UnsupportedPlatform`）。所以 `tauri dev` 的窗口永远收不到链接。Windows / Linux 走「新进程 + argv」，要与已有实例合流还需 single-instance 插件转发，本仓库未接。
 
 ### AI 助手
 
@@ -394,7 +416,8 @@ Liquid Glass 的代价是 `backdrop-filter`：**嵌套的玻璃会把模糊一�
 
 ## 6. 安全
 
-- **最小权限**：`capabilities/default.json` 只授予 `core:default`、`core:app`、`core:event`、`core:window` 与 `core:window:allow-start-dragging`。新增权限必须对应一个真实存在的命令，并在 PR 中说明理由。
+- **最小权限，且权限是逐命令的**：`capabilities/default.json` 目前授予 `core:*`（app / event / window）+ `core:window:allow-start-dragging` / `is-fullscreen` / `set-fullscreen` / `set-theme`、`dialog:allow-open`、`dialog:allow-save`、`deep-link:default`、`opener:allow-open-url`（白名单只放行本仓库与维基百科）。**每个条目必须对应一个真实存在的调用**，并说明理由。
+  🔴 两个坑：其一，`dialog:allow-open` **不放行** `save`——该插件没有 `default` 权限集，只能逐条列；被 ACL 拒绝时前端拿到的是 **reject**，于是空 `catch {}` 会让它退化成「按钮没反应」，源码里查不出（`save` 的两个调用点因此共用 `src/hooks/useSavePath.ts` 收口这条接缝）。其二，capability 是**编进 Rust 二进制**的，改完必须重启 dev / 重新打包。
 - **不给渲染层 `fs *` / `shell *` / `process *`。**
 - **不暴露 `file://`**：资源走 `colorreader://resource/{id}`，由 Rust 校验 id → 路径后流式返回（Phase 2 落地）。
 - CSP 已收紧为 `default-src 'self'`，样式允许内联（Tailwind 运行时需要）。

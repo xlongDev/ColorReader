@@ -120,6 +120,16 @@ export const ipc = {
     return invoke<void>("pack_export", { id, path, password: password ?? null });
   },
 
+  /**
+   * Writes one book's highlights and notes to a readable file. The destination
+   * extension picks the format: `.md` for prose, `.csv` for a table. A book
+   * pack carries the same highlights, but it is for *restoring* reading state;
+   * this file is for reading outside the app.
+   */
+  notesExport(id: string, path: string): Promise<void> {
+    return invoke<void>("notes_export", { id, path });
+  },
+
   bookDelete(id: string): Promise<void> {
     return invoke<void>("book_delete", { id });
   },
@@ -188,6 +198,11 @@ export const ipc = {
    * was written without. Only the reader, with the book loaded, can mint one. */
   annotationAnchor(id: string, cfi: string): Promise<Annotation> {
     return invoke<Annotation>("annotation_anchor", { id, cfi });
+  },
+
+  /** Writes the reader's note on a highlight; `null` (or blanks) clears it. */
+  annotationNote(id: string, note: string | null): Promise<Annotation> {
+    return invoke<Annotation>("annotation_note", { id, note });
   },
 
   annotationList(bookId: string): Promise<Annotation[]> {
