@@ -153,7 +153,15 @@ mod tests {
 
     #[test]
     fn an_empty_term_is_never_a_lookup() {
-        assert_eq!(define("   "), Lookup::Missing);
+        // The rule belongs to the macOS implementation, which never asks the
+        // framework about a blank term. Everywhere else there is no
+        // implementation to ask, and every term — blank included — is
+        // `Unavailable`, which is the honest answer there. Asserting only
+        // `Missing` made this test fail on Linux and Windows, where `define`
+        // is a stub: a property of one platform written as a universal one.
+        let expected =
+            if cfg!(target_os = "macos") { Lookup::Missing } else { Lookup::Unavailable };
+        assert_eq!(define("   "), expected);
     }
 
     #[test]
