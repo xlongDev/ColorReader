@@ -49,6 +49,13 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"]
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
 tokio = { version = "1.53.1", features = ["time"] }
 tauri-plugin-deep-link = "2.4.10"
+# Desktop only, and the crate says so itself (`#![cfg(not(android | ios))]`);
+# `run()` gates the registration the same way. Windows and Linux deliver a
+# `colorreader://` link to a *new* process, so this is what forwards that
+# launch's argv to the instance already running — the `deep-link` feature is
+# what lets the handoff reuse the deep-link plugin's event and its single
+# argument check rather than a private payload.
+tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
 
 [dev-dependencies]
 

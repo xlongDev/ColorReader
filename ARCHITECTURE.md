@@ -131,7 +131,9 @@ chapters_fts（FTS5 外部内容表，内容指向 chapters，由触发器维护
 
 scheme 与资源协议同名（`resource.rs` 的 `colorreader`），靠 host 区分：`book` 是链接，`localhost` 是资源。两者职责不重叠——资源 URL 只在 webview 内部被 `src` 消费，从不外流。
 
-**macOS 只能在打包并安装后实测**：`CFBundleURLTypes` 由 `src-tauri/Info.plist` 声明、打包时被 CLI 合并，而运行时注册在 macOS 上被明确标记为不支持（插件源码里 `register` 对该平台直接返回 `UnsupportedPlatform`）。所以 `tauri dev` 的窗口永远收不到链接。Windows / Linux 走「新进程 + argv」，要与已有实例合流还需 single-instance 插件转发，本仓库未接。
+**scheme 的注册全发生在打包期**：macOS 的 `CFBundleURLTypes` 由打包器从 `plugins.deep-link.desktop.schemes` 生成，Windows 的 NSIS / MSI 安装器写 `Software\Classes\colorreader`，Linux 的 deb 与 AppImage 带一份 `MimeType=x-scheme-handler/colorreader` 的 `.desktop`——因此不需要运行时 `register_all()` 兜底（那只对裸跑 AppImage、绿色版 exe 这类旁路安装有意义）。代价是注册只存在于打包产物里：**`tauri dev` 的窗口永远收不到链接**，macOS 实测必须 `--bundles app` 并安装到 `/Applications`（该平台不支持运行时注册，插件的 `register` 直接返回 `UnsupportedPlatform`）。
+
+Windows / Linux 是另一套机制：系统不认识「已在运行的那个实例」，而是**再启动一个进程**，把 URL 当作唯一参数递过去。于是这一侧由 `tauri-plugin-single-instance` 承担合流，且**必须在所有插件之前注册**——「这个进程是否留下」是它在自己的 setup 里决定的：第二进程把 argv 交给先到的实例，然后退出。开启它的 `deep-link` feature 后，这次交接在进入回调之前就被转成与 macOS 同一个 `deep-link://new-url` 事件，所以 `useDeepLink` 不必区分来源；回调只剩一件事——把窗口调到前面，否则读者在浏览器里点了链接，应用却在后面。首启就带参的情况由 deep-link 插件自己处理（它 setup 时读一遍 `std::env::args`）。
 
 ### AI 助手
 

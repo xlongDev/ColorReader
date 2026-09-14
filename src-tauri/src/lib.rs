@@ -33,14 +33,42 @@ pub fn run() -> tauri::Result<()> {
     // The cover protocol is captured by the builder, but the library only opens
     // once setup has resolved the data directory; the registry bridges the two.
     let registry = resource::Registry::default();
-    let builder = tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Registered first, and that is not decoration: this plugin decides inside
+    // its own setup whether this process is the one that lives. Windows and
+    // Linux deliver a `colorreader://` link by starting the app *again* with
+    // the URL as its only argument, so the second launch must hand its argv to
+    // the instance already running and quit. The `deep-link` feature is what
+    // makes that handoff speak the plugin's own event, so `AppShell` follows a
+    // forwarded link and a native one through the same path. macOS never gets
+    // here on a link — it delivers the URL to the running app as an event
+    // instead of forking a process.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        // Worth a line at debug level: on the platforms this runs on, "the
+        // link did nothing" is otherwise indistinguishable from "the second
+        // launch never reached us", and `RUST_LOG=colorreader=debug` is how
+        // that gets separated on a real machine.
+        tracing::debug!(?argv, "another launch handed its arguments over");
+        // The link itself was dealt with above us. What is left is surfacing
+        // the window: the reader clicked the link in a browser that is now in
+        // front of us, and a reader that has to hunt for the window will not
+        // believe the link worked.
+        if let Some(window) = app.get_webview_window("main") {
+            let _ = window.unminimize();
+            let _ = window.set_focus();
+        }
+    }));
+    let builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         // Answers `colorreader://book/<id>?annotation=<id>` — the links the
         // notes export writes. macOS delivers them through `RunEvent::Opened`,
         // which the plugin turns into a `deep-link://new-url` event; the shell
         // is already running by then (or was launched for it) and follows it
-        // from `AppShell`.
+        // from `AppShell`. On Windows and Linux the plugin reads them off its
+        // own argv at startup, and the single-instance plugin above feeds it
+        // the argv of every later launch.
         .plugin(tauri_plugin_deep_link::init())
         .invoke_handler(tauri::generate_handler![
             commands::system::system_info,
