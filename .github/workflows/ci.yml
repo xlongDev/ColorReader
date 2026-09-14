@@ -50,5 +50,28 @@ jobs:
             libayatana-appindicator3-dev librsvg2-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
       # Tests run headless SQLite only; no Tauri window is spawned.
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
-      - run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      # TEMPORARY DIAGNOSTIC — revert once the Linux-only clippy failure is
+      # understood. The job log cannot be read from outside (the API needs
+      # admin rights), so the failure is echoed into the run's annotations and
+      # summary instead.
+      - name: Clippy (output captured)
+        run: |
+          set +e
+          cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings 2>&1 | tee clippy.log
+          code=${PIPESTATUS[0]}
+          set -e
+          if [ "$code" -ne 0 ]; then
+            python3 -c "
+          import pathlib
+          tail = pathlib.Path('clippy.log').read_text(errors='replace')[-2000:]
+          print('::error::' + tail.replace('\n', '%0A'))
+          "
+            {
+              echo '### clippy 失败'
+              echo '```'
+              tail -80 clippy.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit "$code"
+          fi
       - run: cargo test --manifest-path src-tauri/Cargo.toml
