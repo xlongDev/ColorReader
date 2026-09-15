@@ -34,3 +34,28 @@ test("all routes render without console errors", async ({ page }) => {
 
   expect(pageErrors, "console/page errors must stay empty").toEqual([]);
 });
+
+/**
+ * A setting the reader chose survives a reload.
+ *
+ * The routes above only prove the chunks load; this is the one test that
+ * follows data end to end — control → store → localStorage → back onto the
+ * document — which is also the only round trip the web preview can do without
+ * the Tauri backend. Regression bait: the persistence key or the store's
+ * rehydration can break while every page still renders fine.
+ */
+test("a theme change survives a reload", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).first().click();
+  await expect(page.getByRole("heading", { name: "外观" })).toHaveCount(1);
+
+  // Playwright's default is a light OS preference, so the initial attribute is
+  // whatever "跟随系统" resolves to — assert the change, not the starting value.
+  const before = await page.locator("html").getAttribute("data-theme");
+  await page.locator("label").filter({ hasText: "深色" }).first().click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  expect(before).not.toBe("dark");
+});

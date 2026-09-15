@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime, onSourceProgress } from "@/lib/ipc";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { SourceProgress, SourceRules } from "@/types/ipc";
 
 /** Every stored source, definitions included. */
@@ -20,6 +21,7 @@ export function useSaveSource() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, def }: { id: string | null; def: SourceRules }) => ipc.sourceSave(id, def),
+    meta: { silent: true },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sources"] }),
   });
 }
@@ -43,17 +45,12 @@ export function useSourceSearch() {
 export function useSourceDownload() {
   const [progress, setProgress] = useState<SourceProgress | null>(null);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    onSourceProgress((next) => setProgress(next)).then((stop) => {
-      unlisten = stop;
-    });
-    return () => unlisten?.();
-  }, []);
+  useTauriEvent(onSourceProgress, setProgress);
 
   const download = useMutation({
     mutationFn: ({ sourceId, bookUrl }: { sourceId: string; bookUrl: string }) =>
       ipc.sourceDownload(sourceId, bookUrl),
+    meta: { silent: true },
     onSettled: () => setProgress(null),
   });
 

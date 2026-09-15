@@ -11,6 +11,7 @@ import { GlassPanel } from "@/components/glass/panel";
 import { GlassIconButton } from "@/components/glass/button";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
+import { BookCoverFlight } from "@/components/motion/BookCoverFlight";
 import { fontFaceCss, readerGlassVars, resolveSurface } from "@/features/reader/theme";
 import { useCommandPalette } from "@/stores/command-palette";
 import { useSettings } from "@/stores/settings";
@@ -202,7 +203,12 @@ export function AppShell() {
           This host sits inside the shell, so the reading surface's tokens and
           `data-theme` still reach the overlays; everything portalled into it
           is `position: fixed`, so it takes no room in the column. */}
-      <div data-overlay-host />
+      <div data-overlay-host>
+        {/* The cover carried from the shelf into the reader lives here, not in
+            the reader: a route change blurs and scales the page it leaves, and
+            an element inside that page would be dragged along with it. */}
+        <BookCoverFlight />
+      </div>
       <CommandPalette />
     </div>
   );

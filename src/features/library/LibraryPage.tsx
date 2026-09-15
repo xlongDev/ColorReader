@@ -1,4 +1,4 @@
-import { Suspense, lazy, useEffect, useMemo, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -25,6 +25,7 @@ import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { GlassInput } from "@/components/glass/input";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { DURATION, SPRING, staggerDelay, useMotion } from "@/lib/motion";
+import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import { BookCard, DeleteBookDialog } from "@/features/library/BookCard";
 import {
   failedMessage,
@@ -635,6 +636,9 @@ function ContinueReadingCard({
   onOpen: (book: BookSummary) => void;
 }) {
   const m = useMotion();
+  const beginHandoff = useBookHandoff((s) => s.begin);
+  const coverRef = useRef<HTMLSpanElement>(null);
+
   if (!book) {
     return (
       <section className="glass mb-6 rounded-2xl p-5">
@@ -653,12 +657,16 @@ function ContinueReadingCard({
   return (
     <motion.button
       type="button"
-      onClick={() => onOpen(book)}
+      onClick={() => {
+        const cover = coverRef.current;
+        if (cover) beginHandoff({ id: book.id, coverUrl: book.coverUrl, from: boxOf(cover) });
+        onOpen(book);
+      }}
       whileTap={m.reduce ? undefined : { scale: 0.995 }}
       transition={m.tap}
       className="glass focus-visible:focus-ring group mb-6 flex w-full items-center gap-4 rounded-2xl p-4 text-left"
     >
-      <span className="relative block h-16 w-12 shrink-0 overflow-hidden rounded-sm">
+      <span ref={coverRef} className="relative block h-16 w-12 shrink-0 overflow-hidden rounded-sm">
         {book.coverUrl ? (
           <img
             src={book.coverUrl}

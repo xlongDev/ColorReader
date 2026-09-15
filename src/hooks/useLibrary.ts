@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime, onImportProgress } from "@/lib/ipc";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { renderFirstPagePng } from "@/lib/pdf";
 import type { BookQuery, BookSummary, ImportProgress } from "@/types/ipc";
 
@@ -112,13 +113,7 @@ export function useSetFavorite() {
 export function useImportProgress(): ImportProgress | null {
   const [progress, setProgress] = useState<ImportProgress | null>(null);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    onImportProgress((next) => setProgress(next)).then((stop) => {
-      unlisten = stop;
-    });
-    return () => unlisten?.();
-  }, []);
+  useTauriEvent(onImportProgress, setProgress);
 
   return progress;
 }

@@ -31,7 +31,6 @@ import type {
   ReadingStats,
   SearchHit,
   SourceBook,
-  SourceChapter,
   SourceDownloaded,
   SourceEntry,
   SourceProgress,
@@ -45,16 +44,16 @@ import type {
 } from "@/types/ipc";
 
 /** Event the backend emits once per file while an import batch runs. */
-export const IMPORT_PROGRESS_EVENT = "book://import-progress";
+const IMPORT_PROGRESS_EVENT = "book://import-progress";
 
 /** Event carrying streamed AI answer chunks. */
-export const AI_STREAM_EVENT = "ai://stream";
+const AI_STREAM_EVENT = "ai://stream";
 
 /** Event carrying RAG index build progress. */
-export const RAG_INDEX_EVENT = "rag://index-progress";
+const RAG_INDEX_EVENT = "rag://index-progress";
 
 /** Event carrying knowledge graph build progress. */
-export const GRAPH_BUILD_EVENT = "graph://build-progress";
+const GRAPH_BUILD_EVENT = "graph://build-progress";
 
 /**
  * Typed wrapper around Tauri's `invoke` with a single source of truth for
@@ -362,14 +361,6 @@ export const ipc = {
     return invoke<SourceBook[]>("source_search", { sourceId, keyword });
   },
 
-  sourceBook(sourceId: string, bookUrl: string): Promise<SourceBook> {
-    return invoke<SourceBook>("source_book", { sourceId, bookUrl });
-  },
-
-  sourceChapters(sourceId: string, bookUrl: string): Promise<SourceChapter[]> {
-    return invoke<SourceChapter[]>("source_chapters", { sourceId, bookUrl });
-  },
-
   sourceDownload(sourceId: string, bookUrl: string): Promise<SourceDownloaded> {
     return invoke<SourceDownloaded>("source_download", { sourceId, bookUrl });
   },
@@ -438,7 +429,7 @@ export async function onGraphProgress(
 }
 
 /** Event carrying one book download's chapter progress. */
-export const SOURCE_DOWNLOAD_EVENT = "source://download-progress";
+const SOURCE_DOWNLOAD_EVENT = "source://download-progress";
 
 /** Subscribes to book download progress; no-op outside the Tauri shell. */
 export async function onSourceProgress(
@@ -450,3 +441,15 @@ export async function onSourceProgress(
 
 /** `true` only when the renderer is hosted inside the Tauri shell. */
 export const isDesktopRuntime: boolean = isTauri();
+
+/**
+ * Query body for something only the desktop app can answer.
+ *
+ * The web preview has no backend, so every such query owes the UI a stand-in —
+ * an empty list, a default config. Taking it as an argument makes that a
+ * requirement rather than a thing to remember: a new query cannot be written
+ * without deciding what the browser shows.
+ */
+export function desktopQuery<T>(offline: T, call: () => Promise<T>): () => Promise<T> {
+  return () => (isDesktopRuntime ? call() : Promise.resolve(offline));
+}

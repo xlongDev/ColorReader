@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { desktopQuery, ipc, isDesktopRuntime } from "@/lib/ipc";
 import type { TagSummary } from "@/types/ipc";
 
 /**
@@ -15,7 +15,7 @@ import type { TagSummary } from "@/types/ipc";
 export function useTags() {
   return useQuery<TagSummary[]>({
     queryKey: ["tags"],
-    queryFn: () => (isDesktopRuntime ? ipc.tagList() : Promise.resolve([])),
+    queryFn: desktopQuery([], () => ipc.tagList()),
     staleTime: 30_000,
   });
 }

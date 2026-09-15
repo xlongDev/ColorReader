@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { desktopQuery, ipc, isDesktopRuntime } from "@/lib/ipc";
 import type { ReadingStats } from "@/types/ipc";
 
 /**
@@ -31,7 +31,7 @@ const MIN_BATCH_SECONDS = 5;
 export function useReadingStats() {
   return useQuery({
     queryKey: ["reading", "stats"],
-    queryFn: () => (isDesktopRuntime ? ipc.statsReading() : Promise.resolve(EMPTY)),
+    queryFn: desktopQuery(EMPTY, () => ipc.statsReading()),
     staleTime: 30_000,
   });
 }
@@ -43,7 +43,7 @@ function useInvalidateReading() {
 
 /** Adds one batch of reading time. Fire and forget: a lost batch costs a
  *  minute of history, which is not worth an error state. */
-export function useRecordSession() {
+function useRecordSession() {
   const invalidate = useInvalidateReading();
   return useMutation({
     mutationFn: (input: { bookId: string; seconds: number }) =>

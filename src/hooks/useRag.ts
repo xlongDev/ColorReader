@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime, onRagProgress } from "@/lib/ipc";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { RagProgress } from "@/types/ipc";
 
 /** Index status for one book. Refreshed after every index build. */
@@ -23,13 +24,7 @@ export function useIndexBook(bookId: string) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<RagProgress | null>(null);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    onRagProgress((next) => setProgress(next)).then((stop) => {
-      unlisten = stop;
-    });
-    return () => unlisten?.();
-  }, []);
+  useTauriEvent(onRagProgress, setProgress);
 
   const build = useMutation({
     mutationFn: () => ipc.ragIndexBook(bookId),

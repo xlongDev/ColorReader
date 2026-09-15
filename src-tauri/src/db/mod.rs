@@ -1,8 +1,15 @@
 //! SQLite access: connection setup, PRAGMAs and the shared handle.
 //!
-//! The library owns a single writer connection guarded by a mutex. SQLite
-//! already serializes writers, so one connection avoids `SQLITE_BUSY` churn
-//! between our own commands while WAL keeps readers from blocking on it.
+//! There is exactly one connection, guarded by a mutex. That serializes
+//! everything — reads included — which is the right trade for a single-user
+//! library: it removes `SQLITE_BUSY` between our own commands entirely, and
+//! every query here is a statement-sized read or one batched write.
+//!
+//! WAL is on for crash recovery and cheaper commits, not for concurrency: a
+//! single connection cannot read while its own write transaction is open.
+//! The invariant to keep is therefore about duration, not parallelism —
+//! nothing slow belongs inside a [`Library::with`] closure. Parse, hash and
+//! network first, then take the lock for the writes.
 
 pub mod migrations;
 
@@ -108,5 +115,64 @@ impl Library {
 
     fn lock(&self) -> AppResult<MutexGuard<'_, Connection>> {
         self.conn.lock().map_err(|_| AppError::poisoned("library"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Harness {
+        dir: PathBuf,
+        library: Library,
+    }
+
+    impl Harness {
+        fn new(tag: &str) -> Self {
+            let dir = crate::document::fixture::temp_dir(tag);
+            let library = Library::open(&dir).expect("open library");
+            Self { dir, library }
+        }
+
+        fn keys(&self) -> Vec<String> {
+            self.library
+                .with(|conn| {
+                    let mut stmt = conn.prepare("SELECT key FROM settings ORDER BY key")?;
+                    let rows = stmt.query_map([], |row| row.get(0))?;
+                    Ok(rows.collect::<rusqlite::Result<Vec<String>>>()?)
+                })
+                .expect("read back")
+        }
+    }
+
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    /// The contract every `with_tx` caller leans on — sync's apply pass most of
+    /// all, where books, highlights and bookmarks have to land together or not
+    /// at all. Pins that a write made before the error does not survive it.
+    #[test]
+    fn a_failed_transaction_leaves_nothing_behind() {
+        let h = Harness::new("db-tx-rollback");
+        h.library
+            .with(|conn| {
+                conn.execute(
+                    "INSERT INTO settings (key, value, updated_at) VALUES ('a', '1', 1)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .expect("seed");
+
+        let failed: AppResult<()> = h.library.with_tx(|tx| {
+            tx.execute("INSERT INTO settings (key, value, updated_at) VALUES ('b', '2', 1)", [])?;
+            Err(AppError::Message("中途失败".into()))
+        });
+        assert!(failed.is_err());
+
+        assert_eq!(h.keys(), vec!["a".to_string()]);
     }
 }

@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { motion } from "motion/react";
 import { BookOpen, Check, Export, Star, Tag, Trash } from "@phosphor-icons/react";
 
@@ -6,6 +7,7 @@ import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { authorLine, formatFileSize } from "@/features/library/format";
 import { cn } from "@/lib/cn";
 import { SPRING, useMotion } from "@/lib/motion";
+import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import type { BookSummary } from "@/types/ipc";
 
 interface BookCardProps {
@@ -46,6 +48,16 @@ export function BookCard({
 }: BookCardProps) {
   const authors = authorLine(book);
   const m = useMotion();
+  const beginHandoff = useBookHandoff((s) => s.begin);
+  const coverRef = useRef<HTMLSpanElement>(null);
+
+  /** Hands the cover off to the reader's header before the route changes. */
+  const open = () => {
+    const cover = coverRef.current;
+    if (cover) beginHandoff({ id: book.id, coverUrl: book.coverUrl, from: boxOf(cover) });
+    onOpen(book);
+  };
+
   return (
     // layout: shared-layout FLIP, so resorting or filtering the shelf glides
     // cards to their new slots instead of snapping the grid into place.
@@ -60,7 +72,7 @@ export function BookCard({
     >
       <button
         type="button"
-        onClick={() => (selecting ? onToggleSelect?.(book) : onOpen(book))}
+        onClick={() => (selecting ? onToggleSelect?.(book) : open())}
         aria-pressed={selecting ? selected : undefined}
         className="focus-visible:focus-ring w-full rounded-md text-left disabled:opacity-50"
         disabled={busy}
@@ -68,9 +80,10 @@ export function BookCard({
         {/* The cover carries the whole hover gesture — it rises, deepens its
             shadow and catches a band of light — while the title below stays
             put. The book lifts off the shelf; the label does not. */}
-        <div
+        <span
+          ref={coverRef}
           className={cn(
-            "glass relative aspect-[3/4] overflow-hidden rounded-md",
+            "glass relative block aspect-[3/4] overflow-hidden rounded-md",
             // Tailwind v4 moves `translate-y-*` with the `translate` property,
             // not `transform` — listing `transform` here would leave the lift
             // un-animated and snapping into place.
@@ -88,9 +101,9 @@ export function BookCard({
               draggable={false}
             />
           ) : (
-            <div className="bg-surface-1 text-text-3 flex h-full w-full items-center justify-center">
+            <span className="bg-surface-1 text-text-3 flex h-full w-full items-center justify-center">
               <BookOpen size={28} weight="duotone" />
-            </div>
+            </span>
           )}
           {/* Light sweeping the gloss: one pass per hover, no pointer tracking,
               so a 200-book shelf stays cheap. */}
@@ -104,14 +117,14 @@ export function BookCard({
             )}
           />
           {book.progress > 0 && (
-            <div className="absolute right-0 bottom-0 left-0 h-1 bg-black/30">
-              <div
-                className="bg-accent h-full transition-[width] duration-500 ease-out motion-reduce:transition-none"
+            <span className="absolute right-0 bottom-0 left-0 block h-1 bg-black/30">
+              <span
+                className="bg-accent block h-full transition-[width] duration-500 ease-out motion-reduce:transition-none"
                 style={{ width: `${Math.round(Math.min(book.progress, 1) * 100)}%` }}
               />
-            </div>
+            </span>
           )}
-        </div>
+        </span>
         <p className="text-text-1 mt-2 truncate text-sm font-medium">{book.title}</p>
         <p className="text-text-3 mt-0.5 truncate text-xs">
           {authors || book.format.toUpperCase()}

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { desktopQuery, ipc } from "@/lib/ipc";
 import type { SyncConfig } from "@/types/ipc";
 
 /** Browser dev mode has no backend; the settings form still needs a shape. */
@@ -10,7 +10,7 @@ const OFFLINE_CONFIG: SyncConfig = { url: "", username: "", password: "" };
 export function useSyncConfig() {
   return useQuery<SyncConfig>({
     queryKey: ["sync", "config"],
-    queryFn: () => (isDesktopRuntime ? ipc.syncGetConfig() : Promise.resolve(OFFLINE_CONFIG)),
+    queryFn: desktopQuery(OFFLINE_CONFIG, () => ipc.syncGetConfig()),
     staleTime: Number.POSITIVE_INFINITY,
   });
 }
@@ -20,7 +20,10 @@ export function useSaveSyncConfig() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (config: SyncConfig) => ipc.syncSetConfig(config),
-    onSettled: (saved) => {
+    meta: { silent: true },
+    // `onSettled` would run on failure too, where `saved` is `undefined` — and
+    // writing that into the cache blanks the form it is meant to refresh.
+    onSuccess: (saved) => {
       queryClient.setQueryData(["sync", "config"], saved);
     },
   });
@@ -28,7 +31,10 @@ export function useSaveSyncConfig() {
 
 /** Proves the server is reachable and authorized. Does not persist. */
 export function useTestSyncConfig() {
-  return useMutation({ mutationFn: (config: SyncConfig) => ipc.syncTest(config) });
+  return useMutation({
+    mutationFn: (config: SyncConfig) => ipc.syncTest(config),
+    meta: { silent: true },
+  });
 }
 
 /** Runs one full sync cycle; the shelf and any open reader refresh with what moved. */
@@ -36,6 +42,7 @@ export function useSyncNow() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (config: SyncConfig) => ipc.syncNow(config),
+    meta: { silent: true },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["books"] });
       // Highlights and bookmarks ride along in the same state document, so a

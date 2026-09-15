@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { desktopQuery, ipc } from "@/lib/ipc";
 import type { LocalDictionary } from "@/types/ipc";
 
 /** The imported dictionaries. Only this page and the import dialog change them. */
 export function useDictionaries() {
   return useQuery<LocalDictionary[]>({
     queryKey: ["dictionaries"],
-    queryFn: () => (isDesktopRuntime ? ipc.dictionaryList() : Promise.resolve([])),
+    queryFn: desktopQuery([], () => ipc.dictionaryList()),
     staleTime: 30_000,
   });
 }
@@ -32,6 +32,7 @@ export function useImportDictionary() {
   const invalidate = useDictionaryInvalidation();
   return useMutation({
     mutationFn: (path: string) => ipc.dictionaryImport(path),
+    meta: { silent: true },
     onSuccess: invalidate,
   });
 }

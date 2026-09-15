@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime, onAiStream } from "@/lib/ipc";
+import { desktopQuery, ipc, onAiStream } from "@/lib/ipc";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { AiConfig, AiMessage, RagHit } from "@/types/ipc";
 
 /** Browser dev mode has no backend; the settings form still needs a shape. */
@@ -19,7 +20,7 @@ const OFFLINE_CONFIG: AiConfig = {
 export function useAiConfig() {
   return useQuery<AiConfig>({
     queryKey: ["ai", "config"],
-    queryFn: () => (isDesktopRuntime ? ipc.aiGetConfig() : Promise.resolve(OFFLINE_CONFIG)),
+    queryFn: desktopQuery(OFFLINE_CONFIG, () => ipc.aiGetConfig()),
     staleTime: Number.POSITIVE_INFINITY,
   });
 }
@@ -29,7 +30,10 @@ export function useSaveAiConfig() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (config: AiConfig) => ipc.aiSetConfig(config),
-    onSettled: (saved) => {
+    meta: { silent: true },
+    // `onSettled` would run on failure too, where `saved` is `undefined` — and
+    // writing that into the cache blanks the form it is meant to refresh.
+    onSuccess: (saved) => {
       queryClient.setQueryData(["ai", "config"], saved);
     },
   });
@@ -37,7 +41,10 @@ export function useSaveAiConfig() {
 
 /** Proves endpoint, key and model work together. Does not persist anything. */
 export function useTestAiConfig() {
-  return useMutation({ mutationFn: (config: AiConfig) => ipc.aiTest(config) });
+  return useMutation({
+    mutationFn: (config: AiConfig) => ipc.aiTest(config),
+    meta: { silent: true },
+  });
 }
 
 interface ChatState {
@@ -61,25 +68,19 @@ export function useAiChat() {
   // render — so a late stream from an abandoned request is dropped, not shown.
   const activeRequest = useRef<string | null>(null);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    onAiStream((delta) => {
-      if (delta.requestId !== activeRequest.current) return;
-      if (delta.error) {
-        setState({ text: "", streaming: false, error: delta.error, citations: [] });
-        return;
-      }
-      setState((prev) => ({
-        text: delta.text === null ? prev.text : prev.text + delta.text,
-        streaming: !delta.done,
-        error: null,
-        citations: delta.citations ?? prev.citations,
-      }));
-    }).then((stop) => {
-      unlisten = stop;
-    });
-    return () => unlisten?.();
-  }, []);
+  useTauriEvent(onAiStream, (delta) => {
+    if (delta.requestId !== activeRequest.current) return;
+    if (delta.error) {
+      setState({ text: "", streaming: false, error: delta.error, citations: [] });
+      return;
+    }
+    setState((prev) => ({
+      text: delta.text === null ? prev.text : prev.text + delta.text,
+      streaming: !delta.done,
+      error: null,
+      citations: delta.citations ?? prev.citations,
+    }));
+  });
 
   const start = useCallback((run: (requestId: string) => Promise<void>) => {
     const requestId = crypto.randomUUID();

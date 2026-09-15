@@ -382,42 +382,6 @@ export interface GraphProgress {
   total: number;
 }
 
-/** Mirrors `src-tauri/src/library/graph.rs`. */
-
-export interface GraphEntity {
-  name: string;
-  kind: string;
-  mentions: number;
-}
-
-export interface GraphRelation {
-  subject: string;
-  relation: string;
-  object: string;
-  evidence: string;
-  /** Chapter the relation first appeared in. */
-  chapterIdx: number;
-}
-
-/** All entities, or the neighborhood of one entity. */
-export interface GraphView {
-  entities: GraphEntity[];
-  relations: GraphRelation[];
-}
-
-/** Mirrors `commands/graph.rs`. */
-export interface GraphStatus {
-  entities: number;
-  relations: number;
-  model: string;
-}
-
-/** Payload of the `graph://build-progress` event. */
-export interface GraphProgress {
-  done: number;
-  total: number;
-}
-
 /** Rule groups of one online book source; see `library/source.rs`. */
 export interface SourceRules {
   name: string;

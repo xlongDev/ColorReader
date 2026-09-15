@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime, onGraphProgress } from "@/lib/ipc";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { GraphProgress } from "@/types/ipc";
 
 /** Graph status for one book. Refreshed after every build. */
@@ -37,13 +38,7 @@ export function useGraphBuild(bookId: string) {
   const queryClient = useQueryClient();
   const [progress, setProgress] = useState<GraphProgress | null>(null);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    onGraphProgress((next) => setProgress(next)).then((stop) => {
-      unlisten = stop;
-    });
-    return () => unlisten?.();
-  }, []);
+  useTauriEvent(onGraphProgress, setProgress);
 
   const build = useMutation({
     mutationFn: () => ipc.graphBuild(bookId),

@@ -25,6 +25,16 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # CI has no proxy injecting NODE_OPTIONS, so plain verify works here.
       - run: pnpm verify
+      # `verify` builds dist, which is what the preview server serves. Without
+      # this step nothing ever ran the e2e suite and it rotted unnoticed.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:e2e
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: playwright-trace
+          path: test-results/
+          if-no-files-found: ignore
       - name: Report bundle size
         run: |
           echo "## Bundle size" >> "$GITHUB_STEP_SUMMARY"

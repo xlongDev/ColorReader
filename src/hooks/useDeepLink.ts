@@ -39,9 +39,10 @@ export function useDeepLink() {
       follow(await getCurrent());
       const unlisten = await onOpenUrl(follow);
       // Registering is a round trip, so the shell can be gone by the time it
-      // lands. Assigning straight into `stop` (as the listeners elsewhere do)
-      // would drop it on the floor and leave the subscription live for good —
-      // this one mounts once per window, so the leak would last the session.
+      // lands. Assigning straight into `stop` would drop it on the floor and
+      // leave the subscription live for good — this one mounts once per
+      // window, so the leak would last the session. `useTauriEvent` closes
+      // the same gap for the other listeners.
       if (live) stop = unlisten;
       else unlisten();
     })();

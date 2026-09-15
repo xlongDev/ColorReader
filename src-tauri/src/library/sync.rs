@@ -588,40 +588,48 @@ pub async fn run(library: &Library, config: &SyncConfig) -> AppResult<SyncReport
     let remote = dav.pull().await?;
 
     let (state, report) = {
-        let (mut state, books) =
-            merge(&library.with(local_books)?, remote, &device, crate::library::now_seconds());
+        // One lock, four reads. The merge picks a winner per row by timestamp,
+        // so those rows have to come from one snapshot: reading them in
+        // separate turns lets a concurrent local edit land between two of them
+        // and get merged against a half-updated picture.
+        let (local, hashes, local_annotations, local_bookmarks) = library.with(|conn| {
+            Ok((
+                local_books(conn)?,
+                local_hashes(conn)?,
+                annotations::for_sync(conn)?,
+                bookmarks::for_sync(conn)?,
+            ))
+        })?;
 
-        let hashes = library.with(local_hashes)?;
+        let (mut state, books) = merge(&local, remote, &device, crate::library::now_seconds());
+
         let (annotations_state, annotation_tally, annotation_upserts, annotation_deletes) =
-            merge_annotations(
-                library.with(annotations::for_sync)?,
-                std::mem::take(&mut state.annotations),
-                &hashes,
-            );
+            merge_annotations(local_annotations, std::mem::take(&mut state.annotations), &hashes);
         state.annotations = annotations_state;
 
-        let (bookmarks_state, bookmark_tally, bookmark_upserts, bookmark_deletes) = merge_bookmarks(
-            library.with(bookmarks::for_sync)?,
-            std::mem::take(&mut state.bookmarks),
-            &hashes,
-        );
+        let (bookmarks_state, bookmark_tally, bookmark_upserts, bookmark_deletes) =
+            merge_bookmarks(local_bookmarks, std::mem::take(&mut state.bookmarks), &hashes);
         state.bookmarks = bookmarks_state;
 
-        library.with(|conn| {
+        // Books, highlights and bookmarks are one logical state. Applied
+        // statement by statement, a failure on any single row would commit the
+        // rows before it and drop the rest — and the next pull would then
+        // re-apply that winning half on top of local rows that never lost.
+        library.with_tx(|tx| {
             for (hash, book) in &state.books {
-                apply_downloaded(conn, hash, book)?;
+                apply_downloaded(tx, hash, book)?;
             }
             for entry in &annotation_upserts {
-                annotations::apply_remote(conn, entry)?;
+                annotations::apply_remote(tx, entry)?;
             }
             for id in &annotation_deletes {
-                annotations::remove(conn, id)?;
+                annotations::remove(tx, id)?;
             }
             for entry in &bookmark_upserts {
-                bookmarks::apply_remote(conn, entry)?;
+                bookmarks::apply_remote(tx, entry)?;
             }
             for id in &bookmark_deletes {
-                bookmarks::remove(conn, id)?;
+                bookmarks::remove(tx, id)?;
             }
             Ok(())
         })?;

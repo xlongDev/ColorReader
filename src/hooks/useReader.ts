@@ -2,7 +2,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { readPdfOutline, type PdfOutlineItem } from "@/lib/pdf";
-import type { BookImage, ChapterContent, ChapterMeta } from "@/types/ipc";
+import type { BookImage, ChapterMeta } from "@/types/ipc";
 
 /** A single book for the reader header. */
 export function useBook(id: string | null) {
@@ -82,5 +82,3 @@ export function useSetProgress(bookId: string | null) {
     },
   });
 }
-
-export type { ChapterContent };

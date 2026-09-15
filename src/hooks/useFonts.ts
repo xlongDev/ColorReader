@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { desktopQuery, ipc } from "@/lib/ipc";
 import { useReaderSettings } from "@/stores/reader";
 import { customFontKey } from "@/features/reader/theme";
 import type { LocalFont } from "@/types/ipc";
@@ -11,7 +11,7 @@ export function useFonts() {
     queryKey: ["fonts"],
     // Browser dev mode has no backend; an empty list is the honest answer and
     // leaves the picker with the stacks every machine already has.
-    queryFn: () => (isDesktopRuntime ? ipc.fontList() : Promise.resolve([])),
+    queryFn: desktopQuery([], () => ipc.fontList()),
     staleTime: 30_000,
   });
 }
@@ -21,6 +21,7 @@ export function useImportFont() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (path: string) => ipc.fontImport(path),
+    meta: { silent: true },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["fonts"] });
     },
