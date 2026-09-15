@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime, onImportProgress } from "@/lib/ipc";
+import { demoBooks, demoEnabled, demoLibraryStats } from "@/lib/demo";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { renderFirstPagePng } from "@/lib/pdf";
 import type { BookQuery, BookSummary, ImportProgress } from "@/types/ipc";
@@ -11,8 +12,9 @@ export function useBooks(query: BookQuery) {
   return useQuery<BookSummary[]>({
     queryKey: ["books", query.filter, query.sort, query.search ?? "", query.tag ?? ""],
     queryFn: () => {
-      // Browser dev mode has no backend: show an empty shelf instead of erroring.
-      if (!isDesktopRuntime) return Promise.resolve([]);
+      // Browser dev mode has no backend: show an empty shelf instead of
+      // erroring — unless `?demo=1` asked for the sample one.
+      if (!isDesktopRuntime) return Promise.resolve(demoEnabled() ? demoBooks : []);
       return ipc.bookList(query);
     },
     staleTime: 10_000,
@@ -25,7 +27,9 @@ export function useLibraryStats() {
     queryKey: ["books", "stats"],
     queryFn: () => {
       if (!isDesktopRuntime) {
-        return Promise.resolve({ total: 0, favorites: 0, reading: 0, finished: 0 });
+        return demoEnabled()
+          ? Promise.resolve(demoLibraryStats)
+          : Promise.resolve({ total: 0, favorites: 0, reading: 0, finished: 0 });
       }
       return ipc.bookStats();
     },

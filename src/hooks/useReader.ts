@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { demoBooks, demoChapter, demoEnabled, demoToc } from "@/lib/demo";
 import { readPdfOutline, type PdfOutlineItem } from "@/lib/pdf";
 import type { BookImage, ChapterMeta } from "@/types/ipc";
 
@@ -9,7 +10,12 @@ export function useBook(id: string | null) {
   return useQuery({
     queryKey: ["book", id],
     queryFn: () => {
-      if (!id || !isDesktopRuntime) return Promise.resolve(null);
+      if (!id) return Promise.resolve(null);
+      if (!isDesktopRuntime) {
+        return Promise.resolve(
+          demoEnabled() ? (demoBooks.find((book) => book.id === id) ?? null) : null,
+        );
+      }
       return ipc.bookGet(id);
     },
     enabled: id !== null,
@@ -22,7 +28,8 @@ export function useReaderToc(bookId: string | null) {
   return useQuery({
     queryKey: ["reader", "toc", bookId],
     queryFn: () => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve<ChapterMeta[]>([]);
+      if (!bookId) return Promise.resolve<ChapterMeta[]>([]);
+      if (!isDesktopRuntime) return Promise.resolve(demoEnabled() ? demoToc : []);
       return ipc.readerToc(bookId);
     },
     enabled: bookId !== null,
@@ -35,7 +42,8 @@ export function useChapter(bookId: string | null, idx: number | null) {
   return useQuery({
     queryKey: ["reader", "chapter", bookId, idx],
     queryFn: () => {
-      if (!bookId || idx === null || !isDesktopRuntime) return Promise.resolve(null);
+      if (!bookId || idx === null) return Promise.resolve(null);
+      if (!isDesktopRuntime) return Promise.resolve(demoEnabled() ? demoChapter(idx) : null);
       return ipc.readerChapter(bookId, idx);
     },
     enabled: bookId !== null && idx !== null,
