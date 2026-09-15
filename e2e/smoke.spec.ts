@@ -15,12 +15,19 @@ test("all routes render without console errors", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("button", { name: "导入书籍" }).first()).toBeVisible();
 
-  // Lazy route chunks: first navigation triggers the network fetch.
+  // Lazy route chunks: first navigation triggers the network fetch. The
+  // outgoing page stays mounted for the cross-fade, and it carries a search
+  // field of its own, so the assertion has to pick the incoming one.
   await page.getByRole("link", { name: "搜索" }).click();
-  await expect(page.getByPlaceholder("搜索正文")).toBeVisible();
+  await expect(page.getByPlaceholder("搜索正文").first()).toBeVisible();
 
-  await page.getByRole("link", { name: "设置", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "外观" })).toBeVisible();
+  // 设置 is the sidebar footer's gear button, not a nav link. The route
+  // cross-fade keeps the outgoing page mounted for a beat — and the incoming
+  // one can sit in the tree more than once while it settles — so assert on the
+  // settled state rather than on the first paint.
+  await page.getByRole("button", { name: "设置", exact: true }).first().click();
+  await expect(page.getByRole("navigation", { name: "设置分类" })).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "外观" })).toHaveCount(1);
 
   await page.getByRole("link", { name: "书库" }).click();
   await expect(page.getByRole("button", { name: "导入书籍" }).first()).toBeVisible();
