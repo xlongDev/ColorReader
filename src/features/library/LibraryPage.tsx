@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   BookOpen,
   CaretDown,
+  CaretRight,
   FilePlus,
   Globe,
   Highlighter,
@@ -23,6 +24,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { GlassInput } from "@/components/glass/input";
 import { isDesktopRuntime } from "@/lib/ipc";
+import { DURATION, SPRING, staggerDelay, useMotion } from "@/lib/motion";
 import { BookCard, DeleteBookDialog } from "@/features/library/BookCard";
 import {
   failedMessage,
@@ -141,6 +143,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   // Tauri intercepts native drops and reports absolute file paths.
   const dragging = useDragDropImport((paths) => importPaths(paths));
 
+  const m = useMotion();
   const picking = importBooks.isPending;
   const list = books.data ?? [];
   const continueReading = filter === "all" ? list.find((b) => b.progress > 0) : undefined;
@@ -205,10 +208,10 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         <AnimatePresence>
           {webNotice && (
             <motion.div
-              initial={{ opacity: 0, y: -6 }}
+              initial={{ opacity: 0, y: m.reduce ? 0 : -6 }}
               animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.2 }}
+              exit={{ opacity: 0, y: m.reduce ? 0 : -6 }}
+              transition={{ duration: m.reduce ? 0 : DURATION.base }}
               className="border-hairline glass-2 mt-4 flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5"
             >
               <p className="text-text-2 text-sm">
@@ -228,7 +231,12 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       </header>
 
       <div className="flex-1 overflow-y-auto px-8 pb-8">
-        {filter === "all" && <ContinueReadingCard book={continueReading} />}
+        {filter === "all" && (
+          <ContinueReadingCard
+            book={continueReading}
+            onOpen={(target) => navigate(`/reader?book=${target.id}`)}
+          />
+        )}
 
         {filter === "tags" && <TagBar tags={tags.data ?? []} selected={tag} onSelect={setTag} />}
 
@@ -324,10 +332,11 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             {/* AnimatePresence + the cards' layout FLIP: removed cards shrink
                 in place while the survivors glide into their slots. */}
             <AnimatePresence initial={false}>
-              {list.map((book) => (
+              {list.map((book, index) => (
                 <BookCard
                   key={book.id}
                   book={book}
+                  delay={staggerDelay(index, m.stagger)}
                   busy={setFavorite.isPending || deleteBook.isPending}
                   selecting={managing}
                   selected={selected.has(book.id)}
@@ -350,10 +359,10 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         <AnimatePresence>
           {managing && (
             <motion.div
-              initial={{ opacity: 0, y: 16, scale: 0.96, x: "-50%" }}
+              initial={{ opacity: 0, y: m.reduce ? 0 : 16, scale: m.reduce ? 1 : 0.96, x: "-50%" }}
               animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
-              exit={{ opacity: 0, y: 16, scale: 0.96, x: "-50%" }}
-              transition={{ type: "spring", stiffness: 420, damping: 30 }}
+              exit={{ opacity: 0, y: m.reduce ? 0 : 16, scale: m.reduce ? 1 : 0.96, x: "-50%" }}
+              transition={m.panel}
               className="glass-2 shadow-panel fixed bottom-6 left-1/2 z-40 flex items-center gap-1.5 rounded-2xl p-2 pl-4"
             >
               <span className="text-text-2 mr-1 text-sm whitespace-nowrap">
@@ -362,7 +371,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
                   key={selected.size}
                   initial={{ y: 8, opacity: 0 }}
                   animate={{ y: 0, opacity: 1 }}
-                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                  transition={SPRING.tap}
                   className="text-text-1 inline-block font-semibold tabular-nums"
                 >
                   {selected.size}
@@ -429,23 +438,38 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
 
       {dragging && (
         <OverlayPortal>
-          <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/30">
-            <div className="glass-2 shadow-panel text-text-1 flex items-center gap-3 rounded-2xl px-6 py-5">
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            transition={{ duration: m.reduce ? 0 : DURATION.base }}
+            className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/30"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: m.reduce ? 1 : 0.94 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={m.panel}
+              className="glass-2 shadow-panel text-text-1 flex items-center gap-3 rounded-2xl px-6 py-5"
+            >
               <Upload size={20} weight="duotone" />
               <span className="text-sm font-medium">松开手指即可导入</span>
-            </div>
-          </div>
+            </motion.div>
+          </motion.div>
         </OverlayPortal>
       )}
 
       {picking && progress && (
         <OverlayPortal>
-          <div className="glass-2 shadow-panel text-text-1 fixed right-6 bottom-6 z-40 flex items-center gap-3 rounded-2xl px-5 py-4">
+          <motion.div
+            initial={{ opacity: 0, y: m.reduce ? 0 : 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={m.panel}
+            className="glass-2 shadow-panel text-text-1 fixed right-6 bottom-6 z-40 flex items-center gap-3 rounded-2xl px-5 py-4"
+          >
             <Upload size={16} className="text-accent" />
             <span className="text-sm">
               正在导入 {progress.done}/{progress.total}
             </span>
-          </div>
+          </motion.div>
         </OverlayPortal>
       )}
 
@@ -546,11 +570,20 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
 
 function ShelfSkeleton() {
   return (
-    <div className="grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
+    // Mirrors the real tile's box (cover + two text lines) so the grid does not
+    // jump when the books land, and announces itself once for screen readers.
+    <output
+      aria-label="正在加载书架"
+      className="grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6"
+    >
       {Array.from({ length: 6 }, (_, index) => (
-        <div key={index} className="bg-surface-1 aspect-[3/4] animate-pulse rounded-md" />
+        <div key={index}>
+          <div className="skeleton aspect-[3/4] rounded-md" />
+          <div className="skeleton mt-2 h-3.5 w-3/4 rounded-full" />
+          <div className="skeleton mt-1.5 h-3 w-1/2 rounded-full" />
+        </div>
       ))}
-    </div>
+    </output>
   );
 }
 
@@ -586,23 +619,79 @@ function ImportSummary({ outcomes, onClose }: { outcomes: ImportOutcome[]; onClo
   );
 }
 
-function ContinueReadingCard({ book }: { book: BookSummary | undefined }) {
-  return (
-    <section className="glass mb-6 rounded-2xl p-5">
-      <div className="text-text-2 flex items-center gap-2">
-        <Sun size={16} weight="duotone" />
-        <h2 className="text-text-1 text-sm font-medium">继续阅读</h2>
-      </div>
-      {book ? (
-        <p className="text-text-2 mt-2 text-[13px]">
-          上次读到《{book.title}》的 {Math.round(Math.min(book.progress, 1) * 100)}% 处。
-        </p>
-      ) : (
+/**
+ * The shelf's one always-on shortcut: the book you were last in, with the
+ * cover you recognise it by.
+ *
+ * It used to be a sentence — "上次读到《…》的 18% 处" — with nothing to click.
+ * Now it is the resume control: the reader already restores the saved fraction
+ * when a book opens, so opening it is the whole feature.
+ */
+function ContinueReadingCard({
+  book,
+  onOpen,
+}: {
+  book: BookSummary | undefined;
+  onOpen: (book: BookSummary) => void;
+}) {
+  const m = useMotion();
+  if (!book) {
+    return (
+      <section className="glass mb-6 rounded-2xl p-5">
+        <div className="text-text-2 flex items-center gap-2">
+          <Sun size={16} weight="duotone" />
+          <h2 className="text-text-1 text-sm font-medium">继续阅读</h2>
+        </div>
         <p className="text-text-2 mt-2 text-[13px]">
           当你打开一本新书时，最近阅读的位置会出现在这里。
         </p>
-      )}
-    </section>
+      </section>
+    );
+  }
+
+  const percent = Math.round(Math.min(book.progress, 1) * 100);
+  return (
+    <motion.button
+      type="button"
+      onClick={() => onOpen(book)}
+      whileTap={m.reduce ? undefined : { scale: 0.995 }}
+      transition={m.tap}
+      className="glass focus-visible:focus-ring group mb-6 flex w-full items-center gap-4 rounded-2xl p-4 text-left"
+    >
+      <span className="relative block h-16 w-12 shrink-0 overflow-hidden rounded-sm">
+        {book.coverUrl ? (
+          <img
+            src={book.coverUrl}
+            alt=""
+            className="h-full w-full object-cover"
+            draggable={false}
+          />
+        ) : (
+          <span className="bg-surface-1 text-text-3 flex h-full w-full items-center justify-center">
+            <BookOpen size={18} weight="duotone" />
+          </span>
+        )}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="text-text-3 flex items-center gap-1.5 text-[11.5px]">
+          <Sun size={12} weight="duotone" /> 继续阅读
+        </span>
+        <span className="text-text-1 mt-0.5 block truncate text-sm font-medium">{book.title}</span>
+        <span className="mt-2 flex items-center gap-2">
+          <span className="bg-hairline h-1 flex-1 overflow-hidden rounded-full">
+            <span
+              className="bg-accent block h-full rounded-full transition-[width] duration-500 ease-out motion-reduce:transition-none"
+              style={{ width: `${percent}%` }}
+            />
+          </span>
+          <span className="text-text-3 shrink-0 text-[11.5px] tabular-nums">已读 {percent}%</span>
+        </span>
+      </span>
+      <CaretRight
+        size={14}
+        className="text-text-3 group-hover:text-text-1 shrink-0 transition-colors"
+      />
+    </motion.button>
   );
 }
 

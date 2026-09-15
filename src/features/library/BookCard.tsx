@@ -1,15 +1,18 @@
-import { motion, useReducedMotion } from "motion/react";
+import { motion } from "motion/react";
 import { BookOpen, Check, Export, Star, Tag, Trash } from "@phosphor-icons/react";
 
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { authorLine, formatFileSize } from "@/features/library/format";
 import { cn } from "@/lib/cn";
+import { SPRING, useMotion } from "@/lib/motion";
 import type { BookSummary } from "@/types/ipc";
 
 interface BookCardProps {
   book: BookSummary;
   busy?: boolean;
+  /** Entrance offset inside a staggered shelf; see `staggerDelay`. */
+  delay?: number;
   onOpen: (book: BookSummary) => void;
   onToggleFavorite: (book: BookSummary) => void;
   onAskDelete: (book: BookSummary) => void;
@@ -31,6 +34,7 @@ const coverAction =
 export function BookCard({
   book,
   busy,
+  delay = 0,
   onOpen,
   onToggleFavorite,
   onAskDelete,
@@ -41,26 +45,40 @@ export function BookCard({
   onToggleSelect,
 }: BookCardProps) {
   const authors = authorLine(book);
-  const reduce = useReducedMotion();
+  const m = useMotion();
   return (
     // layout: shared-layout FLIP, so resorting or filtering the shelf glides
     // cards to their new slots instead of snapping the grid into place.
     <motion.div
       layout
-      initial={reduce ? false : { opacity: 0, scale: 0.96 }}
+      initial={{ opacity: 0, scale: m.reduce ? 1 : 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
-      exit={reduce ? undefined : { opacity: 0, scale: 0.94 }}
-      transition={{ type: "spring", stiffness: 380, damping: 32 }}
+      exit={{ opacity: 0, scale: m.reduce ? 1 : 0.94 }}
+      transition={{ ...m.layout, delay }}
+      whileTap={busy || m.reduce ? undefined : { scale: 0.985 }}
       className="group relative"
     >
       <button
         type="button"
         onClick={() => (selecting ? onToggleSelect?.(book) : onOpen(book))}
         aria-pressed={selecting ? selected : undefined}
-        className="w-full text-left disabled:opacity-50"
+        className="focus-visible:focus-ring w-full rounded-md text-left disabled:opacity-50"
         disabled={busy}
       >
-        <div className="glass relative aspect-[3/4] overflow-hidden rounded-md transition-transform group-hover:-translate-y-0.5">
+        {/* The cover carries the whole hover gesture — it rises, deepens its
+            shadow and catches a band of light — while the title below stays
+            put. The book lifts off the shelf; the label does not. */}
+        <div
+          className={cn(
+            "glass relative aspect-[3/4] overflow-hidden rounded-md",
+            // Tailwind v4 moves `translate-y-*` with the `translate` property,
+            // not `transform` — listing `transform` here would leave the lift
+            // un-animated and snapping into place.
+            "transition-[translate,box-shadow] duration-300 ease-out",
+            "group-hover:-translate-y-1 group-hover:shadow-[var(--shadow-cover-lift)]",
+            "motion-reduce:transition-none motion-reduce:group-hover:translate-y-0",
+          )}
+        >
           {book.coverUrl ? (
             <img
               src={book.coverUrl}
@@ -74,10 +92,21 @@ export function BookCard({
               <BookOpen size={28} weight="duotone" />
             </div>
           )}
+          {/* Light sweeping the gloss: one pass per hover, no pointer tracking,
+              so a 200-book shelf stays cheap. */}
+          <span
+            aria-hidden
+            className={cn(
+              "pointer-events-none absolute inset-0 -translate-x-full",
+              "bg-gradient-to-r from-transparent via-white/12 to-transparent",
+              "transition-[translate] duration-700 ease-out group-hover:translate-x-full",
+              "motion-reduce:hidden",
+            )}
+          />
           {book.progress > 0 && (
             <div className="absolute right-0 bottom-0 left-0 h-1 bg-black/30">
               <div
-                className="bg-accent h-full"
+                className="bg-accent h-full transition-[width] duration-500 ease-out motion-reduce:transition-none"
                 style={{ width: `${Math.round(Math.min(book.progress, 1) * 100)}%` }}
               />
             </div>
@@ -108,7 +137,7 @@ export function BookCard({
           <motion.span
             initial={false}
             animate={{ scale: selected ? 1 : 0.4, opacity: selected ? 1 : 0 }}
-            transition={{ type: "spring", stiffness: 550, damping: 28 }}
+            transition={SPRING.tap}
             className="flex"
           >
             <Check size={13} weight="bold" />
