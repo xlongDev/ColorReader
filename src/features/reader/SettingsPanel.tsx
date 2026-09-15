@@ -57,241 +57,256 @@ export function SettingsPanel() {
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-      <Group label="排版模式">
-        <Chips
-          options={LAYOUT_MODES}
-          value={settings.layoutMode}
-          onChange={(key) => update({ layoutMode: key })}
-        />
-      </Group>
-      <Group label="翻页动画">
-        <Chips
-          options={PAGE_TRANSITIONS}
-          value={settings.pageTransition}
-          onChange={(key) => update({ pageTransition: key })}
-        />
-      </Group>
-      <Group label="朗读高亮">
-        <Chips
-          options={SPEECH_GRANULARITIES}
-          value={settings.speechGranularity}
-          onChange={(key) => update({ speechGranularity: key })}
-        />
-      </Group>
+      <Section title="排版">
+        <Group label="排版模式">
+          <Chips
+            options={LAYOUT_MODES}
+            value={settings.layoutMode}
+            onChange={(key) => update({ layoutMode: key })}
+          />
+        </Group>
 
-      <Group label="字体">
-        <Chips
-          // The stacks every machine already has first, then whatever the
-          // reader imported. A custom entry carries no `stack` of its own:
-          // `resolveFont` derives the family from the key, which is what keeps
-          // the picker a plain list of names.
-          options={[
-            ...FONT_STACKS,
-            ...fonts.map((font) => ({ key: customFontKey(font.id), label: font.name })),
-          ]}
-          value={settings.fontFamily}
-          onChange={(key) => update({ fontFamily: key })}
-        />
-      </Group>
-      <Group label="字号">
-        <div className="flex items-center gap-2">
-          <Stepper
-            label="缩小字号"
-            onClick={() => settings.setFontSize(settings.fontSize - 1)}
-            disabled={settings.fontSize <= MIN_FONT_SIZE}
-          >
-            A
-          </Stepper>
-          <span className="text-text-2 w-8 text-center text-xs tabular-nums">
-            {settings.fontSize}
-          </span>
-          <Stepper
-            label="放大字号"
-            onClick={() => settings.setFontSize(settings.fontSize + 1)}
-            disabled={settings.fontSize >= MAX_FONT_SIZE}
-          >
-            A+
-          </Stepper>
-        </div>
-      </Group>
-      <Group label="行间距">
-        <Chips
-          options={LINE_HEIGHTS.map((_, index) => ({
-            key: index,
-            label: LINE_HEIGHT_LABELS[index]!,
-          }))}
-          value={settings.lineHeightIdx}
-          onChange={(index) => update({ lineHeightIdx: index })}
-        />
-      </Group>
-      <Group label="段间距">
-        <Chips
-          options={PARA_GAPS.map((_, index) => ({ key: index, label: PARA_GAP_LABELS[index]! }))}
-          value={settings.paraGapIdx}
-          onChange={(index) => update({ paraGapIdx: index })}
-        />
-      </Group>
-      <Group label="页边距">
-        <div className="w-full min-w-0">
-          <div className="flex flex-wrap gap-1.5">
-            {MARGIN_X_PRESETS.map((preset, index) => {
-              const active = nearestMargin(settings.marginX) === preset;
+        <Group label="字体">
+          <Chips
+            // The stacks every machine already has first, then whatever the
+            // reader imported. A custom entry carries no `stack` of its own:
+            // `resolveFont` derives the family from the key, which is what keeps
+            // the picker a plain list of names.
+            options={[
+              ...FONT_STACKS,
+              ...fonts.map((font) => ({ key: customFontKey(font.id), label: font.name })),
+            ]}
+            value={settings.fontFamily}
+            onChange={(key) => update({ fontFamily: key })}
+          />
+        </Group>
+        <Group label="字号">
+          <div className="flex items-center gap-2">
+            <Stepper
+              label="缩小字号"
+              onClick={() => settings.setFontSize(settings.fontSize - 1)}
+              disabled={settings.fontSize <= MIN_FONT_SIZE}
+            >
+              A
+            </Stepper>
+            <span className="text-text-2 w-8 text-center text-xs tabular-nums">
+              {settings.fontSize}
+            </span>
+            <Stepper
+              label="放大字号"
+              onClick={() => settings.setFontSize(settings.fontSize + 1)}
+              disabled={settings.fontSize >= MAX_FONT_SIZE}
+            >
+              A+
+            </Stepper>
+          </div>
+        </Group>
+        <Group label="行间距">
+          <Chips
+            options={LINE_HEIGHTS.map((_, index) => ({
+              key: index,
+              label: LINE_HEIGHT_LABELS[index]!,
+            }))}
+            value={settings.lineHeightIdx}
+            onChange={(index) => update({ lineHeightIdx: index })}
+          />
+        </Group>
+        <Group label="段间距">
+          <Chips
+            options={PARA_GAPS.map((_, index) => ({ key: index, label: PARA_GAP_LABELS[index]! }))}
+            value={settings.paraGapIdx}
+            onChange={(index) => update({ paraGapIdx: index })}
+          />
+        </Group>
+        <Group label="页边距">
+          <div className="w-full min-w-0">
+            <div className="flex flex-wrap gap-1.5">
+              {MARGIN_X_PRESETS.map((preset, index) => {
+                const active = nearestMargin(settings.marginX) === preset;
+                return (
+                  <motion.button
+                    key={preset}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => update({ marginX: preset })}
+                    whileTap={reduce ? undefined : { scale: 0.94 }}
+                    transition={SPRING.tap}
+                    className={cn(
+                      "border-hairline text-text-2 hover:text-text-1 relative rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+                      active && "border-accent text-accent",
+                    )}
+                  >
+                    {active && (
+                      <motion.span
+                        layoutId="margin-preset-pill"
+                        className="bg-accent-soft absolute inset-0 rounded-full"
+                        transition={reduce ? { duration: 0 } : SPRING.layout}
+                      />
+                    )}
+                    <span className="relative">{MARGIN_LABELS[index]!}</span>
+                  </motion.button>
+                );
+              })}
+            </div>
+            <SliderRow
+              label="左右"
+              readout={`${Math.round(settings.marginX)} px`}
+              min={MIN_MARGIN_X}
+              max={MAX_MARGIN_X}
+              value={settings.marginX}
+              onChange={(value) => update({ marginX: value })}
+            />
+            <SliderRow
+              label="上下"
+              readout={`${Math.round(settings.marginY)} px`}
+              min={MIN_MARGIN_Y}
+              max={MAX_MARGIN_Y}
+              value={settings.marginY}
+              onChange={(value) => update({ marginY: value })}
+            />
+          </div>
+        </Group>
+        <Group label="段首缩进">
+          <Chips
+            options={[
+              { key: false, label: "关闭" },
+              { key: true, label: "缩进两字" },
+            ]}
+            value={settings.indent}
+            onChange={(value) => update({ indent: value })}
+          />
+        </Group>
+      </Section>
+
+      <Section title="页面">
+        <Group label="页码">
+          <Chips
+            options={[
+              { key: false, label: "隐藏" },
+              { key: true, label: "显示 N/M 页" },
+            ]}
+            value={settings.showPageNumbers}
+            onChange={(value) => update({ showPageNumbers: value })}
+          />
+        </Group>
+        <Group label="翻页动画">
+          <Chips
+            options={PAGE_TRANSITIONS}
+            value={settings.pageTransition}
+            onChange={(key) => update({ pageTransition: key })}
+          />
+        </Group>
+
+        <Group label="PDF 页面">
+          <div className="w-full min-w-0">
+            <Chips
+              options={[
+                { key: true, label: "铺满屏幕" },
+                { key: false, label: "页边留白" },
+              ]}
+              value={settings.pdfFill}
+              onChange={(value) => update({ pdfFill: value })}
+            />
+            <SliderRow
+              label="双页间距"
+              readout={`${Math.round(settings.pdfGap)} px`}
+              min={0}
+              max={48}
+              value={settings.pdfGap}
+              onChange={(value) => update({ pdfGap: value })}
+            />
+            {/* Independent of the paper surface: night rendering can also be
+              asked for on light paper, and left off on dark paper. */}
+            <Chips
+              options={[
+                { key: false, label: "原色" },
+                { key: true, label: "夜间反色" },
+              ]}
+              value={settings.pdfNight}
+              onChange={(value) => update({ pdfNight: value })}
+            />
+            {settings.pdfNight && (
+              <Chips
+                options={[
+                  { key: false, label: "图片保色" },
+                  { key: true, label: "图片反色" },
+                ]}
+                value={settings.pdfInvertImages}
+                onChange={(value) => update({ pdfInvertImages: value })}
+              />
+            )}
+          </div>
+        </Group>
+      </Section>
+
+      <Section title="外观">
+        <Group label="阅读背景">
+          <div className="grid w-full grid-cols-4 gap-1.5">
+            {READING_SURFACES.map((surface) => {
+              const on = activeSurface === surface.key;
               return (
                 <motion.button
-                  key={preset}
+                  key={surface.key}
                   type="button"
-                  aria-pressed={active}
-                  onClick={() => update({ marginX: preset })}
-                  whileTap={reduce ? undefined : { scale: 0.94 }}
+                  aria-pressed={on}
+                  title={surface.label}
+                  onClick={() => update({ [surfaceField]: surface.key })}
+                  whileTap={reduce ? undefined : { scale: 0.96 }}
                   transition={SPRING.tap}
-                  className={cn(
-                    "border-hairline text-text-2 hover:text-text-1 relative rounded-full border px-2.5 py-1 text-[12px] transition-colors",
-                    active && "border-accent text-accent",
-                  )}
+                  className="flex flex-col items-center gap-1"
                 >
-                  {active && (
-                    <motion.span
-                      layoutId="margin-preset-pill"
-                      className="bg-accent-soft absolute inset-0 rounded-full"
-                      transition={reduce ? { duration: 0 } : SPRING.layout}
-                    />
-                  )}
-                  <span className="relative">{MARGIN_LABELS[index]!}</span>
+                  {/* A miniature of the page itself — its paper, its ink, and
+                      three lines of pretend text. The old picker was a 12 px
+                      colour dot next to a name, which meant choosing by
+                      reading rather than by looking; the thing that actually
+                      differs between these surfaces is how text sits on them,
+                      and that is exactly what a flat dot cannot show. */}
+                  <span className="relative block w-full">
+                    <span
+                      className="border-hairline relative block aspect-[3/4] w-full overflow-hidden rounded-sm border"
+                      style={{ background: surface.background }}
+                    >
+                      <span className="absolute inset-x-1.5 top-2 flex flex-col gap-[3px]">
+                        {[0.92, 0.78, 0.52].map((width) => (
+                          <span
+                            key={width}
+                            className="block h-[2px] rounded-full"
+                            style={{
+                              background: surface.fg,
+                              opacity: 0.5,
+                              width: `${width * 100}%`,
+                            }}
+                          />
+                        ))}
+                      </span>
+                    </span>
+                    {/* One ring, travelling: switching surfaces reads as the
+                        same selection moving, not two things blinking. */}
+                    {on && (
+                      <motion.span
+                        layoutId="surface-ring"
+                        className="border-accent pointer-events-none absolute -inset-[3px] rounded-[5px] border-2"
+                        transition={reduce ? { duration: 0 } : SPRING.layout}
+                      />
+                    )}
+                  </span>
+                  <span
+                    className={cn(
+                      "text-[10.5px] leading-none transition-colors",
+                      on ? "text-accent" : "text-text-3",
+                    )}
+                  >
+                    {surface.label}
+                  </span>
                 </motion.button>
               );
             })}
-          </div>
-          <SliderRow
-            label="左右"
-            readout={`${Math.round(settings.marginX)} px`}
-            min={MIN_MARGIN_X}
-            max={MAX_MARGIN_X}
-            value={settings.marginX}
-            onChange={(value) => update({ marginX: value })}
-          />
-          <SliderRow
-            label="上下"
-            readout={`${Math.round(settings.marginY)} px`}
-            min={MIN_MARGIN_Y}
-            max={MAX_MARGIN_Y}
-            value={settings.marginY}
-            onChange={(value) => update({ marginY: value })}
-          />
-        </div>
-      </Group>
-      <Group label="段首缩进">
-        <Chips
-          options={[
-            { key: false, label: "关闭" },
-            { key: true, label: "缩进两字" },
-          ]}
-          value={settings.indent}
-          onChange={(value) => update({ indent: value })}
-        />
-      </Group>
-      <Group label="页码">
-        <Chips
-          options={[
-            { key: false, label: "隐藏" },
-            { key: true, label: "显示 N/M 页" },
-          ]}
-          value={settings.showPageNumbers}
-          onChange={(value) => update({ showPageNumbers: value })}
-        />
-      </Group>
-
-      <Group label="PDF 页面">
-        <div className="w-full min-w-0">
-          <Chips
-            options={[
-              { key: true, label: "铺满屏幕" },
-              { key: false, label: "页边留白" },
-            ]}
-            value={settings.pdfFill}
-            onChange={(value) => update({ pdfFill: value })}
-          />
-          <SliderRow
-            label="双页间距"
-            readout={`${Math.round(settings.pdfGap)} px`}
-            min={0}
-            max={48}
-            value={settings.pdfGap}
-            onChange={(value) => update({ pdfGap: value })}
-          />
-          {/* Independent of the paper surface: night rendering can also be
-              asked for on light paper, and left off on dark paper. */}
-          <Chips
-            options={[
-              { key: false, label: "原色" },
-              { key: true, label: "夜间反色" },
-            ]}
-            value={settings.pdfNight}
-            onChange={(value) => update({ pdfNight: value })}
-          />
-          {settings.pdfNight && (
-            <Chips
-              options={[
-                { key: false, label: "图片保色" },
-                { key: true, label: "图片反色" },
-              ]}
-              value={settings.pdfInvertImages}
-              onChange={(value) => update({ pdfInvertImages: value })}
+            <SurfaceImageButton
+              on={activeSurface === "custom"}
+              onPick={() => fileRef.current?.click()}
+              reduce={reduce}
             />
-          )}
-        </div>
-      </Group>
-
-      <Group label="阅读背景">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {READING_SURFACES.map((surface) => (
-            <motion.button
-              key={surface.key}
-              type="button"
-              aria-pressed={activeSurface === surface.key}
-              onClick={() => update({ [surfaceField]: surface.key })}
-              whileTap={reduce ? undefined : { scale: 0.94 }}
-              transition={SPRING.tap}
-              className={cn(
-                "border-hairline text-text-2 hover:text-text-1 relative flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
-                activeSurface === surface.key && "border-accent text-accent",
-              )}
-            >
-              {activeSurface === surface.key && (
-                <motion.span
-                  layoutId="surface-pill"
-                  className="bg-accent-soft absolute inset-0 rounded-full"
-                  transition={reduce ? { duration: 0 } : SPRING.layout}
-                />
-              )}
-              <span
-                className="border-hairline relative h-3 w-3 rounded-full border"
-                style={{ background: surface.background }}
-              />
-              <span className="relative">{surface.label}</span>
-            </motion.button>
-          ))}
-          <motion.button
-            type="button"
-            aria-pressed={activeSurface === "custom"}
-            onClick={() => fileRef.current?.click()}
-            whileTap={reduce ? undefined : { scale: 0.94 }}
-            transition={SPRING.tap}
-            className={cn(
-              "border-hairline text-text-2 hover:text-text-1 relative flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
-              activeSurface === "custom" && "border-accent text-accent",
-            )}
-          >
-            {activeSurface === "custom" && (
-              <motion.span
-                layoutId="surface-pill"
-                className="bg-accent-soft absolute inset-0 rounded-full"
-                transition={reduce ? { duration: 0 } : SPRING.layout}
-              />
-            )}
-            <span className="relative flex items-center gap-1.5">
-              <ImageSquare size={12} /> 自定义图片
-            </span>
-          </motion.button>
+          </div>
           {activeSurface === "custom" && (
             <button
               type="button"
@@ -303,75 +318,85 @@ export function SettingsPanel() {
               移除
             </button>
           )}
-        </div>
-        {appTheme === "dark" && (
-          <p className="text-text-3 mt-1.5 text-[12px]">
-            当前为深色外观的阅读背景，浅色外观可在浅色模式下单独设置
-          </p>
-        )}
-      </Group>
+          {appTheme === "dark" && (
+            <p className="text-text-3 mt-1.5 text-[12px]">
+              当前为深色外观的阅读背景，浅色外观可在浅色模式下单独设置
+            </p>
+          )}
+        </Group>
 
-      {nightPage && (
-        <Group label="夜间图片">
-          {/* Off keeps a photograph a photograph; on is for pages whose art is
+        {nightPage && (
+          <Group label="夜间图片">
+            {/* Off keeps a photograph a photograph; on is for pages whose art is
               one bright bitmap (a comic, a scanned plate) and would otherwise
               glare. PDFs keep their own switch below. */}
+            <Chips
+              options={[
+                { key: false, label: "原色" },
+                { key: true, label: "反色" },
+              ]}
+              value={settings.invertBookImages}
+              onChange={(value) => update({ invertBookImages: value })}
+            />
+          </Group>
+        )}
+      </Section>
+
+      <Section title="朗读">
+        <Group label="朗读高亮">
           <Chips
-            options={[
-              { key: false, label: "原色" },
-              { key: true, label: "反色" },
-            ]}
-            value={settings.invertBookImages}
-            onChange={(value) => update({ invertBookImages: value })}
+            options={SPEECH_GRANULARITIES}
+            value={settings.speechGranularity}
+            onChange={(key) => update({ speechGranularity: key })}
           />
         </Group>
-      )}
 
-      <Group label="自动滚动速度">
-        <div className="w-full min-w-0">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex flex-wrap gap-1.5">
-              {AUTO_SCROLL_PRESETS.map((preset) => (
-                <motion.button
-                  key={preset.speed}
-                  type="button"
-                  aria-pressed={nearestPreset(settings.autoScrollSpeed).speed === preset.speed}
-                  onClick={() => update({ autoScrollSpeed: preset.speed })}
-                  whileTap={reduce ? undefined : { scale: 0.94 }}
-                  transition={SPRING.tap}
-                  className={cn(
-                    "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
-                    nearestPreset(settings.autoScrollSpeed).speed === preset.speed &&
-                      "border-accent text-accent",
-                  )}
-                >
-                  {preset.label}
-                </motion.button>
-              ))}
+        <Group label="自动滚动速度">
+          <div className="w-full min-w-0">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex flex-wrap gap-1.5">
+                {AUTO_SCROLL_PRESETS.map((preset) => (
+                  <motion.button
+                    key={preset.speed}
+                    type="button"
+                    aria-pressed={nearestPreset(settings.autoScrollSpeed).speed === preset.speed}
+                    onClick={() => update({ autoScrollSpeed: preset.speed })}
+                    whileTap={reduce ? undefined : { scale: 0.94 }}
+                    transition={SPRING.tap}
+                    className={cn(
+                      "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+                      nearestPreset(settings.autoScrollSpeed).speed === preset.speed &&
+                        "border-accent text-accent",
+                    )}
+                  >
+                    {preset.label}
+                  </motion.button>
+                ))}
+              </div>
+              <motion.button
+                type="button"
+                onClick={() => update({ autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED })}
+                whileTap={reduce ? undefined : { scale: 0.94 }}
+                transition={SPRING.tap}
+                className={cn(
+                  "text-text-3 hover:text-text-1 shrink-0 text-[12px] transition-colors",
+                  settings.autoScrollSpeed === DEFAULT_AUTO_SCROLL_SPEED && "opacity-40",
+                )}
+              >
+                恢复默认
+              </motion.button>
             </div>
-            <motion.button
-              type="button"
-              onClick={() => update({ autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED })}
-              whileTap={reduce ? undefined : { scale: 0.94 }}
-              transition={SPRING.tap}
-              className={cn(
-                "text-text-3 hover:text-text-1 shrink-0 text-[12px] transition-colors",
-                settings.autoScrollSpeed === DEFAULT_AUTO_SCROLL_SPEED && "opacity-40",
-              )}
-            >
-              恢复默认
-            </motion.button>
+            <SliderRow
+              label="速度"
+              readout={`${Math.round(settings.autoScrollSpeed)} px/秒`}
+              min={MIN_AUTO_SCROLL_SPEED}
+              max={MAX_AUTO_SCROLL_SPEED}
+              value={settings.autoScrollSpeed}
+              onChange={(value) => update({ autoScrollSpeed: value })}
+            />
           </div>
-          <SliderRow
-            label="速度"
-            readout={`${Math.round(settings.autoScrollSpeed)} px/秒`}
-            min={MIN_AUTO_SCROLL_SPEED}
-            max={MAX_AUTO_SCROLL_SPEED}
-            value={settings.autoScrollSpeed}
-            onChange={(value) => update({ autoScrollSpeed: value })}
-          />
-        </div>
-      </Group>
+        </Group>
+      </Section>
 
       <input
         ref={fileRef}
@@ -389,6 +414,69 @@ export function SettingsPanel() {
 }
 
 /** A settings row: label on top, controls flow below it left-aligned. */
+/**
+ * A cluster of related groups.
+ *
+ * The panel carries fourteen controls; laid out as one column they read as an
+ * undifferentiated list, and the reader has to work out that 字号 belongs with
+ * 行间距 but not with 翻页动画. Four named clusters give it a shape without
+ * hiding anything behind a disclosure triangle — this is a drawer, not a
+ * settings window.
+ */
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="border-hairline border-t pt-3 first:border-0 first:pt-0">
+      <h3 className="text-text-3 mb-2 text-[11px] tracking-[0.12em]">{title}</h3>
+      <div>{children}</div>
+    </section>
+  );
+}
+
+/** The custom-paper swatch: same footprint as the built-in pages, so the grid
+ *  stays even. */
+function SurfaceImageButton({
+  on,
+  onPick,
+  reduce,
+}: {
+  on: boolean;
+  onPick: () => void;
+  reduce: boolean | null;
+}) {
+  return (
+    <motion.button
+      type="button"
+      aria-pressed={on}
+      title="自定义图片"
+      onClick={onPick}
+      whileTap={reduce ? undefined : { scale: 0.96 }}
+      transition={SPRING.tap}
+      className="flex flex-col items-center gap-1"
+    >
+      <span className="relative block w-full">
+        <span className="border-hairline bg-surface-1 text-text-3 flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-sm border">
+          <ImageSquare size={14} />
+        </span>
+        {on && (
+          <motion.span
+            layoutId="surface-ring"
+            className="border-accent pointer-events-none absolute -inset-[3px] rounded-[5px] border-2"
+            transition={reduce ? { duration: 0 } : SPRING.layout}
+          />
+        )}
+      </span>
+      <span
+        className={cn(
+          "text-[10.5px] leading-none transition-colors",
+          on ? "text-accent" : "text-text-3",
+        )}
+      >
+        自定义
+      </span>
+    </motion.button>
+  );
+}
+
 function Group({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="border-hairline border-b py-3 last:border-0">
