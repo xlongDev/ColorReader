@@ -5,6 +5,7 @@ target
 pnpm-lock.yaml
 coverage
 .workbuddy
+.workbuddy-ai
 
 # vendored pdf.js wasm image decoders, keep verbatim
 public/pdfjs

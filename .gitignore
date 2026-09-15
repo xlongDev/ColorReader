@@ -32,4 +32,5 @@ playwright-report
 
 # WorkBuddy session data
 .workbuddy
+.workbuddy-ai
 *.tsbuildinfo
