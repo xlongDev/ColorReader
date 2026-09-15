@@ -223,6 +223,9 @@ button {
   --dur-fast: 150ms;
   --dur-base: 220ms;
   --dur-slow: 340ms;
+  /* The cover's flight from the shelf to the reader header. Long enough to
+     read as travel, short enough not to hold the reader up. */
+  --dur-flight: 420ms;
 
   /* What a shelf tile casts once it lifts. Composed here rather than inline
      because a bare `shadow-[…]` utility *replaces* the element's whole
