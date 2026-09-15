@@ -1,9 +1,12 @@
-import { useMemo, useState } from "react";
-import { MagnifyingGlass, X } from "@phosphor-icons/react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { motion } from "motion/react";
+import { ClockCounterClockwise, MagnifyingGlass, X } from "@phosphor-icons/react";
 
 import { GlassInput } from "@/components/glass/input";
 import { hitLocation, parseSnippet } from "@/features/search/snippet";
 import { useSearch } from "@/hooks/useSearch";
+import { cn } from "@/lib/cn";
+import { useMotion } from "@/lib/motion";
 import type { SearchHit } from "@/types/ipc";
 
 interface SearchPanelProps {
@@ -15,9 +18,40 @@ interface SearchPanelProps {
   initialQuery?: string;
 }
 
+/** Query history, most recent first. Local on purpose: a reading history is
+ *  the reader's own business and there is nothing to sync it with. */
+const HISTORY_KEY = "colorreader.search-history";
+const HISTORY_MAX = 5;
+
+function readHistory(): string[] {
+  try {
+    const raw: unknown = JSON.parse(localStorage.getItem(HISTORY_KEY) ?? "[]");
+    return Array.isArray(raw)
+      ? raw.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberQuery(query: string): string[] {
+  const next = [query, ...readHistory().filter((entry) => entry !== query)].slice(0, HISTORY_MAX);
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(next));
+  } catch {
+    // A blocked store costs the history, not the search.
+  }
+  return next;
+}
+
 /** Input plus hit list. Fills whatever container it is placed in. */
 export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: SearchPanelProps) {
   const [needle, setNeedle] = useState(initialQuery);
+  const [history, setHistory] = useState<string[]>(readHistory);
+  /** Cursor over the flat hit list, shared by ↑/↓ and the mouse. */
+  const [active, setActive] = useState(-1);
+  const m = useMotion();
+  const listRef = useRef<HTMLDivElement>(null);
   const query = useSearch(needle, bookId);
   const trimmed = needle.trim();
 
@@ -26,6 +60,7 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
     () =>
       (query.data ?? []).map((hit, index) => ({
         hit,
+        at: index,
         key: `${hit.bookId}:${hit.chapterIdx}:${hit.offset}:${index}`,
         parts: parseSnippet(hit.snippet).map((part, partIndex) => ({
           text: part.text,
@@ -36,72 +71,201 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
     [query.data],
   );
 
+  /**
+   * Hits grouped by book when the search spans the library.
+   *
+   * A flat list of twenty snippets drawn from six books is a wall; a per-book
+   * heading with its own count is a table of contents, and it is the only
+   * thing that tells the reader *where* the noise is coming from. Scoped to
+   * one book the heading would just repeat the title, so it is dropped.
+   */
+  const groups = useMemo(() => {
+    if (bookId !== null) return [{ id: "scoped", title: null as string | null, rows }];
+    const byBook = new Map<string, { id: string; title: string | null; rows: typeof rows }>();
+    for (const row of rows) {
+      let group = byBook.get(row.hit.bookId);
+      if (!group) {
+        group = { id: row.hit.bookId, title: row.hit.bookTitle, rows: [] };
+        byBook.set(row.hit.bookId, group);
+      }
+      group.rows.push(row);
+    }
+    return [...byBook.values()];
+  }, [rows, bookId]);
+
+  // A new query invalidates the cursor, and a shorter list can leave it past
+  // the end — either way it starts over at "nothing picked". Reset from the
+  // event that changes the query rather than from an effect on it.
+  const retype = (next: string) => {
+    setNeedle(next);
+    setActive(-1);
+  };
+
+  useEffect(() => {
+    if (active < 0) return;
+    listRef.current?.querySelector('[data-active="true"]')?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
+  const pick = (hit: SearchHit) => {
+    setHistory(rememberQuery(trimmed));
+    onPick(hit, trimmed);
+  };
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === "Escape") {
+      retype("");
+      return;
+    }
+    if (rows.length === 0) return;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      // The caret must not move: the arrows belong to the list, not the field.
+      event.preventDefault();
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      setActive((prev) => {
+        const next = prev + step;
+        if (next < 0) return rows.length - 1;
+        if (next >= rows.length) return 0;
+        return next;
+      });
+      return;
+    }
+    if (event.key === "Enter" && active >= 0) {
+      event.preventDefault();
+      pick(rows[active]!.hit);
+    }
+  };
+
+  const field = (
+    <div className="relative">
+      <MagnifyingGlass
+        size={14}
+        className="text-text-3 pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
+      />
+      <GlassInput
+        value={needle}
+        onChange={(event) => retype(event.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder="搜索正文"
+        aria-label="搜索正文"
+        className="pr-8 pl-8"
+      />
+      {needle.length > 0 && (
+        <button
+          type="button"
+          aria-label="清除搜索"
+          onClick={() => retype("")}
+          className="press text-text-3 hover:text-text-1 focus-visible:focus-ring absolute top-1/2 right-2 -translate-y-1/2 rounded-full p-0.5 transition-colors"
+        >
+          <X size={13} />
+        </button>
+      )}
+    </div>
+  );
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <div className="px-4 pb-3">
-        <div className="relative">
-          <MagnifyingGlass
-            size={14}
-            className="text-text-3 pointer-events-none absolute top-1/2 left-3 -translate-y-1/2"
-          />
-          <GlassInput
-            value={needle}
-            onChange={(event) => setNeedle(event.target.value)}
-            placeholder="搜索正文"
-            aria-label="搜索正文"
-            className="pr-8 pl-8"
-          />
-          {needle.length > 0 && (
-            <button
-              type="button"
-              aria-label="清除搜索"
-              onClick={() => setNeedle("")}
-              className="text-text-3 hover:text-text-1 absolute top-1/2 right-2 -translate-y-1/2 transition-colors"
-            >
-              <X size={13} />
-            </button>
-          )}
-        </div>
-      </div>
+      <div className="px-4 pb-3">{field}</div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
+      <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
         {trimmed.length === 0 ? (
-          <p className="text-text-3 text-[13px] leading-relaxed">
-            输入关键词，
-            {bookId === null ? "在所有已导入的书籍正文里查找" : "在当前这本书的正文里查找"}
-            。点击结果直接跳到那一章。
-          </p>
+          <div className="space-y-3">
+            <p className="text-text-3 text-[13px] leading-relaxed">
+              {bookId === null ? "在所有已导入的书籍正文里查找" : "在当前这本书的正文里查找"}
+              ，用 ↑ ↓ 选择结果，回车跳转。
+            </p>
+            {history.length > 0 && (
+              <div>
+                <p className="text-text-3 flex items-center gap-1.5 text-[11.5px]">
+                  <ClockCounterClockwise size={12} /> 最近搜过
+                </p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {history.map((entry) => (
+                    <button
+                      key={entry}
+                      type="button"
+                      onClick={() => retype(entry)}
+                      className="glass press focus-visible:focus-ring text-text-2 hover:text-text-1 max-w-full truncate rounded-full px-2.5 py-1 text-[12px] transition-colors"
+                    >
+                      {entry}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         ) : query.isPending ? (
-          <p className="text-text-3 text-[13px]">正在检索…</p>
+          // Same shape as a hit, so the list does not jump when it lands.
+          <div className="space-y-3">
+            {Array.from({ length: 3 }, (_, index) => (
+              <div key={index}>
+                <div className="skeleton h-3 w-24 rounded-full" />
+                <div className="skeleton mt-2 h-3.5 w-full rounded-full" />
+                <div className="skeleton mt-1.5 h-3.5 w-2/3 rounded-full" />
+              </div>
+            ))}
+          </div>
         ) : query.isError ? (
           <p className="text-danger text-[13px] leading-relaxed">检索失败：{String(query.error)}</p>
         ) : rows.length === 0 ? (
           <p className="text-text-3 text-[13px] leading-relaxed">没有找到「{trimmed}」。</p>
         ) : (
-          <ul className="space-y-3">
-            {rows.map(({ hit, key, parts }) => (
-              <li key={key} className="border-hairline border-b pb-3 last:border-0 last:pb-0">
-                <button
-                  type="button"
-                  onClick={() => onPick(hit, trimmed)}
-                  className="hover:bg-surface-1 -mx-1 w-full rounded-md px-1 py-0.5 text-left transition-colors"
-                >
-                  <p className="text-text-3 text-xs">{hitLocation(hit, bookId !== null)}</p>
-                  <p className="text-text-1 mt-1 text-[13px] leading-relaxed">
-                    {parts.map((part) =>
-                      part.matched ? (
-                        <mark key={part.key} className="bg-accent-soft rounded-[2px] text-inherit">
-                          {part.text}
-                        </mark>
-                      ) : (
-                        <span key={part.key}>{part.text}</span>
-                      ),
-                    )}
+          <div className="space-y-4">
+            {groups.map((group) => (
+              <section key={group.id}>
+                {group.title && (
+                  <p className="text-text-3 mb-1 flex items-baseline gap-2 text-[11.5px] font-medium">
+                    <span className="truncate">{group.title}</span>
+                    <span className="shrink-0 tabular-nums opacity-70">{group.rows.length}</span>
                   </p>
-                </button>
-              </li>
+                )}
+                <ul>
+                  {group.rows.map(({ hit, at, key, parts }) => {
+                    const on = at === active;
+                    return (
+                      <li key={key} className="relative">
+                        {/* The cursor is one element that glides between rows,
+                            rather than a class toggling on and off — the eye
+                            can follow it. */}
+                        {on && (
+                          <motion.span
+                            layoutId="search-cursor"
+                            className="bg-surface-2 absolute inset-0 rounded-md"
+                            transition={m.layout}
+                          />
+                        )}
+                        <button
+                          type="button"
+                          data-active={on || undefined}
+                          onMouseEnter={() => setActive(at)}
+                          onClick={() => pick(hit)}
+                          className={cn(
+                            "focus-visible:focus-ring relative w-full rounded-md px-2 py-1.5 text-left transition-colors",
+                            !on && "hover:bg-surface-1",
+                          )}
+                        >
+                          <p className="text-text-3 text-xs">{hitLocation(hit, bookId !== null)}</p>
+                          <p className="text-text-1 mt-1 text-[13px] leading-relaxed">
+                            {parts.map((part) =>
+                              part.matched ? (
+                                <mark
+                                  key={part.key}
+                                  className="bg-accent-soft rounded-[2px] text-inherit"
+                                >
+                                  {part.text}
+                                </mark>
+                              ) : (
+                                <span key={part.key}>{part.text}</span>
+                              ),
+                            )}
+                          </p>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         )}
       </div>
     </div>

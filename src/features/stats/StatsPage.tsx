@@ -1,12 +1,14 @@
 import { Clock, Fire, CalendarBlank, TrendUp } from "@phosphor-icons/react";
-import { motion, useReducedMotion } from "motion/react";
+import { motion } from "motion/react";
 import type { ReactNode } from "react";
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassPanel } from "@/components/glass/panel";
+import { Reveal } from "@/components/motion/Reveal";
 import { useLibraryStats } from "@/hooks/useLibrary";
 import { useReadingStats } from "@/hooks/useReading";
 import type { DayTotal } from "@/types/ipc";
+import { staggerDelay, useMotion } from "@/lib/motion";
 
 /**
  * Reading stats: how much time went into reading, and when.
@@ -41,18 +43,26 @@ interface MetricProps {
   label: string;
   value: string;
   hint?: string;
+  /** Entrance offset inside the row of four; see `staggerDelay`. */
+  delay?: number;
 }
 
-function Metric({ icon, label, value, hint }: MetricProps) {
+function Metric({ icon, label, value, hint, delay = 0 }: MetricProps) {
+  const m = useMotion();
   return (
-    <div className="flex items-start gap-3 px-5 py-4">
+    <motion.div
+      initial={{ opacity: 0, y: m.rise }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ ...m.enter, delay }}
+      className="flex items-start gap-3 px-5 py-4"
+    >
       <span className="text-text-3 mt-0.5 flex">{icon}</span>
       <div className="min-w-0">
         <p className="text-text-2 text-xs">{label}</p>
         <p className="text-text-1 mt-0.5 text-xl font-semibold tabular-nums">{value}</p>
         {hint && <p className="text-text-3 mt-0.5 text-[11px]">{hint}</p>}
       </div>
-    </div>
+    </motion.div>
   );
 }
 
@@ -163,7 +173,7 @@ function Legend() {
 }
 
 export function StatsPage() {
-  const reduce = useReducedMotion();
+  const m = useMotion();
   const { data, isPending } = useReadingStats();
   const library = useLibraryStats();
 
@@ -183,59 +193,60 @@ export function StatsPage() {
         {isPending ? (
           <GlassPanel className="h-[92px] animate-pulse" />
         ) : (
-          <motion.div
-            initial={reduce ? false : { opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-          >
-            <GlassPanel className="divide-hairline grid grid-cols-2 divide-y md:grid-cols-4 md:divide-x md:divide-y-0">
-              <Metric
-                icon={<Clock size={18} />}
-                label="今日阅读"
-                value={duration(stats?.todaySeconds ?? 0)}
-              />
-              <Metric
-                icon={<Fire size={18} />}
-                label="连续天数"
-                value={`${stats?.streak ?? 0} 天`}
-                hint={stats?.streak ? "别断在今天" : "今天开一本就续上"}
-              />
-              <Metric
-                icon={<TrendUp size={18} />}
-                label="最近七天"
-                value={duration(stats?.weekSeconds ?? 0)}
-              />
-              <Metric
-                icon={<CalendarBlank size={18} />}
-                label="累计阅读"
-                value={duration(stats?.totalSeconds ?? 0)}
-                hint={`${stats?.daysRead ?? 0} 天有过阅读`}
-              />
-            </GlassPanel>
-          </motion.div>
+          <GlassPanel className="divide-hairline grid grid-cols-2 divide-y md:grid-cols-4 md:divide-x md:divide-y-0">
+            <Metric
+              icon={<Clock size={18} />}
+              label="今日阅读"
+              value={duration(stats?.todaySeconds ?? 0)}
+              delay={staggerDelay(0, m.stagger)}
+            />
+            <Metric
+              icon={<Fire size={18} />}
+              label="连续天数"
+              value={`${stats?.streak ?? 0} 天`}
+              hint={stats?.streak ? "别断在今天" : "今天开一本就续上"}
+              delay={staggerDelay(1, m.stagger)}
+            />
+            <Metric
+              icon={<TrendUp size={18} />}
+              label="最近七天"
+              value={duration(stats?.weekSeconds ?? 0)}
+              delay={staggerDelay(2, m.stagger)}
+            />
+            <Metric
+              icon={<CalendarBlank size={18} />}
+              label="累计阅读"
+              value={duration(stats?.totalSeconds ?? 0)}
+              hint={`${stats?.daysRead ?? 0} 天有过阅读`}
+              delay={staggerDelay(3, m.stagger)}
+            />
+          </GlassPanel>
         )}
 
-        <GlassPanel className="px-5 py-4">
-          {tracked && stats ? (
-            <>
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="text-text-1 text-sm font-medium">过去半年</h2>
-                <Legend />
-              </div>
-              <Heatmap days={stats.days} />
-              <p className="text-text-3 mt-4 text-[11px]">
-                书架里读完 {library.data?.finished ?? 0} 本，在读 {library.data?.reading ?? 0} 本。
-              </p>
-            </>
-          ) : (
-            <EmptyState
-              className="py-10"
-              icon={<Clock size={24} />}
-              title="还没有阅读记录"
-              description="打开一本书读一会儿，这里会按天记下你花了多少时间，半年之后就是一张图。"
-            />
-          )}
-        </GlassPanel>
+        <Reveal delay={staggerDelay(4, m.stagger)}>
+          <GlassPanel className="px-5 py-4">
+            {tracked && stats ? (
+              <>
+                <div className="mb-3 flex items-center justify-between">
+                  <h2 className="text-text-1 text-sm font-medium">过去半年</h2>
+                  <Legend />
+                </div>
+                <Heatmap days={stats.days} />
+                <p className="text-text-3 mt-4 text-[11px]">
+                  书架里读完 {library.data?.finished ?? 0} 本，在读 {library.data?.reading ?? 0}{" "}
+                  本。
+                </p>
+              </>
+            ) : (
+              <EmptyState
+                className="py-10"
+                icon={<Clock size={24} />}
+                title="还没有阅读记录"
+                description="打开一本书读一会儿，这里会按天记下你花了多少时间，半年之后就是一张图。"
+              />
+            )}
+          </GlassPanel>
+        </Reveal>
       </div>
     </div>
   );

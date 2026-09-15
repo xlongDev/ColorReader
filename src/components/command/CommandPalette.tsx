@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { motion } from "motion/react";
 import { ArrowUDownLeft, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { scoreCommand, type Command, type Shortcut } from "@/lib/commands";
@@ -7,6 +8,7 @@ import { useCommandPalette } from "@/stores/command-palette";
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassInput } from "@/components/glass/input";
 import { cn } from "@/lib/cn";
+import { useMotion } from "@/lib/motion";
 
 interface Scored {
   command: Command;
@@ -37,12 +39,21 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const m = useMotion();
 
   // Focus after Radix has mounted the dialog content.
   useEffect(() => {
     const id = window.setTimeout(() => inputRef.current?.focus(), 30);
     return () => window.clearTimeout(id);
   }, []);
+
+  // Arrowing past the fold has to bring the row with it — the cursor is the
+  // only thing telling the reader where they are. Queried by index rather than
+  // by a boolean flag so the effect genuinely reads `active`.
+  useEffect(() => {
+    listRef.current?.querySelector(`[data-row="${active}"]`)?.scrollIntoView({ block: "nearest" });
+  }, [active]);
 
   const results = useMemo<Scored[]>(() => {
     const scored: Scored[] = [];
@@ -104,7 +115,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
           className="border-0 bg-transparent shadow-none focus-visible:border-0 focus-visible:bg-transparent"
         />
       </div>
-      <div className="-mx-1 max-h-[60vh] overflow-y-auto px-1">
+      <div ref={listRef} className="-mx-1 max-h-[60vh] overflow-y-auto px-1">
         {results.length === 0 && (
           <div className="text-text-2 px-2 py-6 text-center text-sm">没有匹配的命令</div>
         )}
@@ -114,42 +125,54 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
               {group}
             </h3>
             <ul>
-              {items.map(({ entry, index }) => (
-                <li key={entry.command.id}>
-                  <button
-                    type="button"
-                    onMouseEnter={() => setActive(index)}
-                    onClick={() => {
-                      onClose();
-                      void entry.command.run();
-                    }}
-                    className={cn(
-                      "flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-2 text-left",
-                      "transition-colors",
-                      index === active
-                        ? "bg-accent-soft text-text-1"
-                        : "text-text-1 hover:bg-surface-1",
+              {items.map(({ entry, index }) => {
+                const on = index === active;
+                return (
+                  <li key={entry.command.id} data-row={index} className="relative">
+                    {/* One element gliding between rows, rather than a class
+                        toggling on and off: ↑↓ is the primary way to move
+                        here, and the eye can follow a thing that moves. */}
+                    {on && (
+                      <motion.span
+                        layoutId="palette-cursor"
+                        className="bg-accent-soft absolute inset-0 rounded-md"
+                        transition={m.layout}
+                      />
                     )}
-                  >
-                    <span className="flex min-w-0 items-center gap-2.5">
-                      <span className="text-text-2">{entry.command.icon}</span>
-                      <span className="min-w-0">
-                        <span className="block truncate text-sm">{entry.command.title}</span>
-                        {entry.command.description && (
-                          <span className="text-text-2 block truncate text-[12px]">
-                            {entry.command.description}
-                          </span>
-                        )}
+                    <button
+                      type="button"
+                      data-active={on || undefined}
+                      onMouseEnter={() => setActive(index)}
+                      onClick={() => {
+                        onClose();
+                        void entry.command.run();
+                      }}
+                      className={cn(
+                        "press focus-visible:focus-ring relative flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-2 text-left",
+                        "transition-colors",
+                        on ? "text-text-1" : "text-text-1 hover:bg-surface-1",
+                      )}
+                    >
+                      <span className="flex min-w-0 items-center gap-2.5">
+                        <span className="text-text-2">{entry.command.icon}</span>
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm">{entry.command.title}</span>
+                          {entry.command.description && (
+                            <span className="text-text-2 block truncate text-[12px]">
+                              {entry.command.description}
+                            </span>
+                          )}
+                        </span>
                       </span>
-                    </span>
-                    {entry.command.shortcut?.[0] && (
-                      <kbd className="text-text-3 font-mono text-[11px]">
-                        {formatShortcut(entry.command.shortcut[0])}
-                      </kbd>
-                    )}
-                  </button>
-                </li>
-              ))}
+                      {entry.command.shortcut?.[0] && (
+                        <kbd className="text-text-3 font-mono text-[11px]">
+                          {formatShortcut(entry.command.shortcut[0])}
+                        </kbd>
+                      )}
+                    </button>
+                  </li>
+                );
+              })}
             </ul>
           </section>
         ))}
@@ -158,7 +181,7 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         <span className="inline-flex items-center gap-1">
           <ArrowUDownLeft size={12} /> 回车执行
         </span>
-        <span>↑↓ 选择 · Esc 关闭</span>
+        <span>{results.length > 0 && `${results.length} 条 · `}↑↓ 选择 · Esc 关闭</span>
       </footer>
     </div>
   );
