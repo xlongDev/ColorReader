@@ -1,7 +1,8 @@
 import { forwardRef, type ReactNode } from "react";
-import { motion, useReducedMotion, type HTMLMotionProps } from "motion/react";
+import { motion, type HTMLMotionProps } from "motion/react";
 
 import { cn } from "@/lib/cn";
+import { useMotion } from "@/lib/motion";
 
 type Variant = "primary" | "ghost" | "subtle";
 type Size = "sm" | "md" | "lg";
@@ -43,14 +44,14 @@ export const GlassButton = forwardRef<HTMLButtonElement, GlassButtonProps>(funct
   },
   ref,
 ) {
-  const reduce = useReducedMotion();
+  const m = useMotion();
   return (
     <motion.button
       ref={ref}
       type={type}
       disabled={disabled}
-      whileTap={reduce || disabled ? undefined : { scale: 0.94 }}
-      transition={{ type: "spring", stiffness: 420, damping: 30 }}
+      whileTap={disabled || m.reduce ? undefined : { scale: 0.94 }}
+      transition={m.tap}
       className={cn(
         "inline-flex items-center justify-center gap-2 border font-medium",
         "focus-visible:focus-ring transition-colors disabled:pointer-events-none disabled:opacity-50",

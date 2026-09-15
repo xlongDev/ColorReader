@@ -29,6 +29,7 @@ import {
   resolveSurface,
 } from "@/features/reader/theme";
 import { SPEECH_GRANULARITIES } from "@/features/reader/speech";
+import { SPRING } from "@/lib/motion";
 
 /**
  * Reading typography and viewing preferences. Every control writes straight
@@ -142,7 +143,7 @@ export function SettingsPanel() {
                   aria-pressed={active}
                   onClick={() => update({ marginX: preset })}
                   whileTap={reduce ? undefined : { scale: 0.94 }}
-                  transition={{ type: "spring", stiffness: 480, damping: 28 }}
+                  transition={SPRING.tap}
                   className={cn(
                     "border-hairline text-text-2 hover:text-text-1 relative rounded-full border px-2.5 py-1 text-[12px] transition-colors",
                     active && "border-accent text-accent",
@@ -152,9 +153,7 @@ export function SettingsPanel() {
                     <motion.span
                       layoutId="margin-preset-pill"
                       className="bg-accent-soft absolute inset-0 rounded-full"
-                      transition={
-                        reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
-                      }
+                      transition={reduce ? { duration: 0 } : SPRING.layout}
                     />
                   )}
                   <span className="relative">{MARGIN_LABELS[index]!}</span>
@@ -251,7 +250,7 @@ export function SettingsPanel() {
               aria-pressed={activeSurface === surface.key}
               onClick={() => update({ [surfaceField]: surface.key })}
               whileTap={reduce ? undefined : { scale: 0.94 }}
-              transition={{ type: "spring", stiffness: 480, damping: 28 }}
+              transition={SPRING.tap}
               className={cn(
                 "border-hairline text-text-2 hover:text-text-1 relative flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
                 activeSurface === surface.key && "border-accent text-accent",
@@ -261,9 +260,7 @@ export function SettingsPanel() {
                 <motion.span
                   layoutId="surface-pill"
                   className="bg-accent-soft absolute inset-0 rounded-full"
-                  transition={
-                    reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
-                  }
+                  transition={reduce ? { duration: 0 } : SPRING.layout}
                 />
               )}
               <span
@@ -278,7 +275,7 @@ export function SettingsPanel() {
             aria-pressed={activeSurface === "custom"}
             onClick={() => fileRef.current?.click()}
             whileTap={reduce ? undefined : { scale: 0.94 }}
-            transition={{ type: "spring", stiffness: 480, damping: 28 }}
+            transition={SPRING.tap}
             className={cn(
               "border-hairline text-text-2 hover:text-text-1 relative flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
               activeSurface === "custom" && "border-accent text-accent",
@@ -288,9 +285,7 @@ export function SettingsPanel() {
               <motion.span
                 layoutId="surface-pill"
                 className="bg-accent-soft absolute inset-0 rounded-full"
-                transition={
-                  reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
-                }
+                transition={reduce ? { duration: 0 } : SPRING.layout}
               />
             )}
             <span className="relative flex items-center gap-1.5">
@@ -343,7 +338,7 @@ export function SettingsPanel() {
                   aria-pressed={nearestPreset(settings.autoScrollSpeed).speed === preset.speed}
                   onClick={() => update({ autoScrollSpeed: preset.speed })}
                   whileTap={reduce ? undefined : { scale: 0.94 }}
-                  transition={{ type: "spring", stiffness: 480, damping: 28 }}
+                  transition={SPRING.tap}
                   className={cn(
                     "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
                     nearestPreset(settings.autoScrollSpeed).speed === preset.speed &&
@@ -358,7 +353,7 @@ export function SettingsPanel() {
               type="button"
               onClick={() => update({ autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED })}
               whileTap={reduce ? undefined : { scale: 0.94 }}
-              transition={{ type: "spring", stiffness: 480, damping: 28 }}
+              transition={SPRING.tap}
               className={cn(
                 "text-text-3 hover:text-text-1 shrink-0 text-[12px] transition-colors",
                 settings.autoScrollSpeed === DEFAULT_AUTO_SCROLL_SPEED && "opacity-40",
@@ -435,7 +430,7 @@ function Chips<K extends string | number | boolean>({
             aria-pressed={active}
             onClick={() => onChange(option.key)}
             whileTap={reduce ? undefined : { scale: 0.94 }}
-            transition={{ type: "spring", stiffness: 480, damping: 28 }}
+            transition={SPRING.tap}
             className={cn(
               "border-hairline text-text-2 hover:text-text-1 relative rounded-full border px-2.5 py-1 text-[12px] transition-colors",
               active && "border-accent text-accent",
@@ -445,9 +440,7 @@ function Chips<K extends string | number | boolean>({
               <motion.span
                 layoutId={`chips-${groupId}`}
                 className="bg-accent-soft absolute inset-0 rounded-full"
-                transition={
-                  reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
-                }
+                transition={reduce ? { duration: 0 } : SPRING.layout}
               />
             )}
             <span className="relative">{option.label}</span>
@@ -477,7 +470,7 @@ function Stepper({
       onClick={onClick}
       disabled={disabled}
       whileTap={reduce || disabled ? undefined : { scale: 0.94 }}
-      transition={{ type: "spring", stiffness: 480, damping: 28 }}
+      transition={SPRING.tap}
       className="border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] font-semibold transition-colors disabled:opacity-40"
     >
       {children}

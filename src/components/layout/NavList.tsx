@@ -24,6 +24,7 @@ import { cn } from "@/lib/cn";
 import { useSettings, type ThemeMode } from "@/stores/settings";
 import { GlassIconButton } from "@/components/glass/button";
 import { useCommandPalette } from "@/stores/command-palette";
+import { DURATION, SPRING } from "@/lib/motion";
 
 interface NavItem {
   to: string;
@@ -44,7 +45,7 @@ const ITEMS: NavItem[] = [
 const ROW = cn(
   "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13.5px]",
   "border border-transparent transition-colors",
-  "focus-visible:focus-ring",
+  "press focus-visible:focus-ring",
 );
 
 function rowState(isActive: boolean): string {
@@ -60,7 +61,7 @@ export function NavList() {
   const iconSpring = {
     initial: reduce ? false : { scale: 0.6, opacity: 0.4 },
     animate: { scale: 1, opacity: 1 },
-    transition: { type: "spring", stiffness: 360, damping: 24 },
+    transition: SPRING.tap,
   } as const;
   return (
     <nav className="flex flex-col gap-0.5 px-1" aria-label="主导航">
@@ -87,7 +88,10 @@ export function NavList() {
               <motion.span
                 initial={false}
                 animate={{ opacity: collapsed ? 0 : 1 }}
-                transition={{ duration: collapsed ? 0.1 : 0.18, delay: collapsed ? 0 : 0.15 }}
+                transition={{
+                  duration: collapsed ? DURATION.fast : DURATION.base,
+                  delay: collapsed ? 0 : 0.15,
+                }}
                 className="whitespace-nowrap"
               >
                 {item.label}
@@ -136,7 +140,7 @@ function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
               initial={reduce ? false : { opacity: 0, scale: 0.5, rotate: -30 }}
               animate={{ opacity: 1, scale: 1, rotate: 0 }}
               exit={reduce ? undefined : { opacity: 0, scale: 0.5, rotate: 30 }}
-              transition={{ type: "spring", stiffness: 500, damping: 30 }}
+              transition={SPRING.tap}
               className="flex"
             >
               <current.icon size={16} />
@@ -189,9 +193,7 @@ function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
                 <motion.span
                   layoutId="sidebar-theme-pill"
                   className="bg-surface-3 shadow-glass absolute inset-0 rounded-full"
-                  transition={
-                    reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
-                  }
+                  transition={reduce ? { duration: 0 } : SPRING.layout}
                 />
               )}
               <Icon size={15} weight={active ? "fill" : "regular"} className="relative" />

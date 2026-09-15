@@ -35,6 +35,7 @@ import type {
   SyncTally,
 } from "@/types/ipc";
 import { cn } from "@/lib/cn";
+import { SPRING, useMotion } from "@/lib/motion";
 
 /**
  * Settings reads as one page of labelled rows, so it is laid out like one: a
@@ -152,7 +153,7 @@ export function SettingsPage() {
                       aria-current={on ? "true" : undefined}
                       onClick={() => jumpTo(id)}
                       className={cn(
-                        "focus-visible:focus-ring flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] whitespace-nowrap transition-colors",
+                        "press focus-visible:focus-ring flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] whitespace-nowrap transition-colors",
                         on
                           ? "bg-surface-3 text-text-1 shadow-glass font-medium"
                           : "text-text-2 hover:text-text-1 hover:bg-surface-1",
@@ -211,8 +212,18 @@ function SettingsGroup({
   badge?: ReactNode;
   children: ReactNode;
 }) {
+  const m = useMotion();
   return (
-    <section id={`settings-${id}`} data-section={id}>
+    // The groups rise together rather than in sequence: the route cross-fade
+    // already owns the page's arrival, and a staggered form is decoration —
+    // the stagger earns its keep on the shelf grid, where it follows content.
+    <motion.section
+      id={`settings-${id}`}
+      data-section={id}
+      initial={{ opacity: 0, y: m.rise }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={m.enter}
+    >
       <GlassCard className="overflow-hidden p-0">
         <div className="flex items-center gap-3 px-5 py-4">
           {/* Hairline-bordered rather than a plain tint: in the light theme a
@@ -230,7 +241,7 @@ function SettingsGroup({
         </div>
         <div className="divide-hairline border-hairline divide-y border-t">{children}</div>
       </GlassCard>
-    </section>
+    </motion.section>
   );
 }
 
@@ -325,9 +336,7 @@ function AppearanceSection({
                   <motion.span
                     layoutId={`settings-theme-${groupId}`}
                     className="bg-surface-3 shadow-glass absolute inset-0 rounded-md"
-                    transition={
-                      reduce ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 35 }
-                    }
+                    transition={reduce ? { duration: 0 } : SPRING.layout}
                   />
                 )}
                 <Icon size={14} weight={active ? "fill" : "regular"} className="relative" />

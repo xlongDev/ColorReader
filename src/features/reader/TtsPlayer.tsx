@@ -35,6 +35,7 @@ import {
   languageName,
   voiceGroups,
 } from "./voice";
+import { SPRING } from "@/lib/motion";
 
 /**
  * The read-aloud player: a pill docked above the footer while a session runs,
@@ -284,7 +285,7 @@ export function TtsPlayer({
             initial={reduce ? { opacity: 1 } : { opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduce ? { opacity: 1 } : { opacity: 0, y: 12 }}
-            transition={{ type: "spring", stiffness: 340, damping: 32 }}
+            transition={SPRING.panel}
           >
             <div className="glass-solid pointer-events-auto relative flex w-[min(92vw,380px)] items-center gap-2.5 overflow-hidden rounded-full py-1.5 pr-2 pl-1.5">
               <Cover url={coverUrl} className="size-8 shrink-0 rounded-xs" />
@@ -350,7 +351,7 @@ export function TtsPlayer({
             initial={reduce ? { opacity: 1 } : { opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduce ? { opacity: 1 } : { opacity: 0, y: 16 }}
-            transition={{ type: "spring", stiffness: 360, damping: 34 }}
+            transition={SPRING.panel}
           >
             {/* `max-h-full` against a bounded wrapper: the voice list grows
                 with the platform's catalogue, and a card taller than the

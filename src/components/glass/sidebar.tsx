@@ -3,6 +3,7 @@ import { motion, useReducedMotion } from "motion/react";
 
 import { useSettings } from "@/stores/settings";
 import { cn } from "@/lib/cn";
+import { SPRING } from "@/lib/motion";
 
 interface GlassSidebarProps {
   children: ReactNode;
@@ -44,7 +45,7 @@ export function GlassSidebar({
         opacity: hidden ? 0 : 1,
         marginLeft: hidden ? -ROW_GAP : 0,
       }}
-      transition={reduce ? { duration: 0 } : { type: "spring", stiffness: 260, damping: 30 }}
+      transition={reduce ? { duration: 0 } : SPRING.panel}
       className={cn(
         overlay ? "glass-solid shadow-panel" : "glass-2 shadow-glass",
         "shrink-0 self-stretch overflow-hidden rounded-2xl",

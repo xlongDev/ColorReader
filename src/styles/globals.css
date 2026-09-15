@@ -81,6 +81,7 @@
   --app-glow-2: rgba(64, 106, 176, 0.22);
   --app-glow-3: rgba(120, 82, 190, 0.12);
   --grain-opacity: 0.035;
+  --shadow-lift: 0 20px 40px -16px rgba(0, 0, 0, 0.6);
 }
 
 /* -- light ----------------------------------------------------------
@@ -111,6 +112,9 @@
   --app-glow-2: rgba(112, 142, 205, 0.38);
   --app-glow-3: rgba(158, 120, 220, 0.16);
   --grain-opacity: 0.02;
+  /* A lifted tile on light paper needs a wider, fainter drop than on dark:
+     the same alpha that reads as depth on black reads as a smudge on white. */
+  --shadow-lift: 0 18px 36px -14px rgba(16, 20, 28, 0.3);
 }
 
 /* -- reduced transparency (system or user opt-out) ------------------ */
@@ -212,6 +216,18 @@ button {
   caret-color: var(--accent);
   accent-color: var(--accent);
   text-underline-offset: 3px;
+
+  /* The CSS half of the motion vocabulary in `src/lib/motion.ts`, which owns
+     the springs. Kept in sync by hand: the page-turn and heat-map animations
+     are CSS keyframes and cannot reach a spring. */
+  --dur-fast: 150ms;
+  --dur-base: 220ms;
+  --dur-slow: 340ms;
+
+  /* What a shelf tile casts once it lifts. Composed here rather than inline
+     because a bare `shadow-[…]` utility *replaces* the element's whole
+     box-shadow — the glass rim's inner highlight included. */
+  --shadow-cover-lift: inset 0 1px 0 var(--highlight), var(--shadow-lift);
 }
 
 ::placeholder {
@@ -335,6 +351,57 @@ button {
 @utility focus-ring {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+/* -- press physics ---------------------------------------------------
+   Dense rows — nav items, list rows, menu entries — cannot afford a motion
+   component each, so their press is CSS: a short, tight scale that eases back.
+   It is the `tap` spring's feel at a fraction of the cost; use the spring
+   itself for the few large surfaces that can carry one. */
+@utility press {
+  transition: transform var(--dur-fast) var(--ease-out);
+
+  &:active {
+    transform: scale(0.985);
+  }
+}
+
+/* -- skeleton shimmer -------------------------------------------------
+   A loading placeholder has to read as "content is coming", not as a broken
+   tile: a soft band travels across the block. Reduced motion holds a steady
+   tint — the movement carries no information, so there is nothing to lose. */
+@keyframes skeleton-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background-color: var(--surface-1);
+}
+
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--highlight) 70%, transparent),
+    transparent
+  );
+  animation: skeleton-sweep 1.4s var(--ease-in-out) infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton::after {
+    animation: none;
+  }
 }
 
 /* -- chapter transitions ---------------------------------------------

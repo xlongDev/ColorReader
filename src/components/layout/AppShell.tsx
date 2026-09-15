@@ -21,6 +21,7 @@ import { useDeepLink } from "@/hooks/useDeepLink";
 import { useFonts } from "@/hooks/useFonts";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
+import { DURATION, EASE_OUT } from "@/lib/motion";
 
 // Sidebar content, shared verbatim by the docked pane and the fullscreen edge
 // overlay — the overlay is the same sidebar the user already has, just
@@ -177,7 +178,7 @@ export function AppShell() {
                   initial={reduce ? false : { opacity: 0, scale: 0.985, filter: "blur(6px)" }}
                   animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
                   exit={reduce ? undefined : { opacity: 0, scale: 0.99, filter: "blur(4px)" }}
-                  transition={{ duration: 0.22, ease: "easeOut" }}
+                  transition={{ duration: reduce ? 0 : DURATION.base, ease: EASE_OUT }}
                   className="h-full"
                 >
                   <Outlet />

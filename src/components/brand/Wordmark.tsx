@@ -1,4 +1,5 @@
 import { motion } from "motion/react";
+import { DURATION } from "@/lib/motion";
 
 interface WordmarkProps {
   /** When the sidebar is collapsed, only the spectrum is shown. */
@@ -22,7 +23,10 @@ export function Wordmark({ compact = false }: WordmarkProps) {
       <motion.span
         initial={false}
         animate={{ opacity: compact ? 0 : 1 }}
-        transition={{ duration: compact ? 0.1 : 0.18, delay: compact ? 0 : 0.15 }}
+        transition={{
+          duration: compact ? DURATION.fast : DURATION.base,
+          delay: compact ? 0 : 0.15,
+        }}
         className="text-text-1 text-[15px] font-semibold tracking-tight whitespace-nowrap"
       >
         ColorReader

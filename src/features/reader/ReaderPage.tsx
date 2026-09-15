@@ -139,6 +139,7 @@ import type {
   RagHit,
   SearchHit,
 } from "@/types/ipc";
+import { DURATION, SPRING } from "@/lib/motion";
 
 /** pdf.js is ~1 MB; it only ever ships inside its own lazy chunk, loaded the
     first time a PDF book is opened. */
@@ -3435,6 +3436,7 @@ function ImageLightbox({
   onIndex: (next: number) => void;
   onJump: (chapterIdx: number) => void;
 }) {
+  const reduce = useReducedMotion();
   const [src, setSrc] = useState<string | null>(null);
   const current = images[index]!;
   const path = current.path;
@@ -3512,7 +3514,7 @@ function ImageLightbox({
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
-      transition={{ duration: 0.18 }}
+      transition={{ duration: reduce ? 0 : DURATION.base }}
     >
       <button
         type="button"
@@ -3538,13 +3540,13 @@ function ImageLightbox({
             key={path}
             src={src}
             alt=""
-            initial={{ opacity: 0, scale: 0.97 }}
+            initial={{ opacity: 0, scale: reduce ? 1 : 0.97 }}
             animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.18 }}
+            transition={reduce ? { duration: 0 } : SPRING.enter}
             className="shadow-panel pointer-events-auto max-h-full max-w-full rounded-xl object-contain"
             style={{
               transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom}) rotate(${rotation}deg)`,
-              transition: dragging ? "none" : "transform 0.22s ease-out",
+              transition: dragging ? "none" : "transform var(--dur-base) var(--ease-out)",
               cursor: zoom > 1 ? (dragging ? "grabbing" : "grab") : "zoom-in",
             }}
             draggable={false}
@@ -3959,7 +3961,7 @@ function ReaderDrawer({
           initial={reduce ? { opacity: 1 } : { opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={reduce ? { opacity: 1 } : { opacity: 0 }}
-          transition={{ duration: 0.2 }}
+          transition={{ duration: reduce ? 0 : DURATION.base }}
           onClick={onClose}
         />
         <motion.div
@@ -3967,7 +3969,7 @@ function ReaderDrawer({
           initial={reduce ? { opacity: 0 } : { x: "110%" }}
           animate={{ x: 0, opacity: 1 }}
           exit={reduce ? { opacity: 0 } : { x: "110%", opacity: 1 }}
-          transition={{ type: "spring", stiffness: 320, damping: 34 }}
+          transition={SPRING.panel}
         >
           <div className="glass-solid shadow-panel flex h-full flex-col rounded-2xl">
             <div className="border-hairline flex items-center justify-between border-b px-4 py-3">

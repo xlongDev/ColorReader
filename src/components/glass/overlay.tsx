@@ -1,9 +1,10 @@
 import type { ReactNode } from "react";
 import { createPortal } from "react-dom";
 import * as Dialog from "@radix-ui/react-dialog";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion } from "motion/react";
 
 import { cn } from "@/lib/cn";
+import { DURATION, useMotion } from "@/lib/motion";
 
 /**
  * The shell's overlay host (see `AppShell`). Resolved lazily and re-resolved
@@ -54,7 +55,7 @@ export function GlassDialog({
   children,
   widthClass = "w-[min(92vw,640px)]",
 }: GlassDialogProps) {
-  const reduce = useReducedMotion();
+  const m = useMotion();
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <AnimatePresence>
@@ -63,10 +64,10 @@ export function GlassDialog({
             <Dialog.Overlay asChild forceMount>
               <motion.div
                 className="backdrop-glass fixed inset-0 z-50 bg-black/40"
-                initial={reduce ? { opacity: 1 } : { opacity: 0 }}
+                initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
-                exit={reduce ? { opacity: 1 } : { opacity: 0 }}
-                transition={{ duration: 0.18 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: m.reduce ? 0 : DURATION.base }}
               />
             </Dialog.Overlay>
             <Dialog.Content asChild forceMount>
@@ -76,10 +77,10 @@ export function GlassDialog({
                   widthClass,
                   "glass-2 shadow-panel rounded-2xl p-5 outline-none",
                 )}
-                initial={reduce ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.96, y: 8 }}
+                initial={{ opacity: 0, scale: m.reduce ? 1 : 0.96, y: m.reduce ? 0 : 8 }}
                 animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={reduce ? { opacity: 1, scale: 1 } : { opacity: 0, scale: 0.98 }}
-                transition={{ type: "spring", stiffness: 320, damping: 30 }}
+                exit={{ opacity: 0, scale: m.reduce ? 1 : 0.98 }}
+                transition={m.panel}
               >
                 {title && (
                   <Dialog.Title className="text-text-1 mb-1 text-base font-semibold">

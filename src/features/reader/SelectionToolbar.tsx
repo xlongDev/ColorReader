@@ -25,6 +25,7 @@ import { OverlayPortal } from "@/components/glass/overlay";
 import type { Annotation, AnnotationStyle } from "@/types/ipc";
 import { HIGHLIGHT_COLORS } from "@/stores/reader";
 import { inkWash } from "./selection";
+import { SPRING } from "@/lib/motion";
 
 /**
  * The floating toolbar a text selection opens (readest-style): the top row
@@ -237,7 +238,7 @@ export function SelectionToolbar({
       initial={reduce ? false : { opacity: 0, scale: 0.92, y: above ? 6 : -6 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={reduce ? undefined : { opacity: 0, scale: 0.95, y: 4 }}
-      transition={{ type: "spring", stiffness: 420, damping: 30 }}
+      transition={SPRING.enter}
     >
       {/* Wraps only when the page forced the panel narrower than the ten
           icons need; at full width `justify-between` keeps the one row. */}
@@ -507,7 +508,7 @@ function LookupPanel({
       initial={reduce ? false : { opacity: 0, scale: 0.95, y: 6 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={reduce ? undefined : { opacity: 0, scale: 0.95 }}
-      transition={{ type: "spring", stiffness: 420, damping: 30 }}
+      transition={SPRING.enter}
     >
       <div className="border-hairline flex items-center justify-between border-b px-4 py-2">
         <p className="text-text-1 text-xs font-medium">{title}</p>
