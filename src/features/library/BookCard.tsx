@@ -21,6 +21,12 @@ interface BookCardProps {
   onToggleSelect?: (book: BookSummary) => void;
 }
 
+/** One hover action on the cover: black glass, white icon — keyed to the cover
+ *  art rather than the theme, so it holds on any cover in either palette. */
+const coverAction =
+  "h-6 w-6 rounded-full border-white/15 bg-black/45 text-white/90 backdrop-blur-[2px] " +
+  "hover:bg-black/65 hover:text-white";
+
 /** One shelf tile: cover, title, authors and quiet hover actions. */
 export function BookCard({
   book,
@@ -109,54 +115,64 @@ export function BookCard({
           </motion.span>
         </span>
       ) : (
-        <div className="glass-solid absolute top-2 right-2 flex gap-1 rounded-full p-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+        <div
+          className={cn(
+            // grid-cols-4 across the cover's own width: the cells shrink with
+            // the cover, so four actions fit a tile at any breakpoint instead
+            // of riding out past the cover's edge (what a fixed-width pill
+            // did on the 6-column shelf).
+            "absolute inset-x-1.5 top-1.5 grid grid-cols-4 place-items-center gap-0.5",
+            "translate-y-1 opacity-0 transition-all duration-200 ease-out",
+            "group-hover:translate-y-0 group-hover:opacity-100",
+            "focus-within:translate-y-0 focus-within:opacity-100",
+            "motion-reduce:transition-none",
+          )}
+        >
+          {/* The chips are inked against the cover (black glass, white icons)
+              rather than against the theme: a shelf tile is always read
+              against its cover art, never against the page behind it, so the
+              same chip must hold on a white cover in day mode and a black one
+              at night. Filled icons carry the "on" state — an accent colour
+              would flip contrast between the themes. */}
           <GlassIconButton
             label={book.favorite ? "取消收藏" : "收藏"}
-            size="sm"
             onClick={(event) => {
               event.stopPropagation();
               onToggleFavorite(book);
             }}
+            className={coverAction}
           >
-            <Star
-              size={14}
-              weight={book.favorite ? "fill" : "regular"}
-              className={book.favorite ? "text-accent" : "text-text-2"}
-            />
+            <Star size={13} weight={book.favorite ? "fill" : "regular"} />
           </GlassIconButton>
           <GlassIconButton
             label="标签"
-            size="sm"
             onClick={(event) => {
               event.stopPropagation();
               onEditTags(book);
             }}
+            className={coverAction}
           >
-            <Tag
-              size={14}
-              weight={book.tags.length > 0 ? "fill" : "regular"}
-              className={book.tags.length > 0 ? "text-accent" : "text-text-2"}
-            />
+            <Tag size={13} weight={book.tags.length > 0 ? "fill" : "regular"} />
           </GlassIconButton>
           <GlassIconButton
             label="导出书档"
-            size="sm"
             onClick={(event) => {
               event.stopPropagation();
               onAskExport(book);
             }}
+            className={coverAction}
           >
-            <Export size={14} className="text-text-2" />
+            <Export size={13} />
           </GlassIconButton>
           <GlassIconButton
             label="删除"
-            size="sm"
             onClick={(event) => {
               event.stopPropagation();
               onAskDelete(book);
             }}
+            className={cn(coverAction, "hover:bg-danger/70")}
           >
-            <Trash size={14} className="text-text-2" />
+            <Trash size={13} />
           </GlassIconButton>
         </div>
       )}
