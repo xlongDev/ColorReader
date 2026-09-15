@@ -52,8 +52,9 @@ export function PdfScrollView({
    *  text plus the span to paint). Only that page receives it. */
   ttsPage?: number | null;
   ttsWash?: { text: string; from: number; to: number } | null;
-  /** A completed text-layer selection on some page. */
-  onSelection?: (range: TextRange, rect: DOMRect, pageNumber: number) => void;
+  /** A completed text-layer selection on some page; `bottom` is the lowest
+   *  line that carries text (see `selectionBottom`). */
+  onSelection?: (range: TextRange, rect: DOMRect, pageNumber: number, bottom: number) => void;
   /** A click on annotated text on some page. */
   onAnnotationClick?: (annotation: Annotation, x: number, y: number, pageNumber: number) => void;
   /** Reports the rendered slot height so the reader can map pages to scroll offsets. */
@@ -148,7 +149,7 @@ export function PdfScrollView({
                 invertImages={invertImages}
                 annotations={annotationsByPage?.get(index)}
                 ttsWash={ttsPage === index ? ttsWash : null}
-                onSelection={(range, rect) => onSelection?.(range, rect, index + 1)}
+                onSelection={(range, rect, bottom) => onSelection?.(range, rect, index + 1, bottom)}
                 onAnnotationClick={(annotation, x, y) =>
                   onAnnotationClick?.(annotation, x, y, index + 1)
                 }

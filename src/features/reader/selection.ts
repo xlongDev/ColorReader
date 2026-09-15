@@ -99,6 +99,26 @@ export function resolveSelection(selection: Selection, paragraphs: string[]): Te
   );
 }
 
+/**
+ * The bottom of the lowest line that actually carries selected text.
+ *
+ * A range whose end sits on a line break — the reader dragged to the end of a
+ * line, or the book's own markup wraps the text with a real newline — reports
+ * one extra, zero-width rect on the *following* line. The bounding box then
+ * reaches a whole line below the words, and a toolbar anchored to it floats in
+ * the middle of the paragraph instead of sitting under the selection. Take the
+ * bottom of the lowest rect with width; fall back to the box when the
+ * selection is a single collapsed point.
+ */
+export function selectionBottom(rects: ArrayLike<DOMRect>, box: DOMRect): number {
+  let bottom = Number.NEGATIVE_INFINITY;
+  for (let at = 0; at < rects.length; at += 1) {
+    const rect = rects[at]!;
+    if (rect.width > 0) bottom = Math.max(bottom, rect.bottom);
+  }
+  return bottom === Number.NEGATIVE_INFINITY ? box.bottom : bottom;
+}
+
 export interface Segment {
   text: string;
   highlighted: boolean;

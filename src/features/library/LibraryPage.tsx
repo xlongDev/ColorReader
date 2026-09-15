@@ -20,7 +20,7 @@ import {
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton } from "@/components/glass/button";
-import { GlassDialog } from "@/components/glass/overlay";
+import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { GlassInput } from "@/components/glass/input";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { BookCard, DeleteBookDialog } from "@/features/library/BookCard";
@@ -346,70 +346,72 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         )}
       </div>
 
-      <AnimatePresence>
-        {managing && (
-          <motion.div
-            initial={{ opacity: 0, y: 16, scale: 0.96, x: "-50%" }}
-            animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
-            exit={{ opacity: 0, y: 16, scale: 0.96, x: "-50%" }}
-            transition={{ type: "spring", stiffness: 420, damping: 30 }}
-            className="glass-2 shadow-panel fixed bottom-6 left-1/2 z-40 flex items-center gap-1.5 rounded-2xl p-2 pl-4"
-          >
-            <span className="text-text-2 mr-1 text-sm whitespace-nowrap">
-              已选{" "}
-              <motion.span
-                key={selected.size}
-                initial={{ y: 8, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                transition={{ type: "spring", stiffness: 500, damping: 30 }}
-                className="text-text-1 inline-block font-semibold tabular-nums"
+      <OverlayPortal>
+        <AnimatePresence>
+          {managing && (
+            <motion.div
+              initial={{ opacity: 0, y: 16, scale: 0.96, x: "-50%" }}
+              animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
+              exit={{ opacity: 0, y: 16, scale: 0.96, x: "-50%" }}
+              transition={{ type: "spring", stiffness: 420, damping: 30 }}
+              className="glass-2 shadow-panel fixed bottom-6 left-1/2 z-40 flex items-center gap-1.5 rounded-2xl p-2 pl-4"
+            >
+              <span className="text-text-2 mr-1 text-sm whitespace-nowrap">
+                已选{" "}
+                <motion.span
+                  key={selected.size}
+                  initial={{ y: 8, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  transition={{ type: "spring", stiffness: 500, damping: 30 }}
+                  className="text-text-1 inline-block font-semibold tabular-nums"
+                >
+                  {selected.size}
+                </motion.span>{" "}
+                本
+              </span>
+              <GlassButton size="sm" variant="subtle" onClick={toggleSelectAll}>
+                {allSelected ? "取消全选" : "全选"}
+              </GlassButton>
+              <GlassButton
+                size="sm"
+                variant="subtle"
+                disabled={selected.size === 0}
+                onClick={openBatchTags}
               >
-                {selected.size}
-              </motion.span>{" "}
-              本
-            </span>
-            <GlassButton size="sm" variant="subtle" onClick={toggleSelectAll}>
-              {allSelected ? "取消全选" : "全选"}
-            </GlassButton>
-            <GlassButton
-              size="sm"
-              variant="subtle"
-              disabled={selected.size === 0}
-              onClick={openBatchTags}
-            >
-              <Tag size={13} /> 打标签
-            </GlassButton>
-            <GlassButton
-              size="sm"
-              variant="subtle"
-              disabled={selected.size === 0 || setFavorite.isPending}
-              onClick={() => batchFavorite(true)}
-            >
-              <Star size={13} /> 收藏
-            </GlassButton>
-            <GlassButton
-              size="sm"
-              variant="subtle"
-              disabled={selected.size === 0 || setFavorite.isPending}
-              onClick={() => batchFavorite(false)}
-            >
-              取消收藏
-            </GlassButton>
-            <GlassButton
-              size="sm"
-              variant="ghost"
-              className="text-danger"
-              disabled={selected.size === 0 || deleteBook.isPending}
-              onClick={() => setBatchDeleteOpen(true)}
-            >
-              删除
-            </GlassButton>
-            <GlassButton size="sm" variant="primary" onClick={exitManaging}>
-              完成
-            </GlassButton>
-          </motion.div>
-        )}
-      </AnimatePresence>
+                <Tag size={13} /> 打标签
+              </GlassButton>
+              <GlassButton
+                size="sm"
+                variant="subtle"
+                disabled={selected.size === 0 || setFavorite.isPending}
+                onClick={() => batchFavorite(true)}
+              >
+                <Star size={13} /> 收藏
+              </GlassButton>
+              <GlassButton
+                size="sm"
+                variant="subtle"
+                disabled={selected.size === 0 || setFavorite.isPending}
+                onClick={() => batchFavorite(false)}
+              >
+                取消收藏
+              </GlassButton>
+              <GlassButton
+                size="sm"
+                variant="ghost"
+                className="text-danger"
+                disabled={selected.size === 0 || deleteBook.isPending}
+                onClick={() => setBatchDeleteOpen(true)}
+              >
+                删除
+              </GlassButton>
+              <GlassButton size="sm" variant="primary" onClick={exitManaging}>
+                完成
+              </GlassButton>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </OverlayPortal>
 
       {sourceOpen && (
         <Suspense fallback={null}>
@@ -426,21 +428,25 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       )}
 
       {dragging && (
-        <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/30">
-          <div className="glass-2 shadow-panel text-text-1 flex items-center gap-3 rounded-2xl px-6 py-5">
-            <Upload size={20} weight="duotone" />
-            <span className="text-sm font-medium">松开手指即可导入</span>
+        <OverlayPortal>
+          <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/30">
+            <div className="glass-2 shadow-panel text-text-1 flex items-center gap-3 rounded-2xl px-6 py-5">
+              <Upload size={20} weight="duotone" />
+              <span className="text-sm font-medium">松开手指即可导入</span>
+            </div>
           </div>
-        </div>
+        </OverlayPortal>
       )}
 
       {picking && progress && (
-        <div className="glass-2 shadow-panel text-text-1 fixed right-6 bottom-6 z-40 flex items-center gap-3 rounded-2xl px-5 py-4">
-          <Upload size={16} className="text-accent" />
-          <span className="text-sm">
-            正在导入 {progress.done}/{progress.total}
-          </span>
-        </div>
+        <OverlayPortal>
+          <div className="glass-2 shadow-panel text-text-1 fixed right-6 bottom-6 z-40 flex items-center gap-3 rounded-2xl px-5 py-4">
+            <Upload size={16} className="text-accent" />
+            <span className="text-sm">
+              正在导入 {progress.done}/{progress.total}
+            </span>
+          </div>
+        </OverlayPortal>
       )}
 
       {lastOutcomes && (
@@ -553,28 +559,30 @@ function ImportSummary({ outcomes, onClose }: { outcomes: ImportOutcome[]; onClo
     (o): o is Extract<ImportOutcome, { kind: "failed" }> => o.kind === "failed",
   );
   return (
-    <div className="glass-2 shadow-panel fixed right-6 bottom-6 z-40 w-80 rounded-2xl p-4">
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-text-1 text-sm font-medium">{summarizeOutcomes(outcomes)}</p>
-        <button
-          type="button"
-          aria-label="关闭"
-          onClick={onClose}
-          className="text-text-3 hover:text-text-1"
-        >
-          <X size={13} />
-        </button>
+    <OverlayPortal>
+      <div className="glass-2 shadow-panel fixed right-6 bottom-6 z-40 w-80 rounded-2xl p-4">
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-text-1 text-sm font-medium">{summarizeOutcomes(outcomes)}</p>
+          <button
+            type="button"
+            aria-label="关闭"
+            onClick={onClose}
+            className="text-text-3 hover:text-text-1"
+          >
+            <X size={13} />
+          </button>
+        </div>
+        {failures.length > 0 && (
+          <ul className="mt-2 space-y-1">
+            {failures.slice(0, 3).map((outcome) => (
+              <li key={outcome.path} className="text-text-3 text-xs break-all">
+                {failedMessage(outcome)}
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
-      {failures.length > 0 && (
-        <ul className="mt-2 space-y-1">
-          {failures.slice(0, 3).map((outcome) => (
-            <li key={outcome.path} className="text-text-3 text-xs break-all">
-              {failedMessage(outcome)}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
+    </OverlayPortal>
   );
 }
 

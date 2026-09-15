@@ -1,8 +1,39 @@
 import type { ReactNode } from "react";
+import { createPortal } from "react-dom";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { cn } from "@/lib/cn";
+
+/**
+ * The shell's overlay host (see `AppShell`). Resolved lazily and re-resolved
+ * while it is missing — a page mounts before the shell's own commit has landed
+ * the host, but long before anything needs to portal into it.
+ */
+let overlayHostEl: HTMLElement | null = null;
+export function overlayHost(): HTMLElement | null {
+  if (!overlayHostEl?.isConnected) {
+    overlayHostEl = document.querySelector<HTMLElement>("[data-overlay-host]");
+  }
+  return overlayHostEl;
+}
+
+/**
+ * Renders floating UI into the shell rather than where it is declared.
+ *
+ * A `backdrop-filter` — the one the glass pane wears for its material — makes
+ * its element the containing block for `position: fixed` descendants, and the
+ * pane is `overflow: hidden` on top of that. A `fixed` overlay left inside a
+ * page is therefore positioned from the pane's own origin instead of the
+ * window's (off by the sidebar and the title bar) and then sliced at the
+ * pane's edge. The host sits in the shell, where `fixed` means the window
+ * again, and it inherits the same `data-theme` and reading-surface tokens the
+ * pages do.
+ */
+export function OverlayPortal({ children }: { children: ReactNode }) {
+  const host = overlayHost();
+  return host ? createPortal(children, host) : children;
+}
 
 interface GlassDialogProps {
   open: boolean;

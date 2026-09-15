@@ -46,6 +46,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { Markdown } from "@/components/common/Markdown";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
+import { OverlayPortal } from "@/components/glass/overlay";
 import { GraphPanel } from "@/features/graph/GraphPanel";
 import { AnnotationNote } from "@/features/reader/AnnotationNote";
 import { GuidePanel } from "@/features/reader/GuidePanel";
@@ -65,6 +66,7 @@ import {
   paragraphAt,
   paragraphStart,
   resolveSelection,
+  selectionBottom,
   type TextRange,
 } from "@/features/reader/selection";
 import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionToolbar";
@@ -203,6 +205,12 @@ const NO_IMAGES: BookImage[] = [];
  * per render would rebuild the stylesheet handed to foliate on every render.
  */
 const NO_FONTS: LocalFont[] = [];
+
+/** Hairline between the header's functional clusters — 导航 / AI / 排版 / 页.
+ *  Nine same-weight glass buttons otherwise read as one undifferentiated row. */
+function HeaderRule() {
+  return <span aria-hidden className="bg-hairline mx-0.5 h-5 w-px shrink-0" />;
+}
 
 /**
  * Stand-in for a PDF's bookmark outline before (or without) the query. A fresh
@@ -578,6 +586,8 @@ function ReaderView({
     range: TextRange;
     x: number;
     y: number;
+    /** Bottom edge of the selection box, so the toolbar can sit right under it. */
+    bottom?: number;
     annotationId?: string;
     /** The chapter (or PDF page, 0-based) the range belongs to; defaults to
      *  the chapter on screen. PDF selections set it — a two-page spread can
@@ -693,6 +703,55 @@ function ReaderView({
   // The foliate view, driven imperatively (see flip /
   // stepChapter): paging and sections never touch our chapter index.
   const foliateRef = useRef<FoliateHandle | null>(null);
+
+  /**
+   * Re-reads the live selection's box and moves the toolbar onto it.
+   *
+   * The toolbar is `position: fixed`, so anything that moves the page under it
+   * — a wheel scroll, a page turn, a font that finished loading — leaves it
+   * pointing at words that are no longer there. That reads as "the toolbar
+   * sits a line away from what I selected", which no amount of care at
+   * selection time can prevent. Both homes of a selection are covered: the
+   * host document (prose, PDF text layer) and a foliate section iframe, whose
+   * own `getSelection` the host cannot see.
+   */
+  const remeasureSelection = useCallback(() => {
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
+      const domRange = selection.getRangeAt(0);
+      const rect = domRange.getBoundingClientRect();
+      const bottom = selectionBottom(domRange.getClientRects(), rect);
+      const x = rect.left + rect.width / 2;
+      setPending((prev) => {
+        // Same object when nothing moved, so a scroll that does not carry the
+        // selection costs no re-render of the whole reader.
+        if (
+          !prev ||
+          (Math.abs(prev.x - x) < 1 &&
+            Math.abs(prev.y - rect.top) < 1 &&
+            Math.abs((prev.bottom ?? 0) - bottom) < 1)
+        ) {
+          return prev;
+        }
+        return { ...prev, x, y: rect.top, bottom };
+      });
+      return;
+    }
+    const box = foliateRef.current?.selectionBox();
+    if (box) setPending((prev) => (prev?.cfi ? { ...prev, ...box } : prev));
+  }, []);
+
+  const toolbarOpen = pending !== null;
+  useEffect(() => {
+    if (!toolbarOpen) return;
+    const el = scrollRef.current;
+    el?.addEventListener("scroll", remeasureSelection, { passive: true });
+    window.addEventListener("resize", remeasureSelection);
+    return () => {
+      el?.removeEventListener("scroll", remeasureSelection);
+      window.removeEventListener("resize", remeasureSelection);
+    };
+  }, [toolbarOpen, remeasureSelection]);
   // Fraction to apply once the current chapter body has rendered. Starts at the
   // saved position, then is reset to the top of the chapter on navigation.
   const pendingScroll = useRef<number>(start.fraction);
@@ -1936,8 +1995,14 @@ function ReaderView({
         setPending(null);
         return;
       }
-      const rect = selection.getRangeAt(0).getBoundingClientRect();
-      setPending({ range, x: rect.left + rect.width / 2, y: rect.top });
+      const domRange = selection.getRangeAt(0);
+      const rect = domRange.getBoundingClientRect();
+      setPending({
+        range,
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+        bottom: selectionBottom(domRange.getClientRects(), rect),
+      });
     };
     el.addEventListener("mouseup", onMouseUp);
     return () => el.removeEventListener("mouseup", onMouseUp);
@@ -2012,14 +2077,18 @@ function ReaderView({
   };
 
   /** PDF text-layer selection: same pill, page-local offsets. */
-  const onPdfSelection = useCallback((range: TextRange, rect: DOMRect, pageNumber: number) => {
-    setPending({
-      range,
-      x: rect.left + rect.width / 2,
-      y: rect.top,
-      chapterIdx: pageNumber - 1,
-    });
-  }, []);
+  const onPdfSelection = useCallback(
+    (range: TextRange, rect: DOMRect, pageNumber: number, bottom: number) => {
+      setPending({
+        range,
+        x: rect.left + rect.width / 2,
+        y: rect.top,
+        bottom,
+        chapterIdx: pageNumber - 1,
+      });
+    },
+    [],
+  );
 
   /** Click on annotated text in the PDF: opens the pill in remove mode. */
   const onPdfAnnotationClick = useCallback(
@@ -2050,6 +2119,7 @@ function ReaderView({
       range: { start: selection.startChar, end: selection.endChar, text: selection.text },
       x: selection.x,
       y: selection.y,
+      bottom: selection.bottom,
       chapterIdx: selection.section,
       cfi: selection.cfi,
     });
@@ -2450,6 +2520,7 @@ function ReaderView({
         >
           <HighlighterCircle size={16} />
         </GlassIconButton>
+        <HeaderRule />
         <GlassIconButton
           label="知识图谱"
           size="sm"
@@ -2466,6 +2537,7 @@ function ReaderView({
         >
           <Sparkle size={16} />
         </GlassIconButton>
+        <HeaderRule />
         <GlassIconButton
           label="阅读设置"
           size="sm"
@@ -2528,6 +2600,7 @@ function ReaderView({
             </GlassIconButton>
           </>
         )}
+        <HeaderRule />
         <GlassIconButton
           label={atBookmark ? "取消本书签" : "添加书签"}
           size="sm"
@@ -2676,6 +2749,7 @@ function ReaderView({
       {/* Reading viewport. In paged modes the flip arrows reveal on hover or
           pointer-down and fade out after 2s, so they never sit on the text. */}
       <div
+        data-reading-viewport
         className="relative flex min-h-0 flex-1"
         onMouseMove={revealFlipHintOnMove}
         onPointerDown={revealFlipHint}
@@ -2683,6 +2757,7 @@ function ReaderView({
       >
         <div
           ref={scrollRef}
+          data-reading-content
           onScroll={onScroll}
           className={cn(
             "min-h-0 flex-1",
@@ -2739,7 +2814,9 @@ function ReaderView({
                       invertImages={pdfInvertImages}
                       annotations={annotationsByPage.get(chapterIdx)}
                       ttsWash={pdfWash}
-                      onSelection={(range, rect) => onPdfSelection(range, rect, chapterIdx + 1)}
+                      onSelection={(range, rect, bottom) =>
+                        onPdfSelection(range, rect, chapterIdx + 1, bottom)
+                      }
                       onAnnotationClick={(annotation, x, y) =>
                         onPdfAnnotationClick(annotation, x, y, chapterIdx + 1)
                       }
@@ -2759,7 +2836,9 @@ function ReaderView({
                         nightBg={pdfNight?.bg ?? null}
                         invertImages={pdfInvertImages}
                         annotations={annotationsByPage.get(chapterIdx + 1)}
-                        onSelection={(range, rect) => onPdfSelection(range, rect, chapterIdx + 2)}
+                        onSelection={(range, rect, bottom) =>
+                          onPdfSelection(range, rect, chapterIdx + 2, bottom)
+                        }
                         onAnnotationClick={(annotation, x, y) =>
                           onPdfAnnotationClick(annotation, x, y, chapterIdx + 2)
                         }
@@ -2807,7 +2886,12 @@ function ReaderView({
                 onAnnotationClick={onFoliateAnnotationClick}
                 onAnchor={onFoliateAnchor}
                 onImageOpen={openBookImage}
-                onLocationChange={rememberFoliateLocation}
+                onLocationChange={(relocate) => {
+                  rememberFoliateLocation(relocate);
+                  // A page turn moves the words, not the toolbar: re-anchor it.
+                  // Only worth measuring while there is one to move.
+                  if (toolbarOpen) remeasureSelection();
+                }}
                 onTocLoaded={setFoliateToc}
               />
             </Suspense>
@@ -3112,6 +3196,7 @@ function ReaderView({
             ? {
                 x: pending.x,
                 y: pending.y,
+                bottom: pending.bottom,
                 annotation: pendingAnnotation,
                 defaultColor: settings.highlightColor,
                 defaultStyle: settings.highlightStyle,
@@ -3280,22 +3365,24 @@ function ReaderView({
       </AnimatePresence>
 
       {/* Lightbox viewer: blank areas close, Esc closes, arrows flip the book's images. */}
-      <AnimatePresence>
-        {lightboxIdx !== null && bookImages.length > 0 && (
-          <ImageLightbox
-            bookId={bookId}
-            images={bookImages}
-            chapters={chapters}
-            index={Math.min(lightboxIdx, bookImages.length - 1)}
-            onClose={() => setLightboxIdx(null)}
-            onIndex={setLightboxIdx}
-            onJump={(target) => {
-              setLightboxIdx(null);
-              goTo(target);
-            }}
-          />
-        )}
-      </AnimatePresence>
+      <OverlayPortal>
+        <AnimatePresence>
+          {lightboxIdx !== null && bookImages.length > 0 && (
+            <ImageLightbox
+              bookId={bookId}
+              images={bookImages}
+              chapters={chapters}
+              index={Math.min(lightboxIdx, bookImages.length - 1)}
+              onClose={() => setLightboxIdx(null)}
+              onIndex={setLightboxIdx}
+              onJump={(target) => {
+                setLightboxIdx(null);
+                goTo(target);
+              }}
+            />
+          )}
+        </AnimatePresence>
+      </OverlayPortal>
 
       {/* Exporting happens over the book, not instead of it: the drawer stays
           where it was, and closing the dialog puts the reader back on the list
@@ -3863,40 +3950,42 @@ function ReaderDrawer({
 }) {
   const reduce = useReducedMotion();
   return (
-    <aside className="fixed inset-0 z-40">
-      <motion.button
-        type="button"
-        aria-label="关闭面板"
-        className="absolute inset-0 cursor-default bg-black/25"
-        initial={reduce ? { opacity: 1 } : { opacity: 0 }}
-        animate={{ opacity: 1 }}
-        exit={reduce ? { opacity: 1 } : { opacity: 0 }}
-        transition={{ duration: 0.2 }}
-        onClick={onClose}
-      />
-      <motion.div
-        className="absolute inset-y-0 right-0 w-80 max-w-[85vw] p-3"
-        initial={reduce ? { opacity: 0 } : { x: "110%" }}
-        animate={{ x: 0, opacity: 1 }}
-        exit={reduce ? { opacity: 0 } : { x: "110%", opacity: 1 }}
-        transition={{ type: "spring", stiffness: 320, damping: 34 }}
-      >
-        <div className="glass-solid shadow-panel flex h-full flex-col rounded-2xl">
-          <div className="border-hairline flex items-center justify-between border-b px-4 py-3">
-            <p className="text-text-1 text-sm font-medium">{title}</p>
-            <button
-              type="button"
-              aria-label={`关闭${title}`}
-              onClick={onClose}
-              className="text-text-3 hover:text-text-1 transition-colors"
-            >
-              <X size={15} />
-            </button>
+    <OverlayPortal>
+      <aside className="fixed inset-0 z-40">
+        <motion.button
+          type="button"
+          aria-label="关闭面板"
+          className="absolute inset-0 cursor-default bg-black/25"
+          initial={reduce ? { opacity: 1 } : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={reduce ? { opacity: 1 } : { opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          onClick={onClose}
+        />
+        <motion.div
+          className="absolute inset-y-0 right-0 w-80 max-w-[85vw] p-3"
+          initial={reduce ? { opacity: 0 } : { x: "110%" }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={reduce ? { opacity: 0 } : { x: "110%", opacity: 1 }}
+          transition={{ type: "spring", stiffness: 320, damping: 34 }}
+        >
+          <div className="glass-solid shadow-panel flex h-full flex-col rounded-2xl">
+            <div className="border-hairline flex items-center justify-between border-b px-4 py-3">
+              <p className="text-text-1 text-sm font-medium">{title}</p>
+              <button
+                type="button"
+                aria-label={`关闭${title}`}
+                onClick={onClose}
+                className="text-text-3 hover:text-text-1 transition-colors"
+              >
+                <X size={15} />
+              </button>
+            </div>
+            {children}
           </div>
-          {children}
-        </div>
-      </motion.div>
-    </aside>
+        </motion.div>
+      </aside>
+    </OverlayPortal>
   );
 }
 

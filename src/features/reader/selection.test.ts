@@ -8,6 +8,7 @@ import {
   paragraphAt,
   paragraphStart,
   segmentText,
+  selectionBottom,
 } from "./selection";
 import type { Annotation } from "@/types/ipc";
 
@@ -157,5 +158,40 @@ describe("paragraphAt", () => {
   it("falls back to the last paragraph past the end", () => {
     expect(paragraphAt(paragraphs, 999)).toBe(2);
     expect(paragraphAt([], 0)).toBe(0);
+  });
+});
+
+/** A line box; `width` is 0 for the caret-width boxes a line break adds. */
+const line = (top: number, bottom: number, width = 40): DOMRect =>
+  ({
+    top,
+    bottom,
+    left: 0,
+    right: width,
+    width,
+    height: bottom - top,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  }) as DOMRect;
+
+describe("selectionBottom", () => {
+  it("takes the lowest line that carries text", () => {
+    const box = line(100, 160);
+    expect(selectionBottom([line(100, 130), line(130, 160)], box)).toBe(160);
+  });
+
+  it("ignores the zero-width box a line break adds on the following line", () => {
+    // The reader stopped at the end of a line, so the range reports the line
+    // it selected plus a caret-width box one line down — the bounding box's
+    // own bottom, which would drop the toolbar a whole line below the words.
+    const box = line(100, 190);
+    expect(selectionBottom([line(100, 130), line(130, 160), line(160, 190, 0)], box)).toBe(160);
+  });
+
+  it("falls back to the bounding box when no line has width", () => {
+    const box = line(100, 130);
+    expect(selectionBottom([line(100, 130, 0)], box)).toBe(130);
+    expect(selectionBottom([], box)).toBe(130);
   });
 });

@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 
 import type { Annotation } from "@/types/ipc";
 
-import { SelectionToolbar } from "./SelectionToolbar";
+import { SelectionOverlay, SelectionToolbar } from "./SelectionToolbar";
 
 /** The highlight a tapped pill edits; `note` is what the field pre-fills from. */
 function highlight(note: string | null = null): Annotation {
@@ -23,29 +23,32 @@ function highlight(note: string | null = null): Annotation {
   };
 }
 
+/** The props a fresh selection hands the toolbar. */
+function toolbarProps(annotation: Annotation | null, onNote = vi.fn(), onHighlight = vi.fn()) {
+  return {
+    x: 400,
+    y: 400,
+    annotation,
+    defaultColor: "#ffd12e",
+    defaultStyle: "highlight" as const,
+    onCopy: vi.fn(),
+    onSearch: vi.fn(),
+    onSpeak: vi.fn(),
+    onAsk: vi.fn(),
+    onLookup: vi.fn(),
+    onHighlight,
+    onRestyle: vi.fn(),
+    onNote,
+    onDelete: vi.fn(),
+    onClose: vi.fn(),
+  };
+}
+
 /** Renders the toolbar and hands back the note spy. */
 function setup(annotation: Annotation | null = null) {
   const onNote = vi.fn();
   const onHighlight = vi.fn();
-  render(
-    <SelectionToolbar
-      x={400}
-      y={400}
-      annotation={annotation}
-      defaultColor="#ffd12e"
-      defaultStyle="highlight"
-      onCopy={vi.fn()}
-      onSearch={vi.fn()}
-      onSpeak={vi.fn()}
-      onAsk={vi.fn()}
-      onLookup={vi.fn()}
-      onHighlight={onHighlight}
-      onRestyle={vi.fn()}
-      onNote={onNote}
-      onDelete={vi.fn()}
-      onClose={vi.fn()}
-    />,
-  );
+  render(<SelectionToolbar {...toolbarProps(annotation, onNote, onHighlight)} />);
   return { onNote };
 }
 
@@ -137,5 +140,31 @@ describe("SelectionToolbar note field", () => {
     await user.click(screen.getByRole("button", { name: "关闭" }));
     expect(onNote).toHaveBeenCalledTimes(1);
     expect(onNote).toHaveBeenCalledWith("收工");
+  });
+});
+
+describe("SelectionOverlay", () => {
+  it("portals the toolbar into the shell's overlay host", () => {
+    // The reading pane carries a `backdrop-filter` for the glass, which makes
+    // it the containing block for `position: fixed` descendants — and it has
+    // `overflow: hidden` too. Rendered in place, the toolbar was measured from
+    // the pane's own origin and sliced at the page's right edge; the host is
+    // the shell's, where `fixed` means the window again.
+    const host = document.createElement("div");
+    host.setAttribute("data-overlay-host", "");
+    document.body.append(host);
+
+    render(<SelectionOverlay toolbar={toolbarProps(null)} lookup={null} onLookupClose={vi.fn()} />);
+
+    const toolbar = document.querySelector("[data-toolbar-rev]");
+    expect(toolbar).not.toBeNull();
+    expect(host.contains(toolbar)).toBe(true);
+
+    host.remove();
+  });
+
+  it("renders nothing while there is no selection and no lookup", () => {
+    render(<SelectionOverlay toolbar={null} lookup={null} onLookupClose={vi.fn()} />);
+    expect(document.querySelector("[data-toolbar-rev]")).toBeNull();
   });
 });

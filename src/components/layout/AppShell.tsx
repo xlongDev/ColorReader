@@ -187,6 +187,21 @@ export function AppShell() {
           </ErrorBoundary>
         </GlassPanel>
       </div>
+      {/* Where the reader's floating overlays are portalled: the selection
+          toolbar and the 词典/翻译 popup.
+
+          A `backdrop-filter` makes its element the containing block for
+          `position: fixed` descendants (as does a `filter` or a `transform`).
+          The pane above carries one for the glass, and it also has
+          `overflow: hidden` — so an overlay rendered inside it was positioned
+          from the pane's own origin and then sliced by the pane's edge. The
+          selection toolbar landed 273px right and 37px low, and lost its right
+          end to the page edge.
+
+          This host sits inside the shell, so the reading surface's tokens and
+          `data-theme` still reach the overlays; everything portalled into it
+          is `position: fixed`, so it takes no room in the column. */}
+      <div data-overlay-host />
       <CommandPalette />
     </div>
   );

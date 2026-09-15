@@ -188,11 +188,19 @@ button {
   font-family: inherit;
 }
 
-input,
-textarea,
-select {
-  font-family: inherit;
-  color: inherit;
+/* Form controls follow the text around them. This lives in @layer base on
+   purpose: unlayered, it outranks every layered utility, so a textarea with
+   .text-text-1 inherited the SHELL's ink instead of the reading surface's —
+   dark notes on the night page's own toolbar, measured on the 划词 note field
+   while the app theme was light and the paper night. Inside the layer, the
+   utility wins and a control without one still inherits. */
+@layer base {
+  input,
+  textarea,
+  select {
+    font-family: inherit;
+    color: inherit;
+  }
 }
 
 /* -- surfaces the browser draws and we did not ----------------------

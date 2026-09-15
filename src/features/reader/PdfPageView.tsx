@@ -16,6 +16,7 @@ import {
   resolveLayerSelection,
 } from "./pdfTextSelection";
 import type { TextRange } from "./selection";
+import { selectionBottom } from "./selection";
 
 /** One rendered PDF page. Fixed layout is the point: fonts, spacing and
     illustrations come out exactly as the document drew them, which text
@@ -73,8 +74,10 @@ export function PdfPageView({
    *  paint (word-narrowed). Only the page whose chapter the voice is on
    *  receives it; `null` on every other page. */
   ttsWash?: { text: string; from: number; to: number } | null;
-  /** A completed text-layer selection, with its viewport rect for the pill. */
-  onSelection?: (range: TextRange, rect: DOMRect) => void;
+  /** A completed text-layer selection, with its viewport rect for the pill.
+   *  `bottom` is the lowest line that really carries text — see
+   *  `selectionBottom` for why the rect's own bottom can be a line too low. */
+  onSelection?: (range: TextRange, rect: DOMRect, bottom: number) => void;
   /** A click on text covered by an existing annotation. */
   onAnnotationClick?: (annotation: Annotation, x: number, y: number) => void;
 }) {
@@ -311,7 +314,9 @@ export function PdfPageView({
       if (!selection || selection.isCollapsed) return;
       const range = resolveLayerSelection(layer, selection);
       if (!range) return;
-      onSelection?.(range, selection.getRangeAt(0).getBoundingClientRect());
+      const domRange = selection.getRangeAt(0);
+      const box = domRange.getBoundingClientRect();
+      onSelection?.(range, box, selectionBottom(domRange.getClientRects(), box));
     };
     const onClick = (event: MouseEvent) => {
       // A collapsed click on annotated text opens its pill; during or right

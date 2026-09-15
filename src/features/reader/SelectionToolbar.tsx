@@ -21,6 +21,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAiChat, useAiConfig } from "@/hooks/useAi";
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
+import { OverlayPortal } from "@/components/glass/overlay";
 import type { Annotation, AnnotationStyle } from "@/types/ipc";
 import { HIGHLIGHT_COLORS } from "@/stores/reader";
 import { inkWash } from "./selection";
@@ -43,6 +44,10 @@ import { inkWash } from "./selection";
 type Props = {
   x: number;
   y: number;
+  /** Bottom edge of the selection box, in host window coordinates — the
+   *  lowest line carrying text, not the range's bounding box (see
+   *  `selectionBottom`). */
+  bottom?: number;
   /** The highlight the reader tapped; set = edit mode. */
   annotation?: Annotation | null;
   /** Reader's last-used ink, so a fresh selection paints predictably. */
@@ -64,13 +69,39 @@ type Props = {
 
 /** Viewport insets that keep the toolbar on screen (px). */
 const EDGE = 12;
-/** Approximate half-width, for clamping the centred anchor. Wide enough for
- *  the action row plus the close button at its widest (a tapped highlight). */
-const HALF = 215;
-/** Approximate toolbar height (two rows), for the above/below flip. */
-const HEIGHT = 92;
-/** Height once the note field is open, its own row under the ink row. */
-const NOTE_HEIGHT = 158;
+/** Toolbar width (px). The action row is 10 icons normally, 11 in edit mode;
+ *  446 leaves a small cushion for borders and avoids crowding. */
+const WIDTH = 446;
+/** Floor for the width when the reading area is narrower than `WIDTH`. Below
+ *  this the icon rows wrap onto a second line rather than shrink further. */
+const MIN_WIDTH = 300;
+/** Approximate height of the action row plus the always-visible ink row (px). */
+const HEIGHT = 84;
+/** Height once the note field is open above the ink row. */
+const NOTE_HEIGHT = 144;
+/** Clearance between the panel's edge and the selection box (px). The box ends
+ *  on the text's own content box, so the line's remaining leading sits below
+ *  it — a hair of clearance drops the icons into the middle of the gap between
+ *  the selected line and the next one rather than below the words. */
+const GAP = 2;
+
+/**
+ * The reading content area's rect, in the window coordinates a `fixed` overlay
+ * lives in.
+ *
+ * The window alone is too generous a frame: the reading card is inset from it
+ * with rounded corners, so a panel clamped to the window pokes past the page
+ * edge when the selection sits near it. We prefer the inner scroll surface
+ * (`[data-reading-content]`), which carries the content's own inline margins,
+ * and fall back to the outer viewport frame only during mount/tests.
+ */
+function readingViewport(): DOMRect | null {
+  return (
+    document.querySelector("[data-reading-content]")?.getBoundingClientRect() ??
+    document.querySelector("[data-reading-viewport]")?.getBoundingClientRect() ??
+    null
+  );
+}
 
 const STYLES: { key: AnnotationStyle; label: string }[] = [
   { key: "highlight", label: "背景高亮" },
@@ -81,6 +112,7 @@ const STYLES: { key: AnnotationStyle; label: string }[] = [
 export function SelectionToolbar({
   x,
   y,
+  bottom,
   annotation,
   defaultColor,
   defaultStyle,
@@ -148,29 +180,47 @@ export function SelectionToolbar({
     copiedTimer.current = window.setTimeout(() => setCopied(false), 1600);
   };
 
-  // Clamp: keep the panel over the page even near the edges, and flip below
-  // the selection when there is no room above. The note row makes the panel
-  // taller, so the flip is measured against the height it currently has; on a
-  // window too narrow for the panel the two horizontal bounds cross and the
-  // left edge wins, which is the best a fixed-size panel can do.
+  // The action row and ink row are always shown together; the note field
+  // expands the panel when open.
   const height = noting ? NOTE_HEIGHT : HEIGHT;
+  const page = readingViewport();
+  // Clamp the whole toolbar inside the content area, treating `x` as the
+  // centre point: left edge must stay >= page.left + EDGE, right edge must
+  // stay <= page.right - EDGE. The width is capped by the page too — a fixed
+  // 446px panel on a narrower reading area could not be clamped at all, and
+  // the left bound would simply win, hanging the toolbar off the page edge.
+  const frameLeft = page?.left ?? 0;
+  const frameRight = page?.right ?? window.innerWidth;
+  const frameBottom = page?.bottom ?? window.innerHeight;
+  const width = Math.min(WIDTH, Math.max(frameRight - frameLeft - EDGE * 2, MIN_WIDTH));
+  const minLeft = frameLeft + EDGE;
   const left = Math.min(
-    Math.max(x, EDGE + HALF),
-    Math.max(window.innerWidth - EDGE - HALF, EDGE + HALF),
+    Math.max(x - width / 2, minLeft),
+    Math.max(frameRight - EDGE - width, minLeft),
   );
-  const above = y >= height + EDGE + 8;
-  const top = above ? y - height - 8 : y + 24;
+  // Anchor the toolbar below the selected text. The host passes the real
+  // selection box bottom from all three renderers; when it is missing (taps on
+  // an existing highlight) we infer a small offset from the top.
+  const anchorBottom = bottom ?? y + 20;
+  const fitsBelow = frameBottom - (anchorBottom + GAP + height + EDGE) >= 0;
+  const above = !fitsBelow;
+  let top = above ? y - height - GAP : anchorBottom + GAP;
+  if (page) {
+    const minTop = page.top + EDGE;
+    top = Math.min(Math.max(top, minTop), Math.max(page.bottom - height - EDGE, minTop));
+  }
 
   const iconBtn =
     "text-text-1 hover:text-accent hover:bg-(--glass-btn) flex h-9 w-9 items-center justify-center rounded-xl transition-colors";
 
   return (
     <motion.div
+      data-toolbar-rev="6"
       // Fixed like the old pill: the selection can sit inside a foliate
       // iframe's coordinate space, and the host window is the only frame both
       // rendering paths agree on.
       className="glass-solid shadow-panel fixed z-40 flex flex-col gap-1 rounded-2xl p-1.5"
-      style={{ left, top, width: HALF * 2 }}
+      style={{ left, top, width }}
       // One blur handler for the whole panel, because only the panel knows
       // whether focus left it: stepping between the toolbar's own controls
       // keeps the draft, and an Escape that closed the field itself must not
@@ -189,7 +239,9 @@ export function SelectionToolbar({
       exit={reduce ? undefined : { opacity: 0, scale: 0.95, y: 4 }}
       transition={{ type: "spring", stiffness: 420, damping: 30 }}
     >
-      <div className="flex items-center justify-between gap-0.5">
+      {/* Wraps only when the page forced the panel narrower than the ten
+          icons need; at full width `justify-between` keeps the one row. */}
+      <div className="flex flex-wrap items-center justify-between">
         <button type="button" aria-label="复制" className={iconBtn} onClick={copy}>
           {copied ? <Check size={16} className="text-accent" /> : <CopySimple size={16} />}
         </button>
@@ -262,7 +314,7 @@ export function SelectionToolbar({
         <button
           type="button"
           aria-label="关闭"
-          className={cn(iconBtn, "text-text-3 h-7 w-7")}
+          className={cn(iconBtn, "text-text-3")}
           onClick={() => {
             // Closing the panel is the reader saying "done", not "discard":
             // a note in the field is written on the way out. Escape is the
@@ -271,12 +323,12 @@ export function SelectionToolbar({
             onClose();
           }}
         >
-          <X size={12} />
+          <X size={16} />
         </button>
       </div>
 
-      {/* Ink row: styles left, colours right, mirroring the readest layout —
-          the two axes of one choice, never stacked in each other's way. */}
+      {/* Ink row: always visible so the reader can switch style and colour
+          without an extra toggle. */}
       <div className="border-hairline flex items-center justify-between gap-2 border-t px-1 pt-1.5 pb-0.5">
         <div className="flex items-center gap-1">
           {STYLES.map(({ key, label }) => (
@@ -434,13 +486,24 @@ function LookupPanel({
   children: React.ReactNode;
 }) {
   const reduce = useReducedMotion();
-  // Keep the panel over the page even near the edges.
-  const PANEL_HALF = 190;
-  const left = Math.min(Math.max(x, EDGE + PANEL_HALF), window.innerWidth - EDGE - PANEL_HALF);
+  // Keep the panel over the page even near the edges — the page's own edges,
+  // not the window's (see `readingViewport`). `x` is the anchor centre; clamp
+  // the left edge so the whole panel stays inside the content area, and cap
+  // its width by the page for the same reason the toolbar does.
+  const PANEL_WIDTH = 380;
+  const page = readingViewport();
+  const frameLeft = page?.left ?? 0;
+  const frameRight = page?.right ?? window.innerWidth;
+  const width = Math.min(PANEL_WIDTH, Math.max(frameRight - frameLeft - EDGE * 2, MIN_WIDTH));
+  const minLeft = frameLeft + EDGE;
+  const left = Math.min(
+    Math.max(x - width / 2, minLeft),
+    Math.max(frameRight - EDGE - width, minLeft),
+  );
   return (
     <motion.div
-      className="glass-solid shadow-panel fixed z-40 flex max-h-80 w-[380px] flex-col overflow-hidden rounded-2xl"
-      style={{ left, top: Math.max(y + 16, EDGE) }}
+      className="glass-solid shadow-panel fixed z-40 flex max-h-80 flex-col overflow-hidden rounded-2xl"
+      style={{ left, top: Math.max(y + 16, EDGE), width }}
       initial={reduce ? false : { opacity: 0, scale: 0.95, y: 6 }}
       animate={{ opacity: 1, scale: 1, y: 0 }}
       exit={reduce ? undefined : { opacity: 0, scale: 0.95 }}
@@ -667,16 +730,30 @@ function WikiLookup({
   );
 }
 
-/** Mount point shared by ReaderPage: toolbar or lookup, never both. */
+/**
+ * Mount point shared by ReaderPage: toolbar or lookup, never both.
+ *
+ * Portalled to the shell's overlay host rather than rendered where it is
+ * declared. The reading pane carries a `backdrop-filter` for the glass, which
+ * makes it the containing block for `position: fixed` descendants — and it has
+ * `overflow: hidden` on top. Left in place, the toolbar was therefore measured
+ * from the pane's own origin instead of the window's (273px right, 37px low on
+ * a default window) and sliced off at the page's right edge, which is exactly
+ * the bug it was reported for.
+ */
 export function SelectionOverlay(props: {
   toolbar: Props | null;
   lookup: { kind: LookupKind; text: string; x: number; y: number } | null;
   onLookupClose: () => void;
 }) {
   return (
-    <AnimatePresence>
-      {props.toolbar && <SelectionToolbar key="toolbar" {...props.toolbar} />}
-      {props.lookup && <QuickLookup key="lookup" {...props.lookup} onClose={props.onLookupClose} />}
-    </AnimatePresence>
+    <OverlayPortal>
+      <AnimatePresence>
+        {props.toolbar && <SelectionToolbar key="toolbar" {...props.toolbar} />}
+        {props.lookup && (
+          <QuickLookup key="lookup" {...props.lookup} onClose={props.onLookupClose} />
+        )}
+      </AnimatePresence>
+    </OverlayPortal>
   );
 }

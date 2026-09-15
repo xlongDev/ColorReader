@@ -8,7 +8,7 @@ import { speechUnits, unitsFromOffset, TTS_WASH_BOOK } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
 import { buildStyleSheet } from "./foliateStyle";
 import type { FoliateStyle } from "./foliateStyle";
-import { inkWash } from "./selection";
+import { inkWash, selectionBottom } from "./selection";
 import { findInSections, findRange, indexText } from "./textAnchor";
 import type { TextIndex } from "./textAnchor";
 
@@ -44,6 +44,10 @@ export type FoliateSelection = {
   /** Viewport coordinates of the selection box, for the floating pill. */
   x: number;
   y: number;
+  /** Bottom edge of the selection box in host window coordinates — the last
+   *  line that carries text, not the range's bounding box (see
+   *  `selectionBottom`). */
+  bottom: number;
 };
 
 /** One full-text match, with the words around it for the hit list. */
@@ -130,6 +134,11 @@ export type FoliateHandle = {
   paintSpan: (unit: SpeechUnit, span: Span) => void;
   /** Drops the read-aloud wash. */
   clearTts: () => void;
+  /** Where the live selection sits now, in host window coordinates — or
+   *  `null` when the section has nothing selected. The host's own
+   *  `getSelection` cannot see inside a section iframe, so the pill asks here
+   *  to follow the words it belongs to across a page turn or a scroll. */
+  selectionBox: () => { x: number; y: number; bottom: number } | null;
 };
 
 /**
@@ -498,6 +507,35 @@ const toHostPoint = (owner: Document | null, rect: { left: number; top: number }
 };
 
 /**
+ * The live selection's box in host window coordinates, or `null` when the
+ * section has nothing selected. The one place the pill's anchor is measured,
+ * so its first placement and every later re-measurement agree.
+ */
+function measureSelection(
+  doc: Document,
+): { range: Range; owner: Document; box: { x: number; y: number; bottom: number } } | null {
+  const selection = doc.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  const box = range.getBoundingClientRect();
+  if (box.width === 0 && box.height === 0) return null;
+  const owner = range.startContainer.ownerDocument ?? doc;
+  const point = toHostPoint(owner, box);
+  // `toHostPoint` shifts by the section iframe's own origin, so the last
+  // line's in-frame bottom needs that same shift added back.
+  const frameY = point.y - box.top;
+  return {
+    range,
+    owner,
+    box: {
+      x: point.x + box.width / 2,
+      y: point.y,
+      bottom: selectionBottom(range.getClientRects(), box) + frameY,
+    },
+  };
+}
+
+/**
  * True when a range inside a section falls inside the view's own box.
  *
  * Both axes have to be tested, not just the vertical one. The two flows move
@@ -750,15 +788,14 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   const captureSelection = useCallback((doc: Document) => {
     const view = viewRef.current;
     const renderer = view?.renderer;
-    const selection = doc.getSelection();
-    if (!view || !renderer || !selection || selection.isCollapsed || selection.rangeCount === 0) {
+    const measured = view && renderer ? measureSelection(doc) : null;
+    if (!view || !renderer || !measured) {
       spotAnchor.current = null;
       selectReport.current?.(null);
       return;
     }
-    const range = selection.getRangeAt(0);
+    const { range, owner, box } = measured;
     spotAnchor.current = { node: range.startContainer, offset: range.startOffset };
-    const owner = range.startContainer.ownerDocument ?? doc;
     const index = renderer.getContents().find((entry) => entry.doc === owner)?.index;
     const text = range.toString();
     if (index === undefined || text.trim() === "") {
@@ -772,16 +809,13 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     head.selectNodeContents(owner.body ?? owner.documentElement);
     head.setEnd(range.startContainer, range.startOffset);
     const startChar = head.toString().length;
-    const box = range.getBoundingClientRect();
-    const point = toHostPoint(owner, box);
     selectReport.current?.({
       cfi: view.getCFI(index, range),
       text: text.trim(),
       section: index,
       startChar,
       endChar: startChar + text.length,
-      x: point.x + box.width / 2,
-      y: point.y,
+      ...box,
     });
   }, []);
 
@@ -1160,6 +1194,16 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         const href = tocRef.current[index]?.href;
         if (!view || !href) return;
         void view.goTo(href);
+      },
+      selectionBox: () => {
+        // Every mounted section is searched, not just the one on screen: a
+        // selection can outlive the page turn that carried its section away,
+        // and its own section is still the only place that knows where it is.
+        for (const entry of viewRef.current?.renderer?.getContents() ?? []) {
+          const measured = measureSelection(entry.doc);
+          if (measured) return measured.box;
+        }
+        return null;
       },
       scrollByPx: (delta, subpixel) => {
         const renderer = viewRef.current?.renderer;
