@@ -141,7 +141,7 @@ function Transport({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="text-text-2 hover:text-text-1 hover:bg-surface-2 focus-visible:focus-ring grid size-8 place-items-center rounded-full transition-colors"
+      className="press text-text-2 hover:text-text-1 hover:bg-surface-2 focus-visible:focus-ring grid size-8 place-items-center rounded-full transition-colors"
     >
       {children}
     </button>
@@ -162,7 +162,7 @@ function Chip({
       type="button"
       onClick={onClick}
       className={cn(
-        "focus-visible:focus-ring shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
+        "press focus-visible:focus-ring shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
         active ? "bg-accent text-on-accent" : "text-text-2 hover:text-text-1 bg-surface-2",
       )}
     >
@@ -187,11 +187,11 @@ function SettingsRow({
     <button
       type="button"
       onClick={onClick}
-      className="hover:bg-surface-2 focus-visible:focus-ring flex flex-1 flex-col items-center gap-1 rounded-sm py-2 transition-colors"
+      className="press hover:bg-surface-2 focus-visible:focus-ring flex flex-1 flex-col items-center gap-1 rounded-sm py-2 transition-colors"
     >
       <span className="text-text-2">{icon}</span>
-      <span className="text-text-1 max-w-full truncate text-[11.5px] font-medium">{label}</span>
-      <span className="text-text-3 text-[10px]">{caption}</span>
+      <span className="text-text-1 max-w-full truncate text-[12px] font-medium">{label}</span>
+      <span className="text-text-3 text-[11px]">{caption}</span>
     </button>
   );
 }
@@ -299,7 +299,7 @@ export function TtsPlayer({
                   {title}
                   {chapter !== "" && <span className="text-text-3"> · {chapter}</span>}
                 </p>
-                <p className="text-text-3 truncate text-[10.5px] tabular-nums">
+                <p className="text-text-3 truncate text-[11px] tabular-nums">
                   {error ?? (
                     <>
                       {status === "paused" ? "已暂停 · " : ""}
@@ -371,7 +371,7 @@ export function TtsPlayer({
                   </button>
                 )}
                 <div className="min-w-0 flex-1 pt-0.5">
-                  <p className="text-text-1 truncate text-[13px] font-medium">{title}</p>
+                  <p className="text-text-1 truncate text-[13.5px] font-medium">{title}</p>
                   <p className="text-text-3 mt-0.5 truncate text-[11px]">
                     {chapter !== "" ? chapter : "朗读"}
                   </p>
@@ -386,10 +386,10 @@ export function TtsPlayer({
                 </button>
               </header>
 
-              {view === "main" ? (
+              {view === "main" && (
                 <>
                   {error !== null && (
-                    <p className="text-text-2 mt-3 text-[11.5px] leading-relaxed">{error}</p>
+                    <p className="text-text-2 mt-3 text-[12px] leading-relaxed">{error}</p>
                   )}
                   <div className="mt-3.5 space-y-1.5" aria-live="polite">
                     {neighbours.before !== "" && (
@@ -422,57 +422,62 @@ export function TtsPlayer({
                     />
                     <span>-{formatClock(remaining)}</span>
                   </div>
-
-                  <div className="mt-2.5 flex items-center justify-center gap-1.5">
-                    <Transport label="上一段" onClick={() => onSkip(-1)}>
-                      <SkipBack size={15} weight="fill" />
-                    </Transport>
-                    <Transport label="上一句" onClick={() => onStep(-1)}>
-                      <CaretLeft size={16} weight="bold" />
-                    </Transport>
-                    <button
-                      type="button"
-                      aria-label={status === "playing" ? "暂停" : "播放"}
-                      onClick={onToggle}
-                      className="bg-accent text-on-accent focus-visible:focus-ring mx-1 grid size-11 place-items-center rounded-full transition-opacity hover:opacity-90"
-                    >
-                      {status === "playing" ? (
-                        <Pause size={17} weight="fill" />
-                      ) : (
-                        <Play size={17} weight="fill" />
-                      )}
-                    </button>
-                    <Transport label="下一句" onClick={() => onStep(1)}>
-                      <CaretRight size={16} weight="bold" />
-                    </Transport>
-                    <Transport label="下一段" onClick={() => onSkip(1)}>
-                      <SkipForward size={15} weight="fill" />
-                    </Transport>
-                  </div>
-
-                  <div className="border-hairline mt-3 flex gap-1 border-t pt-2">
-                    <SettingsRow
-                      icon={<Gauge size={16} />}
-                      label={`${rate}×`}
-                      caption="语速"
-                      onClick={() => setView("speed")}
-                    />
-                    <SettingsRow
-                      icon={<SpeakerHigh size={16} />}
-                      label={active?.name ?? "默认"}
-                      caption={active?.engine === "edge" ? "在线语音" : "语音"}
-                      onClick={() => setView("voice")}
-                    />
-                    <SettingsRow
-                      icon={<Timer size={16} />}
-                      label={sleepLabel(sleep)}
-                      caption="定时关闭"
-                      onClick={() => setView("timer")}
-                    />
-                  </div>
                 </>
+              )}
+
+              {/* Transport sits outside the view switch: tuning the rate or
+                  picking a voice is something you do *while listening*, and the
+                  old drill-down took play/pause away with the text. */}
+              <div className="mt-2.5 flex items-center justify-center gap-1.5">
+                <Transport label="上一段" onClick={() => onSkip(-1)}>
+                  <SkipBack size={15} weight="fill" />
+                </Transport>
+                <Transport label="上一句" onClick={() => onStep(-1)}>
+                  <CaretLeft size={16} weight="bold" />
+                </Transport>
+                <button
+                  type="button"
+                  aria-label={status === "playing" ? "暂停" : "播放"}
+                  onClick={onToggle}
+                  className="bg-accent text-on-accent focus-visible:focus-ring mx-1 grid size-11 place-items-center rounded-full transition-opacity hover:opacity-90"
+                >
+                  {status === "playing" ? (
+                    <Pause size={17} weight="fill" />
+                  ) : (
+                    <Play size={17} weight="fill" />
+                  )}
+                </button>
+                <Transport label="下一句" onClick={() => onStep(1)}>
+                  <CaretRight size={16} weight="bold" />
+                </Transport>
+                <Transport label="下一段" onClick={() => onSkip(1)}>
+                  <SkipForward size={15} weight="fill" />
+                </Transport>
+              </div>
+
+              {view === "main" ? (
+                <div className="border-hairline mt-3 flex gap-1 border-t pt-2">
+                  <SettingsRow
+                    icon={<Gauge size={16} />}
+                    label={`${rate}×`}
+                    caption="语速"
+                    onClick={() => setView("speed")}
+                  />
+                  <SettingsRow
+                    icon={<SpeakerHigh size={16} />}
+                    label={active?.name ?? "默认"}
+                    caption={active?.engine === "edge" ? "在线语音" : "语音"}
+                    onClick={() => setView("voice")}
+                  />
+                  <SettingsRow
+                    icon={<Timer size={16} />}
+                    label={sleepLabel(sleep)}
+                    caption="定时关闭"
+                    onClick={() => setView("timer")}
+                  />
+                </div>
               ) : view === "speed" ? (
-                <div className="mt-4 flex flex-wrap gap-1.5">
+                <div className="mt-3 flex flex-wrap gap-1.5">
                   {SPEECH_RATES.map((value) => (
                     <Chip key={value} active={value === rate} onClick={() => onRate(value)}>
                       {value}×
@@ -480,9 +485,9 @@ export function TtsPlayer({
                   ))}
                 </div>
               ) : view === "voice" ? (
-                <div className="mt-3 flex min-h-0 flex-col">
+                <div className="mt-3 flex min-h-0 flex-1 flex-col">
                   {edgeError !== null ? (
-                    <p className="text-text-3 mb-2 text-[11.5px] leading-relaxed">
+                    <p className="text-text-3 mb-2 text-[12px] leading-relaxed">
                       {edgeError}
                       <button
                         type="button"
@@ -494,7 +499,7 @@ export function TtsPlayer({
                     </p>
                   ) : (
                     missingDefault && (
-                      <p className="text-text-3 mb-2 text-[11.5px] leading-relaxed">
+                      <p className="text-text-3 mb-2 text-[12px] leading-relaxed">
                         没有找到 {DEFAULT_VOICE_NAME}，朗读会用下面选中的语音；连上网络即可使用 Edge
                         在线语音里的 {DEFAULT_VOICE_NAME}。
                       </p>
@@ -524,12 +529,12 @@ export function TtsPlayer({
                   <div className="border-hairline min-h-0 flex-1 overflow-y-auto border-t">
                     {groups.map((group) => (
                       <div key={group.engine}>
-                        <p className="bg-surface-2 text-text-2 sticky top-0 flex h-6 items-center px-2 text-[10.5px] font-medium">
+                        <p className="bg-surface-2 text-text-2 sticky top-0 flex h-6 items-center px-2 text-[11px] font-medium">
                           {group.label}
                         </p>
                         {group.sections.map((section) => (
                           <div key={section.lang}>
-                            <p className="bg-surface-3 text-text-3 sticky top-6 flex h-6 items-center px-2 text-[10.5px]">
+                            <p className="bg-surface-3 text-text-3 sticky top-6 flex h-6 items-center px-2 text-[11px]">
                               {section.label}
                             </p>
                             {section.voices.map((voice) => (
@@ -538,18 +543,18 @@ export function TtsPlayer({
                                 type="button"
                                 onClick={() => onVoice(voice.uri)}
                                 className={cn(
-                                  "focus-visible:focus-ring hover:bg-surface-2 flex w-full items-center gap-2 rounded-xs px-2 py-2 text-left transition-colors",
+                                  "press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-center gap-2 rounded-xs px-2 py-2 text-left transition-colors",
                                   voice.uri === active?.uri && "text-accent",
                                 )}
                               >
-                                <span className="text-text-1 flex-1 truncate text-[12.5px]">
+                                <span className="text-text-1 flex-1 truncate text-[12px]">
                                   {voice.name}
                                 </span>
                                 {/* The service tags nearly every voice
                                     "General"; the label only earns its row
                                     when it actually tells voices apart. */}
                                 {voice.categories !== "" && voice.categories !== "General" && (
-                                  <span className="text-text-3 shrink-0 text-[10.5px]">
+                                  <span className="text-text-3 shrink-0 text-[11px]">
                                     {voice.categories}
                                   </span>
                                 )}
@@ -563,7 +568,7 @@ export function TtsPlayer({
                   </div>
                 </div>
               ) : (
-                <div className="mt-4">
+                <div className="mt-3">
                   <div className="flex flex-wrap gap-1.5">
                     <Chip active={sleep === null} onClick={() => onSleep("off")}>
                       关闭
@@ -581,7 +586,7 @@ export function TtsPlayer({
                       本章结束
                     </Chip>
                   </div>
-                  <p className="text-text-3 mt-3 text-[11.5px] leading-relaxed">
+                  <p className="text-text-3 mt-3 text-[12px] leading-relaxed">
                     {sleep === null ? (
                       "到点自动停止朗读，适合睡前听。"
                     ) : sleep.kind === "chapter" ? (
