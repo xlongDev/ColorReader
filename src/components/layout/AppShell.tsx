@@ -169,16 +169,32 @@ export function AppShell() {
                 so a plain fallback is enough. */}
             <Suspense fallback={null}>
               {/* Cross-fade between pages: the outgoing view holds its ground
-                  while the incoming one resolves from a soft blur — a depth
-                  cue that suits pane-style navigation more than vertical
-                  motion. pathname keys keep the reader route stable across
-                  chapter navigations (query-only changes). */}
+                  while the incoming one settles from a hair smaller. pathname
+                  keys keep the reader route stable across chapter navigations
+                  (query-only changes).
+
+                  This used to animate `filter: blur(6px)` as a depth cue. Two
+                  reasons it does not any more:
+
+                  1. Blurring a whole page re-rasterises its layer every frame,
+                     which is the most expensive thing this shell could animate
+                     and it ran on every navigation.
+                  2. A `filter` — even `blur(0px)` — makes its element the
+                     containing block for `position: fixed` descendants. The
+                     resting value this left on the wrapper is exactly what put
+                     the reader's selection toolbar 273 px off and sliced it at
+                     the pane edge. `blur(0px)` looks like nothing and is not.
+
+                  The scale carries the depth by itself: motion normalises
+                  `scale(1)` to `transform: none`, so at rest the wrapper is
+                  neither a filter nor a transform and fixed overlays inside a
+                  page behave the way the author expects. */}
               <AnimatePresence mode="popLayout" initial={false}>
                 <motion.div
                   key={pathname}
-                  initial={reduce ? false : { opacity: 0, scale: 0.985, filter: "blur(6px)" }}
-                  animate={{ opacity: 1, scale: 1, filter: "blur(0px)" }}
-                  exit={reduce ? undefined : { opacity: 0, scale: 0.99, filter: "blur(4px)" }}
+                  initial={reduce ? false : { opacity: 0, scale: 0.98 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={reduce ? undefined : { opacity: 0, scale: 0.985 }}
                   transition={{ duration: reduce ? 0 : DURATION.base, ease: EASE_OUT }}
                   className="h-full"
                 >
