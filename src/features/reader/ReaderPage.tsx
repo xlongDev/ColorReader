@@ -40,6 +40,7 @@ import { AnimatePresence, useReducedMotion } from "motion/react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
+import { Reveal } from "@/components/motion/Reveal";
 import { GraphPanel } from "@/features/graph/GraphPanel";
 import { AnnotationList } from "@/features/reader/AnnotationList";
 import { AskAiPanel } from "@/features/reader/AskAiPanel";
@@ -2919,98 +2920,106 @@ function ReaderView({
               setPanel("none");
             }}
           >
-            {panel === "toc" && (
-              <TocPanel
-                chapters={useFoliateToc ? foliateChapters : chapters}
-                outline={outline}
-                currentIdx={useFoliateToc ? foliateTocIdx : chapterIdx}
-                bookmarks={bookmarks ?? []}
-                busy={createBookmark.isPending || deleteBookmark.isPending}
-                onJump={(idx) => {
-                  setPanel("none");
-                  if (useFoliateToc) {
-                    foliateRef.current?.goToEntry(idx);
-                    return;
-                  }
-                  goTo(idx);
-                }}
-                onJumpBookmark={(bookmark: Bookmark) => {
-                  setPanel("none");
-                  jumpTo(bookmark.chapterIdx, bookmark.fraction);
-                }}
-                onDeleteBookmark={(id) => deleteBookmark.mutate(id)}
-                onAddBookmark={addBookmark}
-              />
-            )}
-            {panel === "settings" && <SettingsPanel />}
-            {panel === "annotations" && (
-              <AnnotationList
-                annotations={annotations ?? []}
-                busy={deleteAnnotation.isPending || setAnnotationNote.isPending}
-                onDelete={(id) => deleteAnnotation.mutate(id)}
-                onNote={(id, note) => setAnnotationNote.mutate({ id, note })}
-                onExport={() => setExportingNotes(true)}
-                onJump={
-                  useFoliate
-                    ? (annotation) => {
-                        setPanel("none");
-                        // A highlight with no anchor still has its text and the
-                        // chapter it was recorded in, and those are enough: the
-                        // chapter's own start is the landmark foliate can use,
-                        // and the view mints the anchor from the text once it
-                        // is there. The fraction is how the two numbering
-                        // schemes meet (see `rememberFoliateLocation`).
-                        foliateRef.current?.goToHighlight({
-                          id: annotation.id,
-                          cfi: annotation.cfi,
-                          text: annotation.text,
-                          fraction: globalProgress(chapters, annotation.chapterIdx, 0),
-                        });
-                      }
-                    : undefined
-                }
-              />
-            )}
-            {panel === "search" &&
-              (useFoliate ? (
-                <FoliateSearchPanel
-                  initialQuery={searchSeed}
-                  onSearch={(query) => foliateRef.current?.search(query) ?? Promise.resolve([])}
-                  onPick={(cfi) => {
+            {/* Keyed so a swap rises in. The drawer stays put while its
+                content changes, and cutting between panels as different as a
+                chapter list and a settings sheet reads as a jump rather than
+                a step sideways. `flex min-h-0 flex-1 flex-col` preserves
+                every panel's own fill-the-drawer layout — they all root
+                the same way. */}
+            <Reveal key={panel} className="flex min-h-0 flex-1 flex-col">
+              {panel === "toc" && (
+                <TocPanel
+                  chapters={useFoliateToc ? foliateChapters : chapters}
+                  outline={outline}
+                  currentIdx={useFoliateToc ? foliateTocIdx : chapterIdx}
+                  bookmarks={bookmarks ?? []}
+                  busy={createBookmark.isPending || deleteBookmark.isPending}
+                  onJump={(idx) => {
                     setPanel("none");
-                    foliateRef.current?.goToCfi(cfi);
+                    if (useFoliateToc) {
+                      foliateRef.current?.goToEntry(idx);
+                      return;
+                    }
+                    goTo(idx);
                   }}
+                  onJumpBookmark={(bookmark: Bookmark) => {
+                    setPanel("none");
+                    jumpTo(bookmark.chapterIdx, bookmark.fraction);
+                  }}
+                  onDeleteBookmark={(id) => deleteBookmark.mutate(id)}
+                  onAddBookmark={addBookmark}
                 />
-              ) : (
-                <SearchPanel
+              )}
+              {panel === "settings" && <SettingsPanel />}
+              {panel === "annotations" && (
+                <AnnotationList
+                  annotations={annotations ?? []}
+                  busy={deleteAnnotation.isPending || setAnnotationNote.isPending}
+                  onDelete={(id) => deleteAnnotation.mutate(id)}
+                  onNote={(id, note) => setAnnotationNote.mutate({ id, note })}
+                  onExport={() => setExportingNotes(true)}
+                  onJump={
+                    useFoliate
+                      ? (annotation) => {
+                          setPanel("none");
+                          // A highlight with no anchor still has its text and the
+                          // chapter it was recorded in, and those are enough: the
+                          // chapter's own start is the landmark foliate can use,
+                          // and the view mints the anchor from the text once it
+                          // is there. The fraction is how the two numbering
+                          // schemes meet (see `rememberFoliateLocation`).
+                          foliateRef.current?.goToHighlight({
+                            id: annotation.id,
+                            cfi: annotation.cfi,
+                            text: annotation.text,
+                            fraction: globalProgress(chapters, annotation.chapterIdx, 0),
+                          });
+                        }
+                      : undefined
+                  }
+                />
+              )}
+              {panel === "search" &&
+                (useFoliate ? (
+                  <FoliateSearchPanel
+                    initialQuery={searchSeed}
+                    onSearch={(query) => foliateRef.current?.search(query) ?? Promise.resolve([])}
+                    onPick={(cfi) => {
+                      setPanel("none");
+                      foliateRef.current?.goToCfi(cfi);
+                    }}
+                  />
+                ) : (
+                  <SearchPanel
+                    bookId={bookId}
+                    initialQuery={searchSeed}
+                    onPick={(hit, needle) => {
+                      setSearch(needle);
+                      pickHit(hit);
+                    }}
+                  />
+                ))}
+              {panel === "graph" && (
+                <GraphPanel
                   bookId={bookId}
-                  initialQuery={searchSeed}
-                  onPick={(hit, needle) => {
-                    setSearch(needle);
-                    pickHit(hit);
+                  onOpenChapter={(idx) => {
+                    setPanel("none");
+                    goTo(idx);
                   }}
                 />
-              ))}
-            {panel === "graph" && (
-              <GraphPanel
-                bookId={bookId}
-                onOpenChapter={(idx) => {
-                  setPanel("none");
-                  goTo(idx);
-                }}
-              />
-            )}
-            {panel === "ai" && (
-              <AskAiPanel
-                bookId={bookId}
-                selection={aiContext}
-                onClearSelection={() => setAiContext(null)}
-                chapterTitle={chapterTitle || `第 ${chapterIdx + 1} 章`}
-                paragraphs={chapterData?.paragraphs ?? []}
-                onJump={jumpToCitation}
-              />
-            )}
-            {panel === "guide" && <GuidePanel bookId={bookId} />}
+              )}
+              {panel === "ai" && (
+                <AskAiPanel
+                  bookId={bookId}
+                  selection={aiContext}
+                  onClearSelection={() => setAiContext(null)}
+                  chapterTitle={chapterTitle || `第 ${chapterIdx + 1} 章`}
+                  paragraphs={chapterData?.paragraphs ?? []}
+                  onJump={jumpToCitation}
+                />
+              )}
+              {panel === "guide" && <GuidePanel bookId={bookId} />}
+            </Reveal>
           </ReaderDrawer>
         )}
       </AnimatePresence>

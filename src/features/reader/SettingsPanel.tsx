@@ -253,7 +253,10 @@ export function SettingsPanel() {
                   onClick={() => update({ [surfaceField]: surface.key })}
                   whileTap={reduce ? undefined : { scale: 0.96 }}
                   transition={SPRING.tap}
-                  className="flex flex-col items-center gap-1"
+                  // `min-w-0`: a grid item's automatic minimum size is its
+                  // content, so a label wider than the column would blow the
+                  // track out and spill past the panel's padding.
+                  className="flex min-w-0 flex-col items-center gap-1"
                 >
                   {/* A miniature of the page itself — its paper, its ink, and
                       three lines of pretend text. The old picker was a 12 px
@@ -285,14 +288,14 @@ export function SettingsPanel() {
                     {on && (
                       <motion.span
                         layoutId="surface-ring"
-                        className="border-accent pointer-events-none absolute -inset-[3px] rounded-[5px] border-2"
+                        className="border-accent pointer-events-none absolute -inset-[3px] rounded-[calc(var(--radius-sm)+3px)] border-2"
                         transition={reduce ? { duration: 0 } : SPRING.layout}
                       />
                     )}
                   </span>
                   <span
                     className={cn(
-                      "text-[10.5px] leading-none transition-colors",
+                      "max-w-full truncate text-[10.5px] leading-none transition-colors",
                       on ? "text-accent" : "text-text-3",
                     )}
                   >
@@ -451,7 +454,7 @@ function SurfaceImageButton({
       onClick={onPick}
       whileTap={reduce ? undefined : { scale: 0.96 }}
       transition={SPRING.tap}
-      className="flex flex-col items-center gap-1"
+      className="flex min-w-0 flex-col items-center gap-1"
     >
       <span className="relative block w-full">
         <span className="border-hairline bg-surface-1 text-text-3 flex aspect-[3/4] w-full items-center justify-center overflow-hidden rounded-sm border">
@@ -460,14 +463,14 @@ function SurfaceImageButton({
         {on && (
           <motion.span
             layoutId="surface-ring"
-            className="border-accent pointer-events-none absolute -inset-[3px] rounded-[5px] border-2"
+            className="border-accent pointer-events-none absolute -inset-[3px] rounded-[calc(var(--radius-sm)+3px)] border-2"
             transition={reduce ? { duration: 0 } : SPRING.layout}
           />
         )}
       </span>
       <span
         className={cn(
-          "text-[10.5px] leading-none transition-colors",
+          "max-w-full truncate text-[10.5px] leading-none transition-colors",
           on ? "text-accent" : "text-text-3",
         )}
       >

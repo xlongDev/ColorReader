@@ -221,6 +221,12 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
                 <ul>
                   {group.rows.map(({ hit, at, key, parts }) => {
                     const on = at === active;
+                    // No entrance animation on these rows, on purpose. The
+                    // query runs on every keystroke (see `useSearch`:
+                    // debouncing would only add lag), and a row's key carries
+                    // its index, so any reorder remounts it — a stagger here
+                    // would re-run on each keypress and read as flicker rather
+                    // than polish. Instant is what fast feels like.
                     return (
                       <li key={key} className="relative">
                         {/* The cursor is one element that glides between rows,
@@ -239,7 +245,10 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
                           onMouseEnter={() => setActive(at)}
                           onClick={() => pick(hit)}
                           className={cn(
-                            "focus-visible:focus-ring relative w-full rounded-md px-2 py-1.5 text-left transition-colors",
+                            // `press` carries the colour transition; adding
+                            // `transition-colors` on top would drop the
+                            // transform from the list and kill the press.
+                            "press focus-visible:focus-ring relative w-full rounded-md px-2 py-1.5 text-left",
                             !on && "hover:bg-surface-1",
                           )}
                         >
