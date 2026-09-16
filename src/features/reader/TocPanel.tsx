@@ -48,10 +48,24 @@ export function TocPanel({
   onAddBookmark: () => void;
 }) {
   const currentRef = useRef<HTMLButtonElement>(null);
+  const navRef = useRef<HTMLElement>(null);
 
-  // Opening the drawer should land on where the reader already is.
+  // Opening the drawer should land on where the reader already is — but it has
+  // to be this panel's own scroller that moves, not `scrollIntoView`, which
+  // walks *every* scrollable ancestor. The drawer is anchored inside the
+  // reading viewport now, and while the sheet is still sliding in from the
+  // right the current row counts as off-screen, so `scrollIntoView` scrolled
+  // the reading area sideways to reach it and the whole panel lurched on open.
+  // Measuring the row against the scroller touches nothing but the scroller,
+  // and the subtraction cancels the entrance transform — it moves both rects
+  // by the same amount.
   useEffect(() => {
-    currentRef.current?.scrollIntoView({ block: "center" });
+    const nav = navRef.current;
+    const row = currentRef.current;
+    if (!nav || !row) return;
+    const navRect = nav.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    nav.scrollTop += rowRect.top - navRect.top - (nav.clientHeight - rowRect.height) / 2;
   }, []);
 
   const rows = useMemo(() => tocRows(chapters, outline), [chapters, outline]);
@@ -113,7 +127,7 @@ export function TocPanel({
           </button>
         )}
       </div>
-      <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" aria-label="目录">
+      <nav ref={navRef} className="min-h-0 flex-1 overflow-y-auto px-3 pb-3" aria-label="目录">
         <ul className="space-y-0.5">
           {tree.map((node) => (
             <TocBranch

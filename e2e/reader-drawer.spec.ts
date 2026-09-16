@@ -31,6 +31,7 @@ interface Metrics {
   drawerBottom: number | null;
   drawerRight: number | null;
   viewportRight: number | null;
+  asideScroll: [number, number] | null;
   insideViewport: boolean;
   panelOverflowBy: number | null;
 }
@@ -56,6 +57,10 @@ function measure(): Metrics {
     drawerBottom: d ? round(d.bottom) : null,
     drawerRight: d ? round(d.right) : null,
     viewportRight: vp ? round(vp.right) : null,
+    // `scrollIntoView` walks every scrollable ancestor, so a panel that
+    // centres its current row that way drags the whole aside sideways inside
+    // its own box — the content lurches even though nothing outside moved.
+    asideScroll: drawer ? [Math.round(drawer.scrollLeft), Math.round(drawer.scrollTop)] : null,
     insideViewport: drawer !== null && drawer.parentElement === viewport,
     panelOverflowBy: scroller ? scroller.scrollWidth - scroller.clientWidth : null,
   };
@@ -106,12 +111,20 @@ test("the drawer is bounded by the header and the footer, and never reflows the 
     );
     expect(m.docScrollWidth, `${key}: document must not scroll sideways`).toBe(m.innerWidth);
     expect(m.panelOverflowBy, `${key}: panel content must not overflow sideways`).toBe(0);
+    // A panel scrolling its own scroller is fine; a panel scrolling the drawer
+    // is not. `scrollIntoView` walks every scrollable ancestor, so a panel that
+    // centres its current row that way drags the whole sheet sideways inside
+    // its own box and the content lurches on open. Nothing outside moves, which
+    // is exactly what makes this one easy to miss.
+    expect(m.asideScroll, `${key}: the drawer must not be scrolled inside its own box`).toEqual([
+      0, 0,
+    ]);
     // Opening a panel must not touch the page's own layout.
     expect(await page.evaluate(paragraphEdges), `${key}: the book must not reflow`).toEqual(
       closedEdges,
     );
 
     await page.keyboard.press("Escape");
-    await page.waitForTimeout(600);
+    await page.waitForTimeout(700);
   }
 });

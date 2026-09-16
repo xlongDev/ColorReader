@@ -40,6 +40,15 @@ export function ReaderDrawer({
   const reduce = useReducedMotion();
 
   const sheet = (
+    // Deliberately *not* `overflow: hidden`. The sheet slides out to
+    // `x: 110%`, which does paint past this box for the length of the exit —
+    // but that is ink overflow on a `visible` ancestor, nothing scrolls, and
+    // the pane clips it anyway. Clipping here instead would turn the aside
+    // into a scroll container, and a scroll container is exactly what
+    // `scrollIntoView` reaches for: a panel centring its current row used to
+    // drag the whole sheet sideways inside this box. It would also shear off
+    // the card's own shadow (`0 30px 80px`), which needs more room than the
+    // 12px of padding this box leaves it.
     <aside className="absolute inset-0 z-40">
       <motion.button
         type="button"
