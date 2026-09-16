@@ -1982,11 +1982,7 @@ function ReaderView({
         ? nav === 1
           ? "chapter-paper-fwd"
           : "chapter-paper-back"
-        : pageTransition === "slide"
-          ? nav === 1
-            ? "chapter-slide-fwd"
-            : "chapter-slide-back"
-          : "";
+        : "";
 
   const articleStyle: CSSProperties = {
     fontSize: `${fontSize}px`,

@@ -26,7 +26,7 @@ export interface ReadingSurface {
   mode: "light" | "dark";
 }
 
-export type PageTransition = "none" | "slide" | "pan" | "fade" | "paper" | "peel-br" | "peel-tr";
+export type PageTransition = "none" | "pan" | "fade" | "paper";
 export type LayoutMode = "scroll" | "single" | "double";
 
 export const READING_SURFACES: ReadingSurface[] = [
@@ -48,7 +48,7 @@ export const READING_SURFACES: ReadingSurface[] = [
   },
   {
     key: "green",
-    label: "绿色护眼",
+    label: "绿色",
     background: "#e4eee2",
     fg: "#2c3a2c",
     tint: "#e2ecdf",
@@ -239,12 +239,9 @@ export function fontFaceCss(fonts: readonly Pick<LocalFont, "id" | "url">[]): st
 
 export const PAGE_TRANSITIONS: { key: PageTransition; label: string }[] = [
   { key: "none", label: "无" },
-  { key: "slide", label: "左右平移" },
-  { key: "pan", label: "平移" },
+  { key: "pan", label: "左右平移" },
   { key: "fade", label: "淡入淡出" },
   { key: "paper", label: "仿真书页" },
-  { key: "peel-br", label: "右下角翻页" },
-  { key: "peel-tr", label: "右上角翻页" },
 ];
 
 export const LAYOUT_MODES: { key: LayoutMode; label: string }[] = [

@@ -123,11 +123,23 @@ describe("flipPage", () => {
     );
   });
 
-  it("mirrors the crease axis for the top-right peel", () => {
+  it("keeps the native smooth scroll for the pan transition", () => {
     const node = animated();
-    flipPage(node, 960, "peel-tr", 1, false);
+    flipPage(node, 960, "pan", 1, false);
+    expect(node.scrollTo).toHaveBeenCalledWith({ left: 960, behavior: "smooth" });
+    expect(node.animate).not.toHaveBeenCalled();
+  });
+
+  it("swings the incoming page about the spine for the paper transition", () => {
+    const node = animated();
+    flipPage(node, 960, "paper", 1, false);
     const frames = (node.animate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Keyframe[];
-    expect(String(frames[0]!.transform)).toContain("0.667");
-    expect(String(frames[0]!.transform)).toContain("12deg");
+    // A forward turn hinges on the left edge, and swings in from -10deg.
+    expect(frames[0]!.transformOrigin).toBe("left center");
+    expect(String(frames[0]!.transform)).toContain("rotateY(-10deg)");
+    expect(node.animate).toHaveBeenCalledWith(
+      expect.any(Array),
+      expect.objectContaining({ duration: 400 }),
+    );
   });
 });

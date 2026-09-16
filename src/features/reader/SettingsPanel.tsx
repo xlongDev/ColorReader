@@ -199,14 +199,20 @@ export function SettingsPanel() {
 
         <Group label="PDF 页面">
           <div className="w-full min-w-0">
-            <Chips
-              options={[
-                { key: true, label: "铺满屏幕" },
-                { key: false, label: "页边留白" },
-              ]}
-              value={settings.pdfFill}
-              onChange={(value) => update({ pdfFill: value })}
-            />
+            {/* Each row is its own flex box, and the slider carries `mt-2` of
+                its own: without that the chips below it sat in the slider's
+                line box and ended up tighter than every other pair of rows in
+                the panel. Same rhythm as 页边距. */}
+            <div className="flex flex-wrap gap-1.5">
+              <Chips
+                options={[
+                  { key: true, label: "铺满屏幕" },
+                  { key: false, label: "页边留白" },
+                ]}
+                value={settings.pdfFill}
+                onChange={(value) => update({ pdfFill: value })}
+              />
+            </div>
             <SliderRow
               label="双页间距"
               readout={`${Math.round(settings.pdfGap)} px`}
@@ -217,24 +223,26 @@ export function SettingsPanel() {
             />
             {/* Independent of the paper surface: night rendering can also be
               asked for on light paper, and left off on dark paper. */}
-            <Chips
-              options={[
-                { key: false, label: "原色" },
-                { key: true, label: "夜间反色" },
-              ]}
-              value={settings.pdfNight}
-              onChange={(value) => update({ pdfNight: value })}
-            />
-            {settings.pdfNight && (
+            <div className="mt-2 flex flex-wrap gap-1.5">
               <Chips
                 options={[
-                  { key: false, label: "图片保色" },
-                  { key: true, label: "图片反色" },
+                  { key: false, label: "原色" },
+                  { key: true, label: "夜间反色" },
                 ]}
-                value={settings.pdfInvertImages}
-                onChange={(value) => update({ pdfInvertImages: value })}
+                value={settings.pdfNight}
+                onChange={(value) => update({ pdfNight: value })}
               />
-            )}
+              {settings.pdfNight && (
+                <Chips
+                  options={[
+                    { key: false, label: "图片保色" },
+                    { key: true, label: "图片反色" },
+                  ]}
+                  value={settings.pdfInvertImages}
+                  onChange={(value) => update({ pdfInvertImages: value })}
+                />
+              )}
+            </div>
           </div>
         </Group>
       </Section>

@@ -422,20 +422,6 @@ button {
 /* -- chapter transitions ---------------------------------------------
    The reader remounts the article per chapter; the entry animation is the
    "page turn". Reduced motion gets an instant swap. */
-@keyframes chapter-fwd {
-  from {
-    opacity: 0;
-    transform: translateX(48px);
-  }
-}
-
-@keyframes chapter-back {
-  from {
-    opacity: 0;
-    transform: translateX(-48px);
-  }
-}
-
 @keyframes chapter-fade {
   from {
     opacity: 0;
@@ -469,14 +455,6 @@ button {
   }
 }
 
-.chapter-slide-fwd {
-  animation: chapter-fwd 0.32s var(--ease-out) both;
-}
-
-.chapter-slide-back {
-  animation: chapter-back 0.32s var(--ease-out) both;
-}
-
 .chapter-fade {
   animation: chapter-fade 0.36s var(--ease-out) both;
 }
@@ -492,8 +470,6 @@ button {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chapter-slide-fwd,
-  .chapter-slide-back,
   .chapter-fade,
   .chapter-paper-fwd,
   .chapter-paper-back {

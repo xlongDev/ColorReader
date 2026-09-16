@@ -313,33 +313,19 @@ type Props = {
  * in place (no overflow); paper curls inward (minor overflow possible but
  * contained by typical reading-pane proportions).
  *
- * **`peel-br` / `peel-tr`** — also layered View Transition styles, but these
- * fold the outgoing page over the diagonal crease joining the opposite corners
- * instead of cross-fading it: `peel-br` grabs the bottom-right corner and folds
- * toward the top-left, `peel-tr` grabs the top-right and folds toward the
- * bottom-left. Pure transform + opacity, so they composite — no mask, no
- * per-frame re-raster. Perspective magnifies the swinging corner, so the
- * paginator clips the transition group to the page box.
- *
  * `animated` is the master switch; without it (`none`) every turn is instant.
  */
 const ANIMATED: Record<PageTransition, boolean> = {
   none: false,
-  slide: true,
   pan: true,
   fade: true,
   paper: true,
-  "peel-br": true,
-  "peel-tr": true,
 };
 const TURN_STYLE: Record<PageTransition, string | null> = {
   none: null,
-  slide: null,
   pan: null,
   fade: "fade",
   paper: "curl",
-  "peel-br": "peel-br",
-  "peel-tr": "peel-tr",
 };
 
 /**

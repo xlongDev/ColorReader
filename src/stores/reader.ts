@@ -168,7 +168,7 @@ export const useReaderSettings = create<ReaderState>()(
       surface: "standard",
       nightSurface: "night",
       customSurface: null,
-      pageTransition: "slide",
+      pageTransition: "pan",
       layoutMode: "scroll",
       autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
       readingSpeed: DEFAULT_READING_SPEED,
@@ -194,7 +194,7 @@ export const useReaderSettings = create<ReaderState>()(
       // Bump only when a stored value changes meaning; a newly added key needs
       // no bump — the default merge layers the persisted state over the
       // initial one.
-      version: 5,
+      version: 6,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are
       // continuous px now and the scale was rebased (old 特宽 = new 标准).
@@ -202,6 +202,12 @@ export const useReaderSettings = create<ReaderState>()(
       //   stored `pan` → `slide` (both resolve to the same native pan path).
       // v5: the single `peel` was split into two corner-grab variants;
       //   coerce stored `peel` → `peel-br` (the bottom-right grab).
+      // v6: the left-right slide and both corner peels were dropped from the
+      //   picker — the reader kept none / pan / fade / paper. Every one of
+      //   those values falls back to `pan`, which is the same native pan path
+      //   `slide` used, so a stored preference degrades to what it looked
+      //   like rather than to nothing. v4's `pan → slide` coercion is gone
+      //   with it: `pan` is a real option again.
       migrate: (persisted) => {
         const state = persisted as Partial<ReaderState> & {
           autoScrollIdx?: number;
@@ -215,8 +221,15 @@ export const useReaderSettings = create<ReaderState>()(
           next.marginX = MARGIN_X_PRESETS[state.marginIdx ?? 1] ?? DEFAULT_MARGIN_X;
           next.marginY = DEFAULT_MARGIN_Y;
         }
-        if ((next.pageTransition as string) === "pan") next.pageTransition = "slide";
-        if ((next.pageTransition as string) === "peel") next.pageTransition = "peel-br";
+        const stored = next.pageTransition as string;
+        if (
+          stored === "slide" ||
+          stored === "peel" ||
+          stored === "peel-br" ||
+          stored === "peel-tr"
+        ) {
+          next.pageTransition = "pan";
+        }
         return next;
       },
     },

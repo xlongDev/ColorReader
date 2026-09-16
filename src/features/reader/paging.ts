@@ -71,12 +71,12 @@ export function alignTail(
 
 /**
  * Performs one in-chapter page flip, honouring the page-transition setting:
- * "slide" and "pan" keep the native smooth scroll (the same clipped horizontal
- * slide the MOBI path uses via foliate's native pan, and the EPUB prose path
- * via `scrollTo`); "fade", "paper" and the two peels jump to the target page
- * instantly and animate the new page in via WAAPI — imperative, so a flip never
- * re-renders or remounts the chapter — and "none" jumps with no animation.
- * Reduced motion always jumps instantly.
+ * "pan" keeps the native smooth scroll (the same clipped horizontal slide the
+ * MOBI path uses via foliate's native pan, and the EPUB prose path via
+ * `scrollTo`); "fade" and "paper" jump to the target page instantly and animate
+ * the new page in via WAAPI — imperative, so a flip never re-renders or
+ * remounts the chapter — and "none" jumps with no animation. Reduced motion
+ * always jumps instantly.
  */
 export function flipPage(
   el: HTMLElement,
@@ -86,7 +86,7 @@ export function flipPage(
   /** `null` while motion preference is undetermined; treated as no reduction. */
   reduced: boolean | null,
 ): void {
-  if (reduced || mode === "slide" || mode === "pan") {
+  if (reduced || mode === "pan") {
     el.scrollTo({ left, behavior: "smooth" });
     return;
   }
@@ -95,33 +95,19 @@ export function flipPage(
     return;
   }
   el.scrollTo({ left, behavior: "auto" });
-  // The prose path animates the incoming page, so the peel is mirrored: the
-  // page settles out of the crease fold instead of folding away. `grabTop`
-  // mirrors the crease axis for the top-right variant.
-  const grabTop = mode === "peel-tr";
-  const axis = grabTop ? "0.667" : "-0.667";
+  // The prose path animates the incoming page: "fade" cross-fades it in,
+  // "paper" swings it in about the spine.
   const frames: Keyframe[] =
     mode === "fade"
       ? [{ opacity: 0 }, { opacity: 1 }]
-      : mode === "peel-br" || mode === "peel-tr"
-        ? [
-            {
-              opacity: 0,
-              transform: `perspective(1400px) translate3d(6%, ${grabTop ? "-6" : "6"}%, 0) rotate3d(1, ${axis}, 0, ${grabTop ? "12" : "-12"}deg)`,
-            },
-            {
-              opacity: 1,
-              transform: `perspective(1400px) translate3d(0, 0, 0) rotate3d(1, ${axis}, 0, 0deg)`,
-            },
-          ]
-        : [
-            {
-              opacity: 0,
-              transform: `perspective(1200px) rotateY(${dir === 1 ? -10 : 10}deg)`,
-              transformOrigin: dir === 1 ? "left center" : "right center",
-            },
-            { opacity: 1, transform: "perspective(1200px) rotateY(0deg)" },
-          ];
-  const duration = mode === "paper" ? 400 : mode === "peel-br" || mode === "peel-tr" ? 420 : 300;
+      : [
+          {
+            opacity: 0,
+            transform: `perspective(1200px) rotateY(${dir === 1 ? -10 : 10}deg)`,
+            transformOrigin: dir === 1 ? "left center" : "right center",
+          },
+          { opacity: 1, transform: "perspective(1200px) rotateY(0deg)" },
+        ];
+  const duration = mode === "paper" ? 400 : 300;
   el.animate(frames, { duration, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
 }
