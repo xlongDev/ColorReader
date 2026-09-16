@@ -65,6 +65,19 @@
       "rules": {
         "typescript/no-non-null-assertion": "off"
       }
+    },
+    {
+      // Playwright drives one browser in order: every step has to settle
+      // before the next is issued, so a loop of awaits is the correct shape
+      // here rather than a missed `Promise.all`.
+      "files": ["e2e/**"],
+      "rules": {
+        "no-await-in-loop": "off",
+        // Functions handed to `page.evaluate` are serialised and run in the
+        // browser, where module scope does not exist — so their helpers must
+        // be declared inside them. Hoisting them would break at runtime.
+        "unicorn/consistent-function-scoping": "off"
+      }
     }
   ],
   "ignorePatterns": [
