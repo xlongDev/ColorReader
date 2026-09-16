@@ -38,7 +38,47 @@ const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
 const includes = (names: string[], name: string) => names.some((other) => same(other, name));
 
 export function TagDialog({ books, allTags, busy, onCancel, onSave }: TagDialogProps) {
-  const single = books?.length === 1 ? books[0] : null;
+  const single: BookSummary | null = books?.length === 1 ? (books[0] ?? null) : null;
+
+  return (
+    <GlassDialog
+      open={books !== null && books.length > 0}
+      onOpenChange={(open) => {
+        if (!open) onCancel();
+      }}
+      title={single ? "标签" : "添加标签"}
+      description={
+        single
+          ? `《${single.title}》的标签，可以随时改。`
+          : `为选中的 ${books?.length ?? 0} 本书添加标签，它们原有的标签不受影响。`
+      }
+      widthClass="w-[min(92vw,460px)]"
+    >
+      {/* Keyed by the book: each one carries its own starting set, and a
+          remount resets the selection to it without an effect — the same trick
+          the command palette uses with `key={session}`. Without this, opening
+          book B right after book A opened with A's tags still ticked. */}
+      <TagDialogBody
+        key={single?.id ?? "multi"}
+        single={single}
+        allTags={allTags}
+        busy={busy}
+        onCancel={onCancel}
+        onSave={onSave}
+      />
+    </GlassDialog>
+  );
+}
+
+interface TagDialogBodyProps {
+  single: BookSummary | null;
+  allTags: TagSummary[];
+  busy?: boolean;
+  onCancel: () => void;
+  onSave: (change: Change) => void;
+}
+
+function TagDialogBody({ single, allTags, busy, onCancel, onSave }: TagDialogBodyProps) {
   const known = allTags.map((tag) => tag.name);
   const [selected, setSelected] = useState<string[]>(() => (single ? [...single.tags] : []));
   const [draft, setDraft] = useState("");
@@ -69,19 +109,7 @@ export function TagDialog({ books, allTags, busy, onCancel, onSave }: TagDialogP
   ];
 
   return (
-    <GlassDialog
-      open={books !== null && books.length > 0}
-      onOpenChange={(open) => {
-        if (!open) onCancel();
-      }}
-      title={single ? "标签" : "添加标签"}
-      description={
-        single
-          ? `《${single.title}》的标签，可以随时改。`
-          : `为选中的 ${books?.length ?? 0} 本书添加标签，它们原有的标签不受影响。`
-      }
-      widthClass="w-[min(92vw,460px)]"
-    >
+    <>
       <GlassInput
         value={draft}
         onChange={(event) => setDraft(event.target.value)}
@@ -112,7 +140,7 @@ export function TagDialog({ books, allTags, busy, onCancel, onSave }: TagDialogP
                   aria-pressed={on}
                   onClick={() => toggle(name)}
                   className={cn(
-                    "flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs transition-colors",
+                    "press focus-visible:focus-ring flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs",
                     on
                       ? "border-accent bg-accent-soft text-text-1"
                       : "border-hairline bg-surface-1 text-text-2 hover:bg-surface-2 hover:text-text-1",
@@ -147,6 +175,6 @@ export function TagDialog({ books, allTags, busy, onCancel, onSave }: TagDialogP
           {single ? "保存" : "添加"}
         </GlassButton>
       </div>
-    </GlassDialog>
+    </>
   );
 }
