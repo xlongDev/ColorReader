@@ -98,7 +98,7 @@ export function FoliateSearchPanel({
               type="button"
               aria-label="清除搜索"
               onClick={() => setNeedle("")}
-              className="text-text-3 hover:text-text-1 absolute top-1/2 right-2 -translate-y-1/2 transition-colors"
+              className="focus-visible:focus-ring text-text-3 hover:text-text-1 absolute top-1/2 right-2 -translate-y-1/2 transition-colors"
             >
               <X size={13} />
             </button>
@@ -124,7 +124,7 @@ export function FoliateSearchPanel({
                 <button
                   type="button"
                   onClick={() => onPick(hit.cfi)}
-                  className="hover:bg-surface-1 -mx-1 w-full rounded-md px-1 py-0.5 text-left transition-colors"
+                  className="focus-visible:focus-ring hover:bg-surface-1 -mx-1 w-full rounded-md px-1 py-0.5 text-left transition-colors"
                 >
                   {hit.label !== "" && <p className="text-text-3 text-xs">{hit.label}</p>}
                   <p className="text-text-1 mt-1 text-[13px] leading-relaxed">

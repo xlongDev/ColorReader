@@ -360,9 +360,21 @@ button {
    Dense rows — nav items, list rows, menu entries — cannot afford a motion
    component each, so their press is CSS: a short, tight scale that eases back.
    It is the `tap` spring's feel at a fraction of the cost; use the spring
-   itself for the few large surfaces that can carry one. */
+   itself for the few large surfaces that can carry one.
+
+   The property list covers the colours as well as `transform` on purpose.
+   `transition-property` is a single longhand, so two classes cannot each
+   contribute part of it — whichever one lands last in the stylesheet wins
+   outright. `transition-colors` lands after this utility, so an element
+   carrying both kept the colour fade and silently lost the transform, which
+   turned the press into an instant jump. `press` now names everything it
+   needs, and an element must not carry a second `transition-*` utility. */
 @utility press {
-  transition: transform var(--dur-fast) var(--ease-out);
+  transition-property:
+    transform, color, background-color, border-color, outline-color, text-decoration-color, fill,
+    stroke, opacity;
+  transition-duration: var(--dur-fast);
+  transition-timing-function: var(--ease-out);
 
   &:active {
     transform: scale(0.985);

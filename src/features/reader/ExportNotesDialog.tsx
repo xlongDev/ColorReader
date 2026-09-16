@@ -100,7 +100,7 @@ export function ExportNotesDialog({
             disabled={empty}
             onClick={() => setFormat(key)}
             className={cn(
-              "flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors disabled:opacity-50",
+              "press focus-visible:focus-ring flex w-full items-start gap-3 rounded-xl border px-3 py-2.5 text-left disabled:opacity-50",
               format === key ? "border-accent bg-surface-1" : "border-hairline hover:bg-surface-1",
             )}
           >

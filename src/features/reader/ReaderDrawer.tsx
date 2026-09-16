@@ -45,7 +45,7 @@ export function ReaderDrawer({
                 type="button"
                 aria-label={`关闭${title}`}
                 onClick={onClose}
-                className="text-text-3 hover:text-text-1 transition-colors"
+                className="focus-visible:focus-ring text-text-3 hover:text-text-1 transition-colors"
               >
                 <X size={15} />
               </button>

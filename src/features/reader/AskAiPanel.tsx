@@ -62,7 +62,7 @@ export function AskAiPanel({
                 type="button"
                 aria-label="清除引用"
                 onClick={onClearSelection}
-                className="text-text-3 hover:text-text-1 transition-colors"
+                className="focus-visible:focus-ring text-text-3 hover:text-text-1 transition-colors"
               >
                 <X size={12} />
               </button>
@@ -89,7 +89,7 @@ export function AskAiPanel({
                   <button
                     type="button"
                     onClick={() => onJump(hit)}
-                    className="text-text-2 hover:text-accent w-full rounded-md text-left text-[12.5px] leading-relaxed transition-colors"
+                    className="focus-visible:focus-ring text-text-2 hover:text-accent w-full rounded-md text-left text-[12.5px] leading-relaxed transition-colors"
                   >
                     [{index + 1}] 《{hit.bookTitle}》 第 {hit.chapterIdx + 1} 章
                   </button>
@@ -107,7 +107,7 @@ export function AskAiPanel({
             aria-pressed={ragMode}
             onClick={() => setRagMode((on) => !on)}
             className={cn(
-              "rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+              "focus-visible:focus-ring rounded-full border px-2.5 py-1 text-[12px] transition-colors",
               ragMode
                 ? "bg-accent text-on-accent border-transparent"
                 : "border-hairline text-text-2 hover:text-text-1",
@@ -120,7 +120,7 @@ export function AskAiPanel({
               type="button"
               disabled={indexBook.build.isPending}
               onClick={() => indexBook.build.mutate()}
-              className="text-text-3 hover:text-text-1 text-[12px] transition-colors disabled:opacity-60"
+              className="focus-visible:focus-ring text-text-3 hover:text-text-1 text-[12px] transition-colors disabled:opacity-60"
             >
               {indexBook.build.isPending && indexBook.progress
                 ? `索引中 ${indexBook.progress.done}/${indexBook.progress.total}`
@@ -150,7 +150,7 @@ export function AskAiPanel({
         <button
           type="submit"
           disabled={ai.streaming || question.trim() === ""}
-          className="bg-accent text-on-accent rounded-full px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="focus-visible:focus-ring bg-accent text-on-accent rounded-full px-3 py-1.5 text-xs font-medium transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           {ai.streaming ? "回答中" : "提问"}
         </button>

@@ -212,7 +212,7 @@ export function SelectionToolbar({
   }
 
   const iconBtn =
-    "text-text-1 hover:text-accent hover:bg-(--glass-btn) flex h-9 w-9 items-center justify-center rounded-xl transition-colors";
+    "press focus-visible:focus-ring text-text-1 hover:text-accent hover:bg-(--glass-btn) flex h-9 w-9 items-center justify-center rounded-xl";
 
   return (
     <motion.div
@@ -342,7 +342,7 @@ export function SelectionToolbar({
                 apply(color, key);
               }}
               className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-lg transition-colors",
+                "press focus-visible:focus-ring flex h-7 w-7 items-center justify-center rounded-lg",
                 style === key ? "text-text-1 bg-(--glass-btn)" : "text-text-3 hover:text-text-1",
               )}
             >
@@ -361,7 +361,9 @@ export function SelectionToolbar({
                 apply(hex, style);
               }}
               className={cn(
-                "flex h-5 w-5 items-center justify-center rounded-full transition-transform",
+                // No `press` here: the selected state is already a scale, and
+                // two transforms on one element fight each other.
+                "focus-visible:focus-ring flex h-5 w-5 items-center justify-center rounded-full transition-transform",
                 color === hex ? "scale-110" : "hover:scale-105",
               )}
               style={
@@ -516,7 +518,7 @@ function LookupPanel({
           type="button"
           aria-label="关闭"
           onClick={onClose}
-          className="text-text-3 hover:text-text-1 transition-colors"
+          className="focus-visible:focus-ring text-text-3 hover:text-text-1 transition-colors"
         >
           <X size={12} />
         </button>
@@ -718,7 +720,7 @@ function WikiLookup({
               <p className="mt-1 line-clamp-6">{query.data.extract}</p>
               <button
                 type="button"
-                className="text-accent mt-2 inline-flex items-center gap-1 text-xs transition-opacity hover:opacity-80"
+                className="focus-visible:focus-ring text-accent mt-2 inline-flex items-center gap-1 text-xs transition-opacity hover:opacity-80"
                 onClick={() => void openUrl(query.data!.pageUrl)}
               >
                 阅读完整词条 <ArrowSquareOut size={12} />

@@ -58,7 +58,7 @@ export function ChapterImage({
       aria-label="查看图片"
       onClick={() => onOpen(src)}
       className={cn(
-        "transition-opacity hover:opacity-90",
+        "focus-visible:focus-ring transition-opacity hover:opacity-90",
         plate ? "block h-full w-full cursor-zoom-in" : "cursor-zoom-in",
       )}
     >

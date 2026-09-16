@@ -42,7 +42,7 @@ export function AnnotationNote({
         type="button"
         disabled={disabled}
         onClick={() => setDraft("")}
-        className="text-text-3 hover:text-text-1 inline-flex items-center gap-1.5 text-[12px] transition-colors disabled:opacity-50"
+        className="focus-visible:focus-ring text-text-3 hover:text-text-1 inline-flex items-center gap-1.5 text-[12px] transition-colors disabled:opacity-50"
       >
         <NotePencil size={12} />
         添加笔记
@@ -53,7 +53,7 @@ export function AnnotationNote({
         disabled={disabled}
         onClick={() => setDraft(note)}
         title="点击编辑笔记"
-        className="border-hairline text-text-2 hover:text-text-1 block w-full border-l pl-2.5 text-left text-[12.5px] leading-relaxed whitespace-pre-wrap transition-colors disabled:opacity-50"
+        className="focus-visible:focus-ring border-hairline text-text-2 hover:text-text-1 block w-full border-l pl-2.5 text-left text-[12.5px] leading-relaxed whitespace-pre-wrap transition-colors disabled:opacity-50"
       >
         {note}
       </button>

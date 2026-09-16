@@ -154,7 +154,7 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
           type="button"
           aria-label="清除搜索"
           onClick={() => retype("")}
-          className="press text-text-3 hover:text-text-1 focus-visible:focus-ring absolute top-1/2 right-2 -translate-y-1/2 rounded-full p-0.5 transition-colors"
+          className="press text-text-3 hover:text-text-1 focus-visible:focus-ring absolute top-1/2 right-2 -translate-y-1/2 rounded-full p-0.5"
         >
           <X size={13} />
         </button>
@@ -184,7 +184,7 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
                       key={entry}
                       type="button"
                       onClick={() => retype(entry)}
-                      className="glass press focus-visible:focus-ring text-text-2 hover:text-text-1 max-w-full truncate rounded-full px-2.5 py-1 text-[12px] transition-colors"
+                      className="glass press focus-visible:focus-ring text-text-2 hover:text-text-1 max-w-full truncate rounded-full px-2.5 py-1 text-[12px]"
                     >
                       {entry}
                     </button>

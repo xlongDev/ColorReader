@@ -153,7 +153,7 @@ export function SettingsPage() {
                       aria-current={on ? "true" : undefined}
                       onClick={() => jumpTo(id)}
                       className={cn(
-                        "press focus-visible:focus-ring flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] whitespace-nowrap transition-colors",
+                        "press focus-visible:focus-ring flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-[13px] whitespace-nowrap",
                         on
                           ? "bg-surface-3 text-text-1 shadow-glass font-medium"
                           : "text-text-2 hover:text-text-1 hover:bg-surface-1",

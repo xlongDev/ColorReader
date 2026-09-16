@@ -107,7 +107,7 @@ export function TocPanel({
           <button
             type="button"
             onClick={() => setExpanded(allOpen ? new Set() : new Set(foldable))}
-            className="text-text-3 hover:text-text-1 cursor-pointer text-[11px] transition-colors"
+            className="focus-visible:focus-ring text-text-3 hover:text-text-1 cursor-pointer text-[11px] transition-colors"
           >
             {allOpen ? "收起全部" : "展开全部"}
           </button>
@@ -163,7 +163,7 @@ function TocBranch({
             aria-label={open ? `折叠 ${row.title}` : `展开 ${row.title}`}
             aria-expanded={open}
             onClick={() => onToggle(index)}
-            className="text-text-3 hover:text-text-1 shrink-0 cursor-pointer p-1 transition-colors"
+            className="focus-visible:focus-ring text-text-3 hover:text-text-1 shrink-0 cursor-pointer p-1 transition-colors"
           >
             <CaretRight
               size={10}
@@ -179,7 +179,7 @@ function TocBranch({
           onClick={() => onJump(row.target)}
           style={{ paddingInlineStart: `${8 + row.depth * 14}px` }}
           className={cn(
-            "hover:bg-surface-1 text-text-2 hover:text-text-1 flex min-w-0 flex-1 items-baseline gap-2 rounded-lg py-1.5 pr-2 text-left text-[13px] transition-colors",
+            "focus-visible:focus-ring hover:bg-surface-1 text-text-2 hover:text-text-1 flex min-w-0 flex-1 items-baseline gap-2 rounded-lg py-1.5 pr-2 text-left text-[13px] transition-colors",
             atCurrent && "bg-accent-soft text-accent",
           )}
         >
@@ -243,7 +243,7 @@ function BookmarkList({
             type="button"
             onClick={() => onJump(bookmark)}
             className={cn(
-              "hover:bg-surface-1 text-text-2 hover:text-text-1 min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors",
+              "focus-visible:focus-ring hover:bg-surface-1 text-text-2 hover:text-text-1 min-w-0 flex-1 rounded-lg px-2 py-1.5 text-left text-[13px] transition-colors",
               bookmark.chapterIdx === currentIdx && "text-accent",
             )}
           >
@@ -254,7 +254,7 @@ function BookmarkList({
             aria-label="删除书签"
             disabled={busy}
             onClick={() => onDelete(bookmark.id)}
-            className="text-text-3 hover:text-danger shrink-0 p-1.5 transition-colors disabled:opacity-50"
+            className="focus-visible:focus-ring text-text-3 hover:text-danger shrink-0 p-1.5 transition-colors disabled:opacity-50"
           >
             <Trash size={13} />
           </button>

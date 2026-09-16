@@ -141,7 +141,7 @@ function Transport({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="press text-text-2 hover:text-text-1 hover:bg-surface-2 focus-visible:focus-ring grid size-8 place-items-center rounded-full transition-colors"
+      className="press text-text-2 hover:text-text-1 hover:bg-surface-2 focus-visible:focus-ring grid size-8 place-items-center rounded-full"
     >
       {children}
     </button>
@@ -162,7 +162,7 @@ function Chip({
       type="button"
       onClick={onClick}
       className={cn(
-        "press focus-visible:focus-ring shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium transition-colors",
+        "press focus-visible:focus-ring shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium",
         active ? "bg-accent text-on-accent" : "text-text-2 hover:text-text-1 bg-surface-2",
       )}
     >
@@ -187,7 +187,7 @@ function SettingsRow({
     <button
       type="button"
       onClick={onClick}
-      className="press hover:bg-surface-2 focus-visible:focus-ring flex flex-1 flex-col items-center gap-1 rounded-sm py-2 transition-colors"
+      className="press hover:bg-surface-2 focus-visible:focus-ring flex flex-1 flex-col items-center gap-1 rounded-sm py-2"
     >
       <span className="text-text-2">{icon}</span>
       <span className="text-text-1 max-w-full truncate text-[12px] font-medium">{label}</span>
@@ -543,7 +543,7 @@ export function TtsPlayer({
                                 type="button"
                                 onClick={() => onVoice(voice.uri)}
                                 className={cn(
-                                  "press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-center gap-2 rounded-xs px-2 py-2 text-left transition-colors",
+                                  "press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-center gap-2 rounded-xs px-2 py-2 text-left",
                                   voice.uri === active?.uri && "text-accent",
                                 )}
                               >

@@ -1,10 +1,13 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { motion } from "motion/react";
 import { ArrowUUpLeft, DownloadSimple, MagnifyingGlass, Plus, Trash } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
+import { Reveal } from "@/components/motion/Reveal";
+import { staggerDelay, useMotion } from "@/lib/motion";
 import {
   useDeleteSource,
   useSaveSource,
@@ -60,17 +63,24 @@ export function SourceDialog({ open, onClose }: { open: boolean; onClose: () => 
       }
       widthClass="w-[min(94vw,560px)]"
     >
-      {view === "search" ? (
-        <SearchView onManage={() => setView("manage")} />
-      ) : editing ? (
-        <SourceEditor editor={editing} onBack={() => setEditing(null)} />
-      ) : (
-        <ManageView
-          onNew={() => setEditing({ id: null, text: JSON.stringify(BLANK_SOURCE, null, 2) })}
-          onEdit={(entry) => setEditing({ id: entry.id, text: JSON.stringify(entry.def, null, 2) })}
-          onBack={() => setView("search")}
-        />
-      )}
+      {/* Keyed so the pane remounts and rises in: search, the source list and
+          the JSON editor differ enough that cutting between them reads as a
+          jump rather than a step sideways. */}
+      <Reveal key={view === "search" ? "search" : editing ? "editor" : "manage"}>
+        {view === "search" ? (
+          <SearchView onManage={() => setView("manage")} />
+        ) : editing ? (
+          <SourceEditor editor={editing} onBack={() => setEditing(null)} />
+        ) : (
+          <ManageView
+            onNew={() => setEditing({ id: null, text: JSON.stringify(BLANK_SOURCE, null, 2) })}
+            onEdit={(entry) =>
+              setEditing({ id: entry.id, text: JSON.stringify(entry.def, null, 2) })
+            }
+            onBack={() => setView("search")}
+          />
+        )}
+      </Reveal>
     </GlassDialog>
   );
 }
@@ -78,6 +88,7 @@ export function SourceDialog({ open, onClose }: { open: boolean; onClose: () => 
 function SearchView({ onManage }: { onManage: () => void }) {
   const queryClient = useQueryClient();
   const sources = useSources();
+  const m = useMotion();
   const [sourceId, setSourceId] = useState("");
   const [keyword, setKeyword] = useState("");
 
@@ -166,9 +177,15 @@ function SearchView({ onManage }: { onManage: () => void }) {
       )}
 
       <ul className="max-h-72 space-y-2 overflow-y-auto pr-1">
-        {search.data?.map((book) => (
-          <li
+        {/* Staggered, and capped: a result set is a list the eye reads top
+            down, so the rows arrive in order — but a long one still finishes
+            together instead of trickling in. */}
+        {search.data?.map((book, index) => (
+          <motion.li
             key={book.url}
+            initial={{ opacity: 0, y: m.rise }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ ...m.enter, delay: staggerDelay(index, m.stagger) }}
             className="border-hairline bg-surface-1 flex items-start justify-between gap-3 rounded-xl border px-3 py-2.5"
           >
             <div className="min-w-0">
@@ -189,7 +206,7 @@ function SearchView({ onManage }: { onManage: () => void }) {
             >
               <DownloadSimple size={14} /> 下载
             </GlassButton>
-          </li>
+          </motion.li>
         ))}
       </ul>
 
@@ -228,7 +245,7 @@ function ManageView({
           >
             <button
               type="button"
-              className="text-text-1 min-w-0 flex-1 truncate text-left text-[13.5px] font-medium"
+              className="press focus-visible:focus-ring text-text-1 min-w-0 flex-1 truncate text-left text-[13.5px] font-medium"
               onClick={() => onEdit(entry)}
             >
               {entry.name}

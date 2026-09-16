@@ -313,7 +313,7 @@ export function SettingsPanel() {
               onClick={() => {
                 update({ [surfaceField]: "standard", customSurface: null });
               }}
-              className="text-text-3 hover:text-text-1 px-1 text-[12px] transition-colors"
+              className="focus-visible:focus-ring text-text-3 hover:text-text-1 px-1 text-[12px] transition-colors"
             >
               移除
             </button>

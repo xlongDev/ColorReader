@@ -4,6 +4,7 @@ import { CheckCircle, FileText, Warning } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
+import { Reveal } from "@/components/motion/Reveal";
 import { useClippings } from "@/hooks/useClippings";
 import type { ClippingsOutcome } from "@/types/ipc";
 
@@ -65,6 +66,21 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
   const failure = done ? null : (preview.error ?? commit.error);
   const busy = preview.isPending || commit.isPending;
 
+  // One live region, mounted for as long as the dialog is. Assistive tech
+  // announces a change inside a region it already knows about reliably, but
+  // often misses a region that is inserted already carrying text — so this
+  // stays put and only its contents change. It carries the outcome alone;
+  // announcing the whole report would read out the grid and the book list.
+  const status = busy
+    ? "正在读取与匹配…"
+    : failure
+      ? String(failure)
+      : report
+        ? done
+          ? `已导入 ${report.imported} 条高亮。`
+          : `匹配到 ${report.imported} 条高亮，共 ${report.total} 条。`
+        : "";
+
   return (
     <GlassDialog
       open={isOpen}
@@ -75,6 +91,10 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
       description="把 My Clippings.txt 里的高亮读完，落到书架里对应的书上。笔记和书签不会被导入。"
       widthClass="w-[min(92vw,560px)]"
     >
+      {/* `<output>` rather than a `role="status"` div: it is the element the
+          role belongs to, and it carries the polite live region implicitly. */}
+      <output className="sr-only">{status}</output>
+
       {!path ? (
         <div className="flex flex-col items-start gap-3">
           <GlassButton variant="primary" size="md" onClick={() => void pick()}>
@@ -92,7 +112,7 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
             </span>
             <button
               type="button"
-              className="text-text-3 hover:text-text-1 focus-visible:focus-ring shrink-0 rounded-lg px-2 py-1 text-xs transition-colors"
+              className="press text-text-3 hover:text-text-1 focus-visible:focus-ring shrink-0 rounded-lg px-2 py-1 text-xs"
               onClick={() => void pick()}
             >
               换一个
@@ -109,7 +129,11 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
           )}
 
           {report && (
-            <>
+            // The report lands after an async run, so it arrives rather than
+            // replaces: the dialog is already on screen when the numbers come
+            // back. `flex flex-col gap-3` carries the spacing the fragment
+            // used to inherit as a direct child of the column.
+            <Reveal className="flex flex-col gap-3">
               <div className="grid grid-cols-4 gap-2">
                 <Number label="高亮条目" value={report.total} />
                 <Number label="命中书籍" value={report.books.length} />
@@ -160,7 +184,7 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
                   </p>
                 </div>
               )}
-            </>
+            </Reveal>
           )}
         </div>
       )}

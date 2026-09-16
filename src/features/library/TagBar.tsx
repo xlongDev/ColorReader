@@ -15,7 +15,8 @@ import type { TagSummary } from "@/types/ipc";
  * about to click — and a stray click on a chip does the harmless thing.
  */
 
-const CHIP = "flex h-8 items-center gap-1 rounded-full border px-3 text-xs transition-colors";
+const CHIP =
+  "press focus-visible:focus-ring flex h-8 items-center gap-1 rounded-full border px-3 text-xs";
 const IDLE =
   "border-hairline bg-surface-1 text-text-2 hover:bg-surface-2 hover:text-text-1 cursor-pointer";
 const ON = "border-accent bg-accent-soft text-text-1";
@@ -61,7 +62,7 @@ export function TagBar({ tags, selected, onSelect }: TagBarProps) {
                 type="button"
                 aria-label={`删除标签 ${tag.name}`}
                 onClick={() => setPending(tag)}
-                className="text-text-3 hover:text-danger ml-0.5 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full transition-colors"
+                className="press focus-visible:focus-ring text-text-3 hover:text-danger ml-0.5 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full"
               >
                 <Trash size={11} />
               </button>

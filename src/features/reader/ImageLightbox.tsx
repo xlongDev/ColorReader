@@ -111,7 +111,7 @@ export function ImageLightbox({
   }, [bookId, path]);
 
   const arrowClass =
-    "glass-solid shadow-panel text-text-1 flex h-9 w-9 items-center justify-center rounded-full transition-opacity hover:opacity-90";
+    "focus-visible:focus-ring glass-solid shadow-panel text-text-1 flex h-9 w-9 items-center justify-center rounded-full transition-opacity hover:opacity-90";
 
   return (
     <motion.div
@@ -126,6 +126,10 @@ export function ImageLightbox({
         type="button"
         aria-label="关闭预览"
         className="absolute inset-0 cursor-zoom-out"
+        /* Out of the tab order on purpose: it covers the viewport, so a focus
+           ring on it would outline the whole screen, and it only duplicates
+           what Esc and the explicit button below already do. */
+        tabIndex={-1}
         onClick={onClose}
       />
       {/* Blank space passes through (pointer-events-none) to the close button
@@ -209,7 +213,7 @@ export function ImageLightbox({
             aria-label="缩小"
             disabled={zoom <= MIN_ZOOM}
             onClick={() => setZoom((z) => Math.max(MIN_ZOOM, z / ZOOM_STEP))}
-            className="text-text-1 flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80 disabled:opacity-30"
+            className="focus-visible:focus-ring text-text-1 flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80 disabled:opacity-30"
           >
             <Minus size={14} />
           </button>
@@ -222,7 +226,7 @@ export function ImageLightbox({
               setRotation(0);
               setPan({ x: 0, y: 0 });
             }}
-            className="text-text-1 w-12 text-center text-xs tabular-nums transition-opacity hover:opacity-80"
+            className="focus-visible:focus-ring text-text-1 w-12 text-center text-xs tabular-nums transition-opacity hover:opacity-80"
           >
             {Math.round(zoom * 100)}%
           </button>
@@ -231,7 +235,7 @@ export function ImageLightbox({
             aria-label="放大"
             disabled={zoom >= MAX_ZOOM}
             onClick={() => setZoom((z) => Math.min(MAX_ZOOM, z * ZOOM_STEP))}
-            className="text-text-1 flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80 disabled:opacity-30"
+            className="focus-visible:focus-ring text-text-1 flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80 disabled:opacity-30"
           >
             <Plus size={14} />
           </button>
@@ -240,7 +244,7 @@ export function ImageLightbox({
             aria-label="旋转 90 度"
             title="旋转 90 度"
             onClick={() => setRotation((r) => (r + 90) % 360)}
-            className="text-text-1 flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80"
+            className="focus-visible:focus-ring text-text-1 flex h-7 w-7 items-center justify-center rounded-full transition-opacity hover:opacity-80"
           >
             <ArrowClockwise size={14} />
           </button>
@@ -253,7 +257,7 @@ export function ImageLightbox({
           type="button"
           title="跳转到图片所在章节"
           onClick={() => onJump(current.chapterIdx)}
-          className="text-xs text-white/70 underline-offset-4 transition-colors hover:text-white hover:underline"
+          className="focus-visible:focus-ring text-xs text-white/70 underline-offset-4 transition-colors hover:text-white hover:underline"
         >
           第 {current.chapterIdx + 1} 章 · {location}
         </button>
@@ -268,7 +272,7 @@ export function ImageLightbox({
         <button
           type="button"
           onClick={onClose}
-          className="glass-solid shadow-panel text-text-2 hover:text-text-1 rounded-full px-4 py-1.5 text-xs transition-colors"
+          className="focus-visible:focus-ring glass-solid shadow-panel text-text-2 hover:text-text-1 rounded-full px-4 py-1.5 text-xs transition-colors"
         >
           关闭（Esc）
         </button>

@@ -2604,7 +2604,7 @@ function ReaderView({
                       <button
                         type="button"
                         onClick={() => goTo(link.idx)}
-                        className="cursor-pointer underline decoration-dotted underline-offset-4 transition-opacity hover:opacity-70"
+                        className="focus-visible:focus-ring cursor-pointer underline decoration-dotted underline-offset-4 transition-opacity hover:opacity-70"
                         style={{ color: "var(--accent)" }}
                       >
                         {link.text}
@@ -2751,7 +2751,7 @@ function ReaderView({
               aria-label="上一页"
               onClick={() => flip(-1)}
               className={cn(
-                "glass-solid shadow-panel text-text-2 hover:text-text-1 absolute top-1/2 left-3 z-20",
+                "focus-visible:focus-ring glass-solid shadow-panel text-text-2 hover:text-text-1 absolute top-1/2 left-3 z-20",
                 "flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full",
                 "transition-all duration-200 motion-reduce:transition-none",
                 flipHint ? "opacity-100" : "pointer-events-none -translate-x-1 opacity-0",
@@ -2764,7 +2764,7 @@ function ReaderView({
               aria-label="下一页"
               onClick={() => flip(1)}
               className={cn(
-                "glass-solid shadow-panel text-text-2 hover:text-text-1 absolute top-1/2 right-3 z-20",
+                "focus-visible:focus-ring glass-solid shadow-panel text-text-2 hover:text-text-1 absolute top-1/2 right-3 z-20",
                 "flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-full",
                 "transition-all duration-200 motion-reduce:transition-none",
                 flipHint ? "opacity-100" : "pointer-events-none translate-x-1 opacity-0",

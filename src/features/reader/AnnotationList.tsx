@@ -37,7 +37,7 @@ export function AnnotationList({
           type="button"
           disabled={annotations.length === 0}
           onClick={onExport}
-          className="text-text-3 hover:text-text-1 disabled:hover:text-text-3 inline-flex items-center gap-1 text-xs transition-colors disabled:opacity-40"
+          className="focus-visible:focus-ring text-text-3 hover:text-text-1 disabled:hover:text-text-3 inline-flex items-center gap-1 text-xs transition-colors disabled:opacity-40"
         >
           <DownloadSimple size={13} />
           导出
@@ -67,7 +67,7 @@ export function AnnotationList({
                     aria-label="删除标注"
                     disabled={busy}
                     onClick={() => onDelete(annotation.id)}
-                    className="text-text-3 hover:text-danger transition-colors disabled:opacity-50"
+                    className="focus-visible:focus-ring text-text-3 hover:text-danger transition-colors disabled:opacity-50"
                   >
                     <Trash size={14} />
                   </button>
@@ -76,7 +76,7 @@ export function AnnotationList({
                   <button
                     type="button"
                     onClick={() => onJump(annotation)}
-                    className="hover:bg-surface-1 -mx-1 mt-1 block w-full rounded-md px-1 py-0.5 text-left transition-colors"
+                    className="focus-visible:focus-ring hover:bg-surface-1 -mx-1 mt-1 block w-full rounded-md px-1 py-0.5 text-left transition-colors"
                   >
                     <p className="text-text-1 text-[13px] leading-relaxed">{annotation.text}</p>
                   </button>

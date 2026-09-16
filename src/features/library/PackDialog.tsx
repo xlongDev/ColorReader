@@ -4,6 +4,7 @@ import { Lock, Package } from "@phosphor-icons/react";
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput, GlassSwitch } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
+import { Reveal } from "@/components/motion/Reveal";
 import { useSavePath } from "@/hooks/useSavePath";
 import { filename } from "@/lib/filename";
 import type { BookSummary } from "@/types/ipc";
@@ -70,8 +71,10 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
           <GlassSwitch id="pack-encrypt" checked={encrypted} onCheckedChange={setEncrypted} />
         </div>
 
+        {/* The switch reveals a whole row of UI below it; without an entrance
+            the field simply materialises halfway down the dialog. */}
         {encrypted && (
-          <div>
+          <Reveal>
             <GlassInput
               type="password"
               value={password}
@@ -82,7 +85,7 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
             <p className="text-text-3 mt-1.5 text-xs">
               密码不会存进书库，忘了就无法恢复书档里的原文件。
             </p>
-          </div>
+          </Reveal>
         )}
 
         {message && <p className="text-danger text-xs">{message}</p>}

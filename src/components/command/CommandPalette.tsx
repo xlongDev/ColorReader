@@ -149,7 +149,6 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
                       }}
                       className={cn(
                         "press focus-visible:focus-ring relative flex w-full items-center justify-between gap-3 rounded-md px-2.5 py-2 text-left",
-                        "transition-colors",
                         on ? "text-text-1" : "text-text-1 hover:bg-surface-1",
                       )}
                     >
