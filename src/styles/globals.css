@@ -381,6 +381,16 @@ button {
   }
 }
 
+/* -- scroll fade -----------------------------------------------------
+   A list that is cut off at a straight edge gives no sign that it scrolls.
+   Fading the first and last rows into the surface is the affordance; the
+   percentages are short on purpose — only the very edge dissolves, so the
+   row being read is never the faint one. */
+@utility scroll-fade {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, black 12%, black 88%, transparent);
+  mask-image: linear-gradient(to bottom, transparent, black 12%, black 88%, transparent);
+}
+
 /* -- skeleton shimmer -------------------------------------------------
    A loading placeholder has to read as "content is coming", not as a broken
    tile: a soft band travels across the block. Reduced motion holds a steady

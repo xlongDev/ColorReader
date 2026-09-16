@@ -35,11 +35,12 @@ import {
   SpeakerHigh,
   Sparkle,
 } from "@phosphor-icons/react";
-import { AnimatePresence, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
+import { IconSwap } from "@/components/motion/IconSwap";
 import { Reveal } from "@/components/motion/Reveal";
 import { GraphPanel } from "@/features/graph/GraphPanel";
 import { AnnotationList } from "@/features/reader/AnnotationList";
@@ -354,6 +355,7 @@ function ReaderView({
     unit: speechUnit,
     boundary: speechBoundary,
     error: speechError,
+    loading: speechLoading,
     play,
     stop,
     pause,
@@ -2295,7 +2297,9 @@ function ReaderView({
         className={chromeBtn}
         onClick={toggleSpeech}
       >
-        {speechStatus === "playing" ? <Pause size={16} /> : <SpeakerHigh size={16} />}
+        <IconSwap state={speechStatus}>
+          {speechStatus === "playing" ? <Pause size={16} /> : <SpeakerHigh size={16} />}
+        </IconSwap>
       </GlassIconButton>
       <GlassIconButton
         label="朗读播放器"
@@ -2319,7 +2323,9 @@ function ReaderView({
         className={chromeBtn}
         onClick={() => setAutoScrolling((on) => !on)}
       >
-        {autoScrolling ? <Pause size={16} /> : <ArrowDown size={16} />}
+        <IconSwap state={autoScrolling ? "on" : "off"}>
+          {autoScrolling ? <Pause size={16} /> : <ArrowDown size={16} />}
+        </IconSwap>
       </GlassIconButton>
       <GlassButton
         variant="subtle"
@@ -2333,7 +2339,17 @@ function ReaderView({
         本章 {estimateLabel(chapterRemaining, readingSpeed)} · 全书{" "}
         {estimateLabel(bookRemaining, readingSpeed)}
       </span>
-      <span className="text-text-3 text-xs">{Math.round(displayProgress * 100)}%</span>
+      {/* The readout pops as it changes: progress arriving silently next to
+          buttons that all respond reads as frozen, not as steady. */}
+      <motion.span
+        key={Math.round(displayProgress * 100)}
+        initial={{ opacity: 0.35 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.3 }}
+        className="text-text-3 text-xs tabular-nums"
+      >
+        {Math.round(displayProgress * 100)}%
+      </motion.span>
       <GlassButton
         variant="subtle"
         size="sm"
@@ -2787,6 +2803,7 @@ function ReaderView({
           index={speechUnit}
           status={speechStatus}
           error={speechError}
+          loading={speechLoading}
           rate={speechRate}
           onRate={(value) => applySpeechSettings({ rate: value })}
           voiceUri={effectiveVoice}

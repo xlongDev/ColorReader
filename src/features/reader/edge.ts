@@ -115,6 +115,10 @@ export interface EdgeEvents {
   status: (status: SpeechStatus) => void;
   unit: (index: number) => void;
   boundary: (boundary: SpeechBoundary | null) => void;
+  /** A clip is being synthesised and the voice has nothing to say yet — the
+   *  space between a seek and the first sample is a network round trip, not
+   *  silence, and the player draws it as loading rather than a frozen clock. */
+  loading: (pending: boolean) => void;
   /** The queue ran out; the reader rolls into the next chapter. */
   done: () => void;
   /** The service could not be reached. */
@@ -303,7 +307,9 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
   }
 
   async function start(index: number, current: number): Promise<void> {
+    events.loading(true);
     const clip = await ensure(index, current);
+    events.loading(false);
     if (generation !== current) return;
     if (!clip) {
       settle();

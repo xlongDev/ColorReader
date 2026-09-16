@@ -90,6 +90,10 @@ export function useTts({ trackBoundary = false }: Options = {}) {
   /** Set when the service could not be reached; the player says so rather than
    *  going quiet for no visible reason. */
   const [error, setError] = useState<string | null>(null);
+  /** True while the Edge engine is waiting on a clip it does not have cached —
+   *  the gap between asking to speak and hearing anything. The platform engine
+   *  starts instantly, so it never raises this. */
+  const [loading, setLoading] = useState(false);
 
   // Speaks only while `generation` matches: every play/stop bumps it.
   const generation = useRef(0);
@@ -136,6 +140,7 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     finishRef.current = undefined;
     setStatus("idle");
     setUnit(null);
+    setLoading(false);
     lastBoundary.current = null;
     setBoundary(null);
   }, []);
@@ -148,6 +153,7 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     edgeRef.current ??= createEdgeEngine({
       status: setStatus,
       unit: setUnit,
+      loading: setLoading,
       // Recorded whether or not the wash is watching words, and published only
       // when it is: a settings change restarts the utterance from here (see
       // `boundaryAt`), while an unwatched `setBoundary` per word would re-render
@@ -166,6 +172,7 @@ export function useTts({ trackBoundary = false }: Options = {}) {
         setError(message);
         setStatus("idle");
         setUnit(null);
+        setLoading(false);
       },
     });
     return edgeRef.current;
@@ -306,6 +313,7 @@ export function useTts({ trackBoundary = false }: Options = {}) {
       finishRef.current = undefined;
       setStatus("idle");
       setUnit(null);
+      setLoading(false);
       lastBoundary.current = null;
       setBoundary(null);
       return;
@@ -342,6 +350,7 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     unit,
     boundary,
     error,
+    loading,
     play,
     stop,
     pause,
