@@ -284,7 +284,10 @@ fn take_normalised(current: &mut String) -> String {
 }
 
 /// Collapses whitespace runs into single spaces.
-fn normalise(text: &str) -> String {
+///
+/// Shared with FB2: both feed `quick_xml` text runs through it before a block
+/// is emitted, so a fix to the whitespace rule must only be made here.
+pub(super) fn normalise(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 

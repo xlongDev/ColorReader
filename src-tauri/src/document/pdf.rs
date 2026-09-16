@@ -21,7 +21,8 @@ pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
         }
     }
     // Most PDFs carry no usable Info dictionary; the file name is the honest
-    // fallback and `read_metadata` applies it when the title is still empty.
+    // fallback for this module's own contract (the shelf repeats the guard, but
+    // `pdf::read_metadata` is also tested on its own).
     if metadata.title.trim().is_empty() {
         metadata.title = plain::title_from_stem(path);
     }

@@ -178,8 +178,14 @@ Rust 侧也提供 `pnpm rust:check`、`pnpm rust:fmt`、`pnpm rust:lint`、`pnpm
 │   └── types/ipc.ts            # Rust 命令返回值的镜像类型
 └── src-tauri/
     ├── src/
-│   ├── commands/           # Tauri 命令（按域分文件：system / book / reader / annotation / search / export / ai / rag / graph / source / sync / clippings / dictionary）
-│   ├── library/            # 导入 / 仓储 / 章节 / 标注 / 检索 / 书档 / 笔记导出 / RAG / 知识图谱 / 书源 / WebDAV 同步 / 词典（StarDict）
+    │   ├── commands/           # Tauri 命令，按域分文件（system / book / reader / annotation / bookmark / search / export / ai / rag / graph / source / sync / stats / tag / clippings / dictionary / font / lookup / tts）
+    │   ├── db/                 # SQLite 连接与迁移（WAL、单写者）
+    │   ├── document/           # 七格式的元数据 / 封面 / 章节提取（epub / pdf / mobi / fb2 / cbz / html / plain）
+    │   ├── ai/                 # AI 配置仓储 + 流式聊天 / embedding / rerank 客户端
+    │   ├── library/            # 导入 / 仓储 / 章节 / 标注 / 检索 / 书档 / 笔记导出 / RAG / 知识图谱 / 书源 / WebDAV 同步 / 词典
+    │   ├── dictionary.rs       # macOS 平台词典（DictionaryServices）
+    │   ├── resource.rs         # colorreader:// 协议（封面 / 书源文件 / 字体）
+    │   ├── tts.rs              # Edge TTS 服务端把手（voices / speak）
     │   ├── error.rs            # AppError：类型化 + 可序列化
     │   ├── state.rs            # 全局 AppState
     │   └── lib.rs              # 应用装配与 tracing 初始化

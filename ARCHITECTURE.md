@@ -60,6 +60,10 @@ books ─┬─ book_authors ── authors      作者多对多，按 position 
        └─ entities / entity_relations 知识图谱（migration v7，book_id 级联删除）
 
 chapters_fts（FTS5 外部内容表，内容指向 chapters，由触发器维护）
+
+settings（KV：AI / 同步凭据 / 词典与字体列表，migration v5）· chunks（RAG 向量，v6）
+sources（书源规则，v8）· bookmarks（v9）· reading_sessions（阅读时长，v13）
+annotation_tombstones / bookmark_tombstones（删除墓碑，供 WebDAV 同步，v15）
 ```
 
 `chapters` 存的是**已提取的纯文本章节**，不是原始文件字节。主键 `(book_id, idx)` 保证一本书内章节顺序唯一；`chars` 是正文去空白后的字符数，用于进度定位。
@@ -369,30 +373,36 @@ Command（lib/commands.ts）
 
 ### 命名
 
-按域分组，点号分隔：
+命令按域分组，一个域一个 `src-tauri/src/commands/<domain>.rs`，命令名是 `<域>_<动作>`：
 
 ```text
-book.*        reader.*      search.*      annotation.*
-pack.*        ai.*          rag.*         tts.*         sync.*
-settings.*    system.*
+ai.*          annotation.*  book.*        bookmark.*    clippings.*
+dictionary.*  font.*        graph.*       lookup.*      notes.*
+pack.*        rag.*         reader.*      search.*      source.*
+stats.*       sync.*        system.*      tag.*         tts.*
 ```
 
 示例：`system_info`、`book_import`、`reader_chapter`、`search_query`、`annotation_create`、`pack_export`。
 
 Tauri 命令名在 Rust 里是 snake_case，前端通过 `src/lib/ipc.ts` 的单一出口做类型转换，**不散落 `invoke` 调用**。返回值类型镜像在 `src/types/ipc.ts`。
 
+> `tauri-specta` 可以在编译期生成这份绑定、取代手写的镜像（可省去 `lib/ipc.ts` + `types/ipc.ts` 约 900 行）。已调研并**暂缓**：面向 Tauri 2 的分支至今只有 pre-release（当前最高 `2.0.0-rc.25`），且要引入 8 个 RC crate 与一个 codegen 步骤；等上游发稳定版再议。
+
 ### 事件
 
-统一命名，负载带类型标签：
+事件名统一为 `<域>://<事件名>`，Rust 侧是 `commands/<域>.rs` 里的
+`pub const <X>_EVENT`，负载类型镜像在 `src/types/ipc.ts`：
 
 ```text
-book.import.progress    { type, bookId, progress }
-book.index.progress
-ai.stream               { type, conversationId, delta }
-tts.progress
-sync.progress
-download.progress
+book://import-progress       { done, total, path }
+ai://stream                  { requestId, text, done, finishReason, error, citations? }
+rag://index-progress         { done, total }
+graph://build-progress       { done, total }
+source://download-progress   { done, total, chapter }
 ```
+
+目前只有这五个事件；TTS 走浏览器内建 `speechSynthesis`、同步结果是 `sync.now` 的
+返回值，两者都不发事件。
 
 ---
 

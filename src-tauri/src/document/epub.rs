@@ -30,8 +30,12 @@ const MAX_COVER_BYTES: u64 = 16 * 1024 * 1024;
 /// are a few dozen KB; this only guards against a pathological archive.
 const MAX_CHAPTER_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Reads metadata and cover from an EPUB without touching the spine content.
-pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
+/// Opens the container, resolves the OPF entry and parses it.
+///
+/// Returns the archive, the parsed OPF, and the directory the OPF lives in —
+/// the base every href inside it resolves against. Both entry points need
+/// exactly this preamble, so the container and OPF rules only change here.
+fn open_opf(path: &Path) -> AppResult<(ZipArchive<std::fs::File>, OpfDocument, String)> {
     let file = std::fs::File::open(path)?;
     let mut archive = ZipArchive::new(file)
         .map_err(|err| AppError::Parse(format!("无法打开 EPUB 容器：{err}")))?;
@@ -41,10 +45,17 @@ pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
     let opf_xml = String::from_utf8_lossy(&opf_bytes).into_owned();
     let document = OpfDocument::parse(&opf_xml)?;
 
+    let base_dir = opf_path.rsplit_once('/').map_or("", |(dir, _)| dir).to_string();
+    Ok((archive, document, base_dir))
+}
+
+/// Reads metadata and cover from an EPUB without touching the spine content.
+pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
+    let (mut archive, document, base_dir) = open_opf(path)?;
+
     let mut metadata = document.metadata;
     metadata.cover = document.cover_href.as_deref().and_then(|href| {
-        let base_dir = opf_path.rsplit_once('/').map_or("", |(dir, _)| dir);
-        let entry = resolve_href(base_dir, href);
+        let entry = resolve_href(&base_dir, href);
         read_entry(&mut archive, &entry, MAX_COVER_BYTES)
             .ok()
             .map(|bytes| CoverImage { extension: extension_of(&entry), bytes })
@@ -57,16 +68,8 @@ pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
 /// plain-text paragraphs. The first heading inside a document becomes its
 /// title; otherwise the chapter is numbered.
 pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
-    let file = std::fs::File::open(path)?;
-    let mut archive = ZipArchive::new(file)
-        .map_err(|err| AppError::Parse(format!("无法打开 EPUB 容器：{err}")))?;
+    let (mut archive, document, base_dir) = open_opf(path)?;
 
-    let opf_path = find_opf_path(&mut archive)?;
-    let opf_bytes = read_entry(&mut archive, &opf_path, MAX_OPF_BYTES)?;
-    let opf_xml = String::from_utf8_lossy(&opf_bytes).into_owned();
-    let document = OpfDocument::parse(&opf_xml)?;
-
-    let base_dir = opf_path.rsplit_once('/').map_or("", |(dir, _)| dir);
     let mut chapters = Vec::new();
     // Spine entry path → chapter index, for rewriting in-book link targets.
     let mut entry_index: std::collections::HashMap<String, usize> =
@@ -79,7 +82,7 @@ pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
         if !is_html_media_type(&item.media_type) {
             continue;
         }
-        let entry = resolve_href(base_dir, &item.href);
+        let entry = resolve_href(&base_dir, &item.href);
         let bytes = match read_entry(&mut archive, &entry, MAX_CHAPTER_BYTES) {
             Ok(bytes) => bytes,
             Err(err) => {

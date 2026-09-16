@@ -15,7 +15,7 @@ use quick_xml::escape::unescape;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
-use super::html::attribute;
+use super::html::{attribute, normalise};
 use super::{BookMetadata, CoverImage, IMAGE_PARAGRAPH_PREFIX, RawChapter};
 use crate::error::{AppError, AppResult};
 
@@ -284,7 +284,7 @@ impl MetadataParser {
 
     fn flush(&mut self) {
         let Some(field) = self.field.take() else { return };
-        let text = self.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        let text = normalise(&self.text);
         self.text.clear();
         if text.is_empty() {
             return;
@@ -480,10 +480,6 @@ impl BodyParser {
     fn finish(&mut self) {
         self.push_chapter();
     }
-}
-
-fn normalise(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[cfg(test)]
