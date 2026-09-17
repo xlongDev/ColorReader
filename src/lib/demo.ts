@@ -44,9 +44,30 @@ const PALETTES: [string, string][] = [
 const TITLES = ["我们为什么会生病", "金色梦乡", "长日将尽"];
 const AUTHORS = [["伦道夫·尼斯", "乔治·威廉斯"], ["伊坂幸太郎"], ["石黑一雄"]];
 
-export const demoBooks: BookSummary[] = TITLES.map((title, index) => ({
+/**
+ * How many tiles the sample shelf shows.
+ *
+ * Three read the layout fine, but a real library is a few hundred books and the
+ * shelf's per-card entrance is charged per card — so a three-tile shelf cannot
+ * show what returning from the reader costs. `?demo=1&books=84` sizes it for a
+ * measurement; without the parameter the fixture is exactly what it always was.
+ */
+function shelfSize(): number {
+  if (typeof window === "undefined") return TITLES.length;
+  const asked = Number(new URLSearchParams(window.location.search).get("books"));
+  return Number.isFinite(asked) && asked > TITLES.length ? Math.min(asked, 500) : TITLES.length;
+}
+
+const COUNT = shelfSize();
+
+export const demoBooks: BookSummary[] = Array.from({ length: COUNT }, (_, index) => ({
   id: `demo-${index + 1}`,
-  title,
+  // Beyond the three samples the shelf repeats them, numbered, so a locator that
+  // names a book still names exactly one tile.
+  title:
+    index < TITLES.length
+      ? TITLES[index]!
+      : `${TITLES[index % TITLES.length]!} ${Math.floor(index / TITLES.length) + 1}`,
   subtitle: null,
   description: null,
   language: "zh",
@@ -56,14 +77,18 @@ export const demoBooks: BookSummary[] = TITLES.map((title, index) => ({
   // off `demoChapter` without anything else to mock.
   format: "txt",
   fileSize: 4_100_000 + index * 800_000,
-  coverUrl: cover(index, PALETTES[index]![0], PALETTES[index]![1]),
+  coverUrl: cover(
+    index,
+    PALETTES[index % PALETTES.length]![0],
+    PALETTES[index % PALETTES.length]![1],
+  ),
   addedAt: 0,
   updatedAt: 0,
   lastReadAt: null,
   progress: index === 0 ? 0.18 : index === 1 ? 0.62 : 0,
   location: null,
   favorite: index === 0,
-  authors: AUTHORS[index]!,
+  authors: AUTHORS[index % AUTHORS.length]!,
   tags: index === 1 ? ["小说", "悬疑"] : [],
 })) as unknown as BookSummary[];
 
