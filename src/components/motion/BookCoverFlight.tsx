@@ -23,13 +23,35 @@ export function BookCoverFlight() {
   const to = useBookHandoff((s) => s.to);
   const end = useBookHandoff((s) => s.end);
 
-  if (m.reduce || id === null || from === null) return null;
+  // Nobody is going to fly this one: reduced motion, or a handoff that never
+  // got an origin. Both ends hide their own cover for as long as `id` matches
+  // theirs, so a handoff left set this way would keep a cover hidden for the
+  // rest of the session — it is cleared rather than left waiting for a landing.
+  const grounded = m.reduce || from === null;
+  useEffect(() => {
+    if (grounded && id !== null) end();
+  }, [grounded, id, end]);
+
+  if (grounded || id === null) return null;
 
   // A fresh mount per flight, keyed by book: the launcher inside has to start
   // from "not launched" every time, and this component itself stays mounted
   // for the life of the app.
   return <Flight key={id} coverUrl={coverUrl} from={from} to={to} onDone={end} />;
 }
+
+/**
+ * How long a flight waits for somewhere to land before leaving without one.
+ *
+ * The far end registers its box as it mounts, a frame or two after this layer
+ * does. Leaving in the meantime means leaving toward the *dissolve* box — up
+ * and 16% larger — and the real box then arrives and turns the cover around in
+ * mid-air (measured: scale 1.09 at y −25, then reversing to 0.2 at y −298). It
+ * also re-targets the transition, and a re-targeted transition starts its
+ * duration again, which parked the cover on the header for a further 350ms
+ * after it had visibly arrived. Waiting a beat costs a frame nobody can see.
+ */
+const DISSOLVE_AFTER = 200;
 
 function Flight({
   coverUrl,
@@ -42,23 +64,59 @@ function Flight({
   to: CoverBox | null;
   onDone: () => void;
 }) {
-  // Launch on the frame *after* mount, so the browser has the "at the shelf"
-  // transform to transition from instead of snapping straight to the end.
+  // Launch on the frame *after* there is somewhere to fly to: the browser needs
+  // the "at the shelf" transform committed *and painted* to transition from, or
+  // it snaps straight to the end.
   const [launched, setLaunched] = useState(false);
   useEffect(() => {
+    if (to === null) return;
     const frame = requestAnimationFrame(() => setLaunched(true));
     return () => cancelAnimationFrame(frame);
+  }, [to]);
+
+  // ...but not forever. A cold route chunk can take longer than the gesture
+  // reads as connected, and a book with no cover never registers a landing at
+  // all; either way the cover lifts and dissolves rather than hovering. Setting
+  // an already-true state is a no-op, so this is safe to run unconditionally.
+  useEffect(() => {
+    const timer = window.setTimeout(() => setLaunched(true), DISSOLVE_AFTER);
+    return () => window.clearTimeout(timer);
   }, []);
 
   // Without a landing box the cover still has to leave: a cold route chunk can
   // take longer than the gesture reads as connected, and a book with no cover
   // never registers one. It lifts and dissolves instead of hovering forever.
+  //
+  // It keeps the corner it left with, in every direction. The landing not
+  // needing anything of its own is not an oversight: the only box a flight
+  // lands in is the header thumbnail, 27x36, whose radii already clamp to half
+  // its width — a 14px and an 18px corner paint the identical shape there
+  // (hit-tested: 859 px of the 972 pixel-identical either way). And on the way
+  // back the shelf tile stays hidden until the flight has dissolved, so it is
+  // never seen next to a corner of its own.
   const landing: CoverBox = to ?? {
     x: from.x - from.w * 0.08,
     y: from.y - 44,
     w: from.w * 1.16,
     h: from.h * 1.16,
+    radius: from.radius,
   };
+
+  /**
+   * Whether this flight is the one with nowhere to land — the only case that
+   * fades.
+   *
+   * A flight with a landing is still the only cover on screen when it arrives,
+   * so fading it out before it gets there is what made the cover read as
+   * *redrawn* rather than handed over: it dimmed to nothing in the last 180 ms
+   * of travel and the destination then faded back up from zero (measured: the
+   * flight at 0.04 opacity while the tile's own cover sat at 0, then a 300 ms
+   * ramp). It stays solid to the last frame instead, and the destination takes
+   * over in the same commit — same picture, same box, same corner, so the swap
+   * is invisible. A flight with nowhere to go has no such handover and still
+   * has to leave some other way.
+   */
+  const dissolving = to === null;
 
   /**
    * Travel by transform, and by a CSS transition rather than a JS-driven one.
@@ -78,24 +136,48 @@ function Flight({
    *    compositor regardless, and re-targets on its own if the reader
    *    registers its landing box mid-flight.
    */
+  /**
+   * The layer is laid out at the *larger* of the two boxes and scaled down to
+   * the origin, never up to it.
+   *
+   * A layer keeps the raster it was painted with and stretches it, so sizing
+   * this one like the cover it starts from made the way home a 5x upscale: the
+   * header's 27x36 thumbnail of pixels spread over the 138x184 tile, soft for
+   * the whole flight and snapping sharp the instant the tile's own cover (a
+   * real `<img>` laid out at its full size) took over. Laid out at the big end
+   * instead, the raster is the size the cover is ever seen at, and the small
+   * end is a downscale — which stays crisp. The corner scales with it, so the
+   * proportions `CoverBox.radius` asks for are unchanged.
+   */
+  const maxW = Math.max(from.w, to?.w ?? from.w);
+  const maxH = Math.max(from.h, to?.h ?? from.h);
+
   return (
     <div
-      className="shadow-panel pointer-events-none fixed z-[70] overflow-hidden rounded-sm"
+      data-cover-flight
+      className="shadow-panel pointer-events-none fixed z-[70] overflow-hidden"
       style={{
         left: from.x,
         top: from.y,
-        width: from.w,
-        height: from.h,
+        width: maxW,
+        height: maxH,
+        // The corner of the cover it left, not one of its own: see `CoverBox`.
+        // In the layer's own units, so that `scale` lands it on that value.
+        borderRadius: from.radius * (maxW / from.w),
         // Scaling from the corner makes the offsets plain deltas.
         transformOrigin: "top left",
         willChange: "transform, opacity",
         transform: launched
-          ? `translate(${landing.x - from.x}px, ${landing.y - from.y}px) scale(${landing.w / from.w}, ${landing.h / from.h})`
-          : "translate(0px, 0px) scale(1, 1)",
-        opacity: launched ? 0 : 1,
-        // The travel is the transition; the fade only tidies the last third, so
-        // the cover is still solid when it arrives at the header.
-        transition: `transform var(--dur-flight) var(--ease-out), opacity 200ms var(--ease-out) 240ms`,
+          ? `translate(${landing.x - from.x}px, ${landing.y - from.y}px) scale(${landing.w / maxW}, ${landing.h / maxH})`
+          : `translate(0px, 0px) scale(${from.w / maxW}, ${from.h / maxH})`,
+        opacity: launched && dissolving ? 0 : 1,
+        // The travel is the transition, on `--ease-land` rather than the house
+        // `--ease-out` — the difference is entirely in the last third, and the
+        // reasoning is on the token. Only a dissolve fades, and the fade tidies
+        // its last third so the cover is still solid while it lifts.
+        transition: dissolving
+          ? `transform var(--dur-flight) var(--ease-land), opacity 200ms var(--ease-out) 240ms`
+          : `transform var(--dur-flight) var(--ease-land)`,
       }}
       onTransitionEnd={(event) => {
         if (event.propertyName === "transform") onDone();

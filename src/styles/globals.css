@@ -30,6 +30,13 @@
 
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.32, 0.72, 0, 1);
+  /* Travel that has to *arrive*, not drift in.
+     `--ease-out` is an expo-out: it puts 83% of the distance into the first
+     quarter of the time, so the last 10% of a 420ms flight takes 282ms of it —
+     the cover crawls the final few pixels. This curve reaches 90% at 227ms and
+     finishes the rest in 193ms, so it lands. Kept as its own token rather than
+     re-tuning `--ease-out`, which every fade and page turn in the app reads. */
+  --ease-land: cubic-bezier(0.33, 1, 0.68, 1);
 
   --shadow-glass: 0 1px 0 rgba(255, 255, 255, 0.06) inset, 0 18px 50px rgba(0, 0, 0, 0.45);
   --shadow-panel: 0 30px 80px rgba(0, 0, 0, 0.55);

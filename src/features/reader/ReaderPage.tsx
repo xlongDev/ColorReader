@@ -125,6 +125,7 @@ import {
   useReaderSettings,
   HIGHLIGHT_COLORS,
 } from "@/stores/reader";
+import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import { cn } from "@/lib/cn";
 import type { PdfOutlineItem } from "@/lib/pdf";
 import type {
@@ -2114,6 +2115,20 @@ function ReaderView({
   // fill is a wash of the paper colour (--glass-btn), so the circles read as
   // liquid glass over the page without darkening it like an ink fill would.
   const chromeBtn = "bg-(--glass-btn) border-hairline-strong shadow-glass";
+
+  // Leaving the reader hands the cover back to the shelf — the same object
+  // that flew in, in the other direction. The header thumbnail is the origin;
+  // the shelf tile the book came from registers itself as the landing while it
+  // mounts (`BookCard`), and until then `BookCoverFlight` carries it on its own
+  // and dissolves if nothing ever lands. Under reduced motion the flight clears
+  // the handoff instead of running it, so the shelf tile is never left blank.
+  const coverBoxRef = useRef<HTMLSpanElement>(null);
+  const beginHandoff = useBookHandoff((s) => s.begin);
+  const leaveReader = () => {
+    const cover = reduce ? null : coverBoxRef.current;
+    if (cover) beginHandoff({ id: bookId, coverUrl, from: boxOf(cover), side: "reader" });
+    onBack();
+  };
   // foliate sections replace the imported chapter list while reading, but only
   // when foliate actually found a TOC — an old MOBI6 has none.
   const useFoliateToc = useFoliate && foliateToc.length > 0;
@@ -2135,10 +2150,10 @@ function ReaderView({
         fullscreen && "bg-(--glass-btn) backdrop-blur-xl",
       )}
     >
-      <GlassIconButton label="返回书库" size="sm" onClick={onBack} className={chromeBtn}>
+      <GlassIconButton label="返回书库" size="sm" onClick={leaveReader} className={chromeBtn}>
         <ArrowLeft size={16} />
       </GlassIconButton>
-      <HeaderCover bookId={bookId} coverUrl={coverUrl} />
+      <HeaderCover bookId={bookId} coverUrl={coverUrl} boxRef={coverBoxRef} />
       <div className="min-w-0 flex-1">
         <p className="text-text-1 truncate text-sm font-medium">{title}</p>
         <p className="text-text-3 truncate text-xs">

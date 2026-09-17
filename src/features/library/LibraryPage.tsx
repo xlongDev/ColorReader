@@ -1,4 +1,13 @@
-import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  lazy,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -78,9 +87,91 @@ function greeting(now: Date): string {
   return "晚上好";
 }
 
+/**
+ * Where the shelf was left, per filter.
+ *
+ * The router is a memory router, so the browser's own scroll restoration never
+ * applies, and this list is unmounted on every trip into the reader — without
+ * this the reader comes back to the top of a shelf they had scrolled halfway
+ * down, which also means the cover flying home has no tile to land on. Module
+ * scope rather than a store: it is a number per view, and it should not survive
+ * a reload.
+ */
+const shelfScroll = new Map<LibraryFilter, number>();
+
 export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const navigate = useNavigate();
   const meta = titleForFilter(filter);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  // Before paint, or the reader sees the top of the shelf for a frame and then
+  // a jump. The place is remembered as it is scrolled rather than on unmount:
+  // the route transition keeps the outgoing shelf mounted until its exit
+  // animation ends, so a save in the cleanup lands *after* the incoming shelf
+  // has already restored — which is exactly nothing.
+  const remember = useCallback(() => {
+    const scroller = scrollerRef.current;
+    if (scroller) shelfScroll.set(filter, scroller.scrollTop);
+  }, [filter]);
+
+  useLayoutEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    scroller.scrollTop = shelfScroll.get(filter) ?? 0;
+    // Not saved in the cleanup. The outgoing shelf outlives the incoming one —
+    // the route keeps it for the length of its exit animation — and by then
+    // `popLayout` has taken it out of flow, so the position it reports is a
+    // pixel off. Written there it would overwrite the value the incoming shelf
+    // has already restored, and the next visit would land a pixel away.
+    scroller.addEventListener("scroll", remember, { passive: true });
+    return () => scroller.removeEventListener("scroll", remember);
+  }, [filter, remember]);
+
+  /**
+   * Real input on the shelf ends a cover that is still in the air.
+   *
+   * A flight is aimed once (`useLandingBox`) and lands on the slot its tile had
+   * when it left. A scroll under it therefore ends with the cover hopping from
+   * the slot it landed on to wherever its tile actually went — measured: a 60px
+   * scroll left the flight at y=347 and its tile at y=288, and the cover image
+   * jumped those 59px the instant the handoff ended. Dropping the handoff at the
+   * gesture moves that discontinuity to the moment the reader started moving the
+   * shelf: the content under the cover is moving anyway, and the cover is back on
+   * its own tile in the same frame.
+   *
+   * Driven by input events rather than by `scroll`, because the shelf restores
+   * its own scroll position as it mounts — and that fires `scroll` too, which
+   * would cancel every flight home at birth.
+   *
+   * Only a flight *coming home* (`side === "reader"`): on the way out the cover
+   * is heading for the reader's header, which is not moving, and its tile is on
+   * a page that is already on its way out — cancelling there would jump the
+   * cover back to a slot that is disappearing.
+   */
+  useEffect(() => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const drop = () => {
+      const handoff = useBookHandoff.getState();
+      if (handoff.id !== null && handoff.side === "reader") handoff.end();
+    };
+    scroller.addEventListener("wheel", drop, { passive: true });
+    scroller.addEventListener("pointerdown", drop);
+    return () => {
+      scroller.removeEventListener("wheel", drop);
+      scroller.removeEventListener("pointerdown", drop);
+    };
+  }, []);
+
+  /** Leaving for the reader: the place is saved here, synchronously, because a
+   *  scroll listener only reports the last position it was told about. */
+  const openBook = useCallback(
+    (target: BookSummary) => {
+      remember();
+      navigate(`/reader?book=${target.id}`);
+    },
+    [navigate, remember],
+  );
+
   const [now, setNow] = useState(() => new Date());
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<LibrarySort>("recentlyAdded");
@@ -231,13 +322,8 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         </AnimatePresence>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-8 pb-8">
-        {filter === "all" && (
-          <ContinueReadingCard
-            book={continueReading}
-            onOpen={(target) => navigate(`/reader?book=${target.id}`)}
-          />
-        )}
+      <div ref={scrollerRef} data-shelf-scroller className="flex-1 overflow-y-auto px-8 pb-8">
+        {filter === "all" && <ContinueReadingCard book={continueReading} onOpen={openBook} />}
 
         {filter === "tags" && <TagBar tags={tags.data ?? []} selected={tag} onSelect={setTag} />}
 
@@ -342,7 +428,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
                   selecting={managing}
                   selected={selected.has(book.id)}
                   onToggleSelect={toggleSelect}
-                  onOpen={(target) => navigate(`/reader?book=${target.id}`)}
+                  onOpen={openBook}
                   onToggleFavorite={(target) =>
                     setFavorite.mutate({ id: target.id, favorite: !target.favorite })
                   }
@@ -659,14 +745,22 @@ function ContinueReadingCard({
       type="button"
       onClick={() => {
         const cover = coverRef.current;
-        if (cover) beginHandoff({ id: book.id, coverUrl: book.coverUrl, from: boxOf(cover) });
+        if (cover) {
+          beginHandoff({ id: book.id, coverUrl: book.coverUrl, from: boxOf(cover), side: "shelf" });
+        }
         onOpen(book);
       }}
       whileTap={m.reduce ? undefined : { scale: 0.995 }}
       transition={m.tap}
       className="glass focus-visible:focus-ring group mb-6 flex w-full items-center gap-4 rounded-2xl p-4 text-left"
     >
-      <span ref={coverRef} className="relative block h-16 w-12 shrink-0 overflow-hidden rounded-sm">
+      {/* Cornered to the tile's ratio (18px on a 138px cover), like the reader
+          header's thumbnail: this cover is the other origin of a flight, so a
+          rounder corner here is a cover that changes shape on the way in. */}
+      <span
+        ref={coverRef}
+        className="relative block h-16 w-12 shrink-0 overflow-hidden rounded-[6px]"
+      >
         {book.coverUrl ? (
           <img
             src={book.coverUrl}

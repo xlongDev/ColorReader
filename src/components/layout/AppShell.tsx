@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useMemo, type CSSProperties } from "react";
-import { Outlet, useLocation } from "react-router-dom";
+import { useLocation, useOutlet } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { CaretRight } from "@phosphor-icons/react";
 
@@ -14,6 +14,7 @@ import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { BookCoverFlight } from "@/components/motion/BookCoverFlight";
 import { fontFaceCss, readerGlassVars, resolveSurface } from "@/features/reader/theme";
 import { useCommandPalette } from "@/stores/command-palette";
+import { useBookHandoff } from "@/stores/book-handoff";
 import { useSettings } from "@/stores/settings";
 import { useReaderSettings } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
@@ -22,7 +23,7 @@ import { useDeepLink } from "@/hooks/useDeepLink";
 import { useFonts } from "@/hooks/useFonts";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
-import { DURATION, EASE_OUT } from "@/lib/motion";
+import { DURATION, EASE_OUT, RISE } from "@/lib/motion";
 
 // Sidebar content, shared verbatim by the docked pane and the fullscreen edge
 // overlay — the overlay is the same sidebar the user already has, just
@@ -64,6 +65,35 @@ export function AppShell() {
   // app theme, and vice versa.
   const { pathname } = useLocation();
   const reading = pathname.startsWith("/reader");
+
+  /**
+   * Whether a cover is in the air between the two pages right now.
+   *
+   * The arriving page then gives up its travel and only cross-fades. A cover in
+   * flight is a shared element: the page it is flying to is moving while the
+   * flight is trying to land on it, and a CSS transition whose target moves is
+   * a transition that restarts — so the flight ends up chasing the page a frame
+   * at a time instead of running its 420ms curve, and finishes wherever it was
+   * when the chasing stopped. Opacity moves nothing, so the cross-fade stays.
+   */
+  const coverFlying = useBookHandoff((s) => s.id !== null);
+
+  /**
+   * The route element, resolved here rather than by an `<Outlet/>` in the tree.
+   *
+   * `AnimatePresence` keeps rendering the child it is sending out long after the
+   * route has changed, and it renders *that element* again — so a nested
+   * `<Outlet/>` re-resolves against the route that just arrived and the page on
+   * its way out becomes a second copy of the page coming in. Measured: entering
+   * the reader mounted two `ReaderPage`s in one commit, the spare unmounting
+   * 229 ms later when the exit ended; the shelf did the same on the way back,
+   * which is why a cover looked redrawn just after a flight landed — two copies
+   * of the tile were cross-fading ten pixels apart.
+   *
+   * `useOutlet()` hands back the element already resolved, so the child
+   * AnimatePresence holds on to keeps showing the page it is leaving.
+   */
+  const outlet = useOutlet();
   const appTheme = useResolvedTheme();
   const daySurface = useReaderSettings((s) => s.surface);
   const customSurface = useReaderSettings((s) => s.customSurface);
@@ -168,37 +198,67 @@ export function AppShell() {
             {/* Lazy route chunks resolve on first navigation; local disk,
                 so a plain fallback is enough. */}
             <Suspense fallback={null}>
-              {/* Cross-fade between pages: the outgoing view holds its ground
-                  while the incoming one settles from a hair smaller. pathname
-                  keys keep the reader route stable across chapter navigations
-                  (query-only changes).
+              {/* Cross-fade between pages: the outgoing view lifts away while
+                  the incoming one rises into place, keyed on pathname so the
+                  reader route stays stable across chapter navigations
+                  (query-only changes). `popLayout` takes the leaving page out
+                  of flow, so the arriving one is laid out at its final place
+                  on the first frame rather than being pushed around by a page
+                  that is already on its way out.
 
-                  This used to animate `filter: blur(6px)` as a depth cue. Two
-                  reasons it does not any more:
+                  What this must not animate is anything that changes the
+                  resolution of the page's raster, and both alternatives did:
 
-                  1. Blurring a whole page re-rasterises its layer every frame,
-                     which is the most expensive thing this shell could animate
-                     and it ran on every navigation.
-                  2. A `filter` — even `blur(0px)` — makes its element the
-                     containing block for `position: fixed` descendants. The
-                     resting value this left on the wrapper is exactly what put
-                     the reader's selection toolbar 273 px off and sliced it at
-                     the pane edge. `blur(0px)` looks like nothing and is not.
+                  1. It used to animate `filter: blur(6px)`, which re-rasterises
+                     the whole layer every frame — the most expensive thing this
+                     shell could animate, on every navigation. A `filter` — even
+                     `blur(0px)` — also makes its element the containing block
+                     for `position: fixed` descendants, and that resting value
+                     is what put the reader's selection toolbar 273 px off and
+                     sliced it at the pane edge.
+                  2. It then carried the depth with `scale`, which has the same
+                     cost for the same reason: a scaled subtree is rasterised at
+                     the new resolution each frame. A reader page (composited
+                     section iframes) and a shelf (a few hundred covers) are the
+                     worst cases for it, and the reader -> shelf direction pays
+                     it twice, on both pages at once.
 
-                  The scale carries the depth by itself: motion normalises
-                  `scale(1)` to `transform: none`, so at rest the wrapper is
-                  neither a filter nor a transform and fixed overlays inside a
-                  page behave the way the author expects. */}
+                  A translate moves an already-rasterised layer, and 10px is the
+                  vocabulary's own entrance travel (`RISE`), so the rise reads
+                  as the same gesture as everything else that enters. At rest
+                  motion normalises the offset away, so the wrapper is neither a
+                  filter nor a transform and fixed overlays inside a page keep
+                  the viewport as their containing block.
+
+                  The one exception is a page arriving under a cover that is
+                  already in the air: then the rise is dropped and only the
+                  fade is kept, because that 10px of travel is exactly what
+                  makes the flight miss (see `coverFlying`). */}
               <AnimatePresence mode="popLayout" initial={false}>
                 <motion.div
                   key={pathname}
-                  initial={reduce ? false : { opacity: 0, scale: 0.98 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={reduce ? undefined : { opacity: 0, scale: 0.985 }}
+                  initial={reduce ? false : coverFlying ? { opacity: 0 } : { opacity: 0, y: RISE }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={
+                    reduce
+                      ? undefined
+                      : {
+                          opacity: 0,
+                          y: -RISE,
+                          transition: { duration: DURATION.fast, ease: EASE_OUT },
+                        }
+                  }
+                  // Leaving is quicker than arriving. Both pages are mounted for
+                  // as long as the exit runs, and the page being left is the
+                  // expensive one — the reader holds the whole book and its
+                  // section iframes while the shelf mounts underneath it. A
+                  // short exit cuts that overlap window roughly in half and
+                  // reads as the new page taking over rather than two pages
+                  // trading places; the arriving page keeps the house duration.
                   transition={{ duration: reduce ? 0 : DURATION.base, ease: EASE_OUT }}
                   className="h-full"
                 >
-                  <Outlet />
+                  {outlet}
                 </motion.div>
               </AnimatePresence>
             </Suspense>

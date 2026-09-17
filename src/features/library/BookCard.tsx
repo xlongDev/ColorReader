@@ -7,7 +7,8 @@ import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { authorLine, formatFileSize } from "@/features/library/format";
 import { cn } from "@/lib/cn";
 import { SPRING, useMotion } from "@/lib/motion";
-import { boxOf, useBookHandoff } from "@/stores/book-handoff";
+import { useLandingBox } from "@/hooks/useLandingBox";
+import { boxOf, useBookHandoff, type CoverBox } from "@/stores/book-handoff";
 import type { BookSummary } from "@/types/ipc";
 
 interface BookCardProps {
@@ -33,6 +34,16 @@ const coverAction =
   "hover:bg-black/65 hover:text-white";
 
 /** One shelf tile: cover, title, authors and quiet hover actions. */
+/**
+ * Whether a tile is on screen at all.
+ *
+ * A cover flying home needs somewhere to land, and a tile scrolled out of sight
+ * is not it — the flight dissolves rather than aiming at something nobody can
+ * see. Module scope so the identity is stable: the tracker keeps this in its
+ * effect deps, and an inline arrow would restart the loop on every render.
+ */
+const onShelf = (box: Omit<CoverBox, "radius">) => box.y + box.h > 0 && box.y < window.innerHeight;
+
 export function BookCard({
   book,
   busy,
@@ -54,16 +65,35 @@ export function BookCard({
   /** Hands the cover off to the reader's header before the route changes. */
   const open = () => {
     const cover = coverRef.current;
-    if (cover) beginHandoff({ id: book.id, coverUrl: book.coverUrl, from: boxOf(cover) });
+    if (cover) {
+      beginHandoff({ id: book.id, coverUrl: book.coverUrl, from: boxOf(cover), side: "shelf" });
+    }
     onOpen(book);
   };
+
+  // The other end of the same gesture. When this book's cover is in the air —
+  // on its way back from the reader — this tile is the landing pad, and it
+  // keeps its own cover hidden until the flight arrives so the two are never
+  // both on screen (the same trick the reader's header thumbnail uses on the
+  // way in). A shelf that comes back scrolled somewhere else leaves the flight
+  // to dissolve rather than sending the cover to a tile nobody can see.
+  const flying = useBookHandoff((s) => s.id === book.id);
+  // Tracked rather than taken once: the shelf is still rising out of its own
+  // entrance when the flight arrives, and a box captured then is ten pixels
+  // below where the tile settles — the cover would hop into place at the end.
+  useLandingBox(book.id, coverRef, "shelf", onShelf);
 
   return (
     // layout: shared-layout FLIP, so resorting or filtering the shelf glides
     // cards to their new slots instead of snapping the grid into place.
     <motion.div
       layout
-      initial={{ opacity: 0, scale: m.reduce ? 1 : 0.96 }}
+      // A tile a cover is flying home to skips its own entrance. It is invisible
+      // either way — its cover stays hidden until the flight arrives — while a
+      // wrapper still scaling up from 0.96 would move the box the flight is
+      // aiming at (about 5px on a 138px cover), and a flight whose target moves
+      // restarts its transition on every frame the target moves.
+      initial={flying ? false : { opacity: 0, scale: m.reduce ? 1 : 0.96 }}
       animate={{ opacity: 1, scale: 1 }}
       exit={{ opacity: 0, scale: m.reduce ? 1 : 0.94 }}
       transition={{ ...m.layout, delay }}
@@ -82,14 +112,26 @@ export function BookCard({
             put. The book lifts off the shelf; the label does not. */}
         <span
           ref={coverRef}
+          data-book-cover
           className={cn(
             "glass relative block aspect-[3/4] overflow-hidden rounded-md",
             // Tailwind v4 moves `translate-y-*` with the `translate` property,
             // not `transform` — listing `transform` here would leave the lift
             // un-animated and snapping into place.
+            //
+            // `opacity` is deliberately not in this list. It only ever changes
+            // for the handoff, and that has to be instant at both ends: while
+            // the flight is in the air it is exactly on top of this cover, so
+            // hiding and revealing it are invisible — but taking 300 ms over
+            // the reveal is what made the cover look redrawn once the flight
+            // landed (measured: the flight at 0.04 opacity, this cover at 0,
+            // then a 0.53/0.86/0.93 ramp back up).
             "transition-[translate,box-shadow] duration-300 ease-out",
             "group-hover:-translate-y-1 group-hover:shadow-[var(--shadow-cover-lift)]",
             "motion-reduce:transition-none motion-reduce:group-hover:translate-y-0",
+            // Hidden only while this card's cover is in the air; the flight
+            // ends the handoff and this cover is the one that lands.
+            flying && "opacity-0",
           )}
         >
           {book.coverUrl ? (
