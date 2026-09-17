@@ -88,6 +88,18 @@ async function swapOffsets(page: Page, click: string) {
   });
 }
 
+/**
+ * How far a page must have moved for this test to call it a step in that
+ * direction. Deliberately not a fraction of `PAGE_SHIFT`: the offset only exists
+ * while the swap runs, and how many frames of it a sampler catches depends on
+ * how busy the main thread is. Measured on WebKit, the first mid-flight frame of
+ * the outgoing page read exactly -20 of its -28, and a `< -20` threshold rejects
+ * the value it most often sees — CI duly went red on a test that is green here.
+ * The contract being asserted is which way each page went, so the threshold sits
+ * an unmistakable distance from zero and no further.
+ */
+const MOVED = 8;
+
 test("a swap travels the way the reader moved down the sidebar", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto(SHELF);
@@ -100,12 +112,14 @@ test("a swap travels the way the reader moved down the sidebar", async ({ page }
 
   // Down the list: the arriving page comes from below, the leaving one goes up.
   const down = await swapOffsets(page, "统计");
-  expect(down["/stats"], "统计 arrives from below").toBeGreaterThan(20);
-  expect(down["/"], "书库 leaves upward").toBeLessThan(-20);
+  const seenDown = JSON.stringify(down);
+  expect(down["/stats"], `统计 arrives from below — saw ${seenDown}`).toBeGreaterThan(MOVED);
+  expect(down["/"], `书库 leaves upward — saw ${seenDown}`).toBeLessThan(-MOVED);
   await page.waitForTimeout(300);
 
   // Up the list: mirrored, or the two pages would read as moving together.
   const up = await swapOffsets(page, "书库");
-  expect(up["/"], "书库 arrives from above").toBeLessThan(-20);
-  expect(up["/stats"], "统计 leaves downward").toBeGreaterThan(20);
+  const seenUp = JSON.stringify(up);
+  expect(up["/"], `书库 arrives from above — saw ${seenUp}`).toBeLessThan(-MOVED);
+  expect(up["/stats"], `统计 leaves downward — saw ${seenUp}`).toBeGreaterThan(MOVED);
 });
