@@ -61,42 +61,47 @@ test("the four shelf views never mount two shelves", async ({ page }) => {
 /**
  * The largest offset each wrapper took while the swap ran: for the arriving
  * page that is where it came in from, for the leaving one how far it went.
+ *
+ * Read off the inline style motion writes each frame, rather than sampled on a
+ * timer. A timer's samples are as sparse as the main thread is busy, and a route
+ * change is the busiest moment this app has: on WebKit in CI every sample of a
+ * swap fell outside the 150ms an exit lasts, so the outgoing page read 0 and the
+ * test failed on a page that had visibly moved. A mutation callback runs in the
+ * frame the value is written, so this sees every value the animation produced —
+ * including the one the arriving page is born with.
  */
-async function swapOffsets(page: Page, click: string) {
+async function watchOffsets(page: Page) {
   await page.evaluate(() => {
-    const w = window as unknown as { seen?: Record<string, number>; stop?: boolean };
+    const w = window as unknown as { seen?: Record<string, number> };
     w.seen = {};
-    w.stop = false;
-    const tick = () => {
-      if (w.stop) return;
-      for (const el of document.querySelectorAll("[data-page-swap]")) {
-        const path = el.getAttribute("data-page-swap") ?? "?";
-        const y = Math.round(new DOMMatrix(getComputedStyle(el).transform).m42);
-        if (Math.abs(y) > Math.abs(w.seen![path] ?? 0)) w.seen![path] = y;
-      }
-      requestAnimationFrame(tick);
+    const read = (element: Element) => {
+      const path = element.getAttribute("data-page-swap");
+      if (path === null) return;
+      const y = Math.round(new DOMMatrix(getComputedStyle(element).transform).m42);
+      if (Math.abs(y) > Math.abs(w.seen![path] ?? 0)) w.seen![path] = y;
     };
-    requestAnimationFrame(tick);
+    new MutationObserver((records) => {
+      for (const record of records) {
+        const target = record.target;
+        if (target instanceof Element && target.hasAttribute("data-page-swap")) read(target);
+      }
+    }).observe(document.body, { attributes: true, attributeFilter: ["style"], subtree: true });
   });
+}
 
+async function swapOffsets(page: Page, click: string) {
+  await watchOffsets(page);
   await page.getByRole("link", { name: click }).first().click();
   await page.waitForTimeout(420);
-  return page.evaluate(() => {
-    const w = window as unknown as { seen: Record<string, number>; stop: boolean };
-    w.stop = true;
-    return w.seen;
-  });
+  return page.evaluate(() => (window as unknown as { seen: Record<string, number> }).seen);
 }
 
 /**
  * How far a page must have moved for this test to call it a step in that
- * direction. Deliberately not a fraction of `PAGE_SHIFT`: the offset only exists
- * while the swap runs, and how many frames of it a sampler catches depends on
- * how busy the main thread is. Measured on WebKit, the first mid-flight frame of
- * the outgoing page read exactly -20 of its -28, and a `< -20` threshold rejects
- * the value it most often sees — CI duly went red on a test that is green here.
- * The contract being asserted is which way each page went, so the threshold sits
- * an unmistakable distance from zero and no further.
+ * direction — not a fraction of `PAGE_SHIFT`. The contract is which way each
+ * page went: the two must travel in opposite directions, and either travelling
+ * nowhere is the failure this guards. The travel itself is `PAGE_SHIFT` and is
+ * pinned where it is defined.
  */
 const MOVED = 8;
 

@@ -163,8 +163,13 @@ test("leaving the reader flies the cover home and restores the shelf's place", a
   };
   const [flightX, flightY] = xy(watched.landing?.flight ?? "0,0");
   const [tileX, tileY] = xy(watched.landing?.tile ?? "0,0");
-  expect(Math.abs(flightX - tileX), "landed on the tile, x").toBeLessThan(1.5);
-  expect(Math.abs(flightY - tileY), "landed on the tile, y").toBeLessThan(1.5);
+  // Within a few pixels, not within one. The pair is captured on the last
+  // sample both were still in the DOM for, and that sample can be a frame short
+  // of the arrival — on CI (WebKit, loaded runner) it read 2.4px, which a 1.5px
+  // threshold rejects for a flight that did land on its tile. The bug this
+  // guards is a *visible* miss: the one-shot box left the flight 9px low.
+  expect(Math.abs(flightX - tileX), "landed on the tile, x").toBeLessThan(4);
+  expect(Math.abs(flightY - tileY), "landed on the tile, y").toBeLessThan(4);
 });
 
 /**
@@ -213,8 +218,27 @@ test("a scroll under a flight home does not drag the flight with it", async ({ p
   });
 
   await page.getByRole("button", { name: "返回书库" }).first().click();
-  // A beat into the flight, then scroll the shelf out from under it.
-  await page.waitForTimeout(140);
+  // A beat into the flight, then scroll the shelf out from under it. Waited for
+  // rather than timed: the flight only launches once it has somewhere to land
+  // (see `BookFlight`), so its first movement *is* the proof that the box was
+  // read — and on a loaded runner that first frame arrives later than any fixed
+  // beat. Measured on CI: the shelf mounted slowly enough that the scroll landed
+  // before the box was read, the flight then aimed at the tile's scrolled slot
+  // and ended 262px from where this test thought its aim was. That is the flight
+  // obeying the aim it was given, not the "chased the scroll" regression under
+  // test — so the scroll has to wait until there is an aim to not-chase.
+  await page.waitForFunction(
+    () => {
+      const w = window as unknown as { flightStart?: number };
+      const flight = document.querySelector("[data-cover-flight]");
+      if (!flight) return false;
+      const y = Math.round(flight.getBoundingClientRect().y);
+      w.flightStart ??= y;
+      return Math.abs(y - w.flightStart) > 4;
+    },
+    undefined,
+    { timeout: 5_000 },
+  );
   const scrolled = await shelf.evaluate((el) => {
     el.scrollTop += 260;
     return el.scrollTop;

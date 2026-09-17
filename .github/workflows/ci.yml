@@ -41,8 +41,13 @@ jobs:
           pnpm test:e2e > /tmp/e2e.log 2>&1
           code=$?
           if [ "$code" -ne 0 ]; then
-            grep -aE '^[[:space:]]+[0-9]+\) |Error:|Expected:|Received:|Timeout [0-9]+|failed$' /tmp/e2e.log \
-              | head -20 | while IFS= read -r line; do echo "::error::E2E ${line:0:400}"; done
+            # One annotation per failure, its lines joined into one: GitHub keeps
+            # only ten annotations per step and silently drops the rest, which is
+            # what took the Expected/Received lines with it last time.
+            awk '/^[[:space:]]+[0-9]+\) /{ if (n++) print line; line = "" }
+                 n { line = (line == "" ? "" : line " | ") $0 }
+                 END { if (n) print line }' /tmp/e2e.log \
+              | cut -c1-900 | while IFS= read -r line; do echo "::error::E2E $line"; done
           fi
           exit $code
       - uses: actions/upload-artifact@v4
