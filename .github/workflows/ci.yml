@@ -27,7 +27,11 @@ jobs:
       - run: pnpm verify
       # `verify` builds dist, which is what the preview server serves. Without
       # this step nothing ever ran the e2e suite and it rotted unnoticed.
-      - run: pnpm exec playwright install --with-deps chromium
+      # Both engines: `playwright.config.ts` runs every test twice on purpose,
+      # and WebKit is the one the shipped Tauri binary actually renders with —
+      # installing chromium alone left the webkit project failing to launch
+      # (and the whole job red) since this step was added.
+      - run: pnpm exec playwright install --with-deps chromium webkit
       - run: pnpm test:e2e
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
