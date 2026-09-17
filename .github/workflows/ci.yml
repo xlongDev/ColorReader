@@ -39,10 +39,10 @@ jobs:
           pnpm test:e2e > /tmp/e2e.log 2>&1
           code=$?
           if [ "$code" -ne 0 ]; then
-            awk '/^[[:space:]]+[0-9]+\) /{ if (n++) print line; line = "" }
-                 n { line = (line == "" ? "" : line " | ") $0 }
-                 END { if (n) print line }' /tmp/e2e.log \
-              | cut -c1-900 | while IFS= read -r line; do echo "::error::E2E $line"; done
+            # One annotation per relevant line, taken from the end of the log:
+            # GitHub keeps ten per step and drops the rest.
+            grep -aE "✘|Error|Expected|Received|passed|failed|browserType|Timed out" /tmp/e2e.log \
+              | tail -n 10 | cut -c1-800 | while IFS= read -r line; do echo "::error::E2E $line"; done
           fi
           exit $code
       - uses: actions/upload-artifact@v4
