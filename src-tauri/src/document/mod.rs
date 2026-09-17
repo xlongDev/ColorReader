@@ -41,7 +41,7 @@ pub const LINK_PARAGRAPH_PREFIX: &str = "\u{FFFB}";
 pub const LINK_FIELD_SEPARATOR: char = '\u{1F}';
 
 /// Formats the library can hold today.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(specta::Type, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BookFormat {
     Epub,

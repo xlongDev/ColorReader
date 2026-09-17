@@ -14,7 +14,7 @@ use crate::state::AppState;
 /// Progress of one book download.
 pub const SOURCE_DOWNLOAD_EVENT: &str = "source://download-progress";
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceProgress {
     pub done: usize,
@@ -25,12 +25,14 @@ pub struct SourceProgress {
 
 /// `source.list` — every stored source, definition included.
 #[tauri::command]
+#[specta::specta]
 pub fn source_list(state: State<'_, AppState>) -> AppResult<Vec<SourceEntry>> {
     state.library.with(source::list)
 }
 
 /// `source.save` — insert or update one source; returns its id.
 #[tauri::command]
+#[specta::specta]
 pub fn source_save(
     state: State<'_, AppState>,
     id: Option<String>,
@@ -41,12 +43,14 @@ pub fn source_save(
 
 /// `source.delete`
 #[tauri::command]
+#[specta::specta]
 pub fn source_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     source::delete(&state.library, &id)
 }
 
 /// `source.search`
 #[tauri::command]
+#[specta::specta]
 pub async fn source_search(
     state: State<'_, AppState>,
     source_id: String,
@@ -63,6 +67,7 @@ pub async fn source_search(
 
 /// `source.book` — book detail for a URL from the search results.
 #[tauri::command]
+#[specta::specta]
 pub async fn source_book(
     state: State<'_, AppState>,
     source_id: String,
@@ -75,6 +80,7 @@ pub async fn source_book(
 
 /// `source.chapters`
 #[tauri::command]
+#[specta::specta]
 pub async fn source_chapters(
     state: State<'_, AppState>,
     source_id: String,
@@ -89,6 +95,7 @@ pub async fn source_chapters(
 /// progress per chapter. The command resolves only when the book is on the
 /// shelf, so the UI can navigate straight to it.
 #[tauri::command]
+#[specta::specta]
 pub async fn source_download(
     app: AppHandle,
     state: State<'_, AppState>,

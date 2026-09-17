@@ -35,7 +35,7 @@ const KEY: &str = "reading.fonts";
 const EXTENSIONS: [&str; 5] = ["ttf", "otf", "ttc", "woff", "woff2"];
 
 /// One imported font, as the settings document and the UI hold it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Font {
     pub id: String,

@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// A bookmark as the UI sees it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Bookmark {
     pub id: String,

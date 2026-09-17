@@ -15,12 +15,14 @@ use crate::state::AppState;
 
 /// `font.list` — every imported font, in the order they were added.
 #[tauri::command]
+#[specta::specta]
 pub fn font_list(state: State<'_, AppState>) -> AppResult<Vec<Font>> {
     fonts::list(&state.library)
 }
 
 /// `font.import` — `path` is the font file the reader picked.
 #[tauri::command]
+#[specta::specta]
 pub async fn font_import(state: State<'_, AppState>, path: String) -> AppResult<Font> {
     let library = state.library.clone();
     let root = state.layout.fonts_dir.clone();
@@ -32,6 +34,7 @@ pub async fn font_import(state: State<'_, AppState>, path: String) -> AppResult<
 
 /// `font.delete` — forgets one font and removes its bytes.
 #[tauri::command]
+#[specta::specta]
 pub fn font_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     fonts::remove(&state.library, &state.layout.fonts_dir, &id)
 }

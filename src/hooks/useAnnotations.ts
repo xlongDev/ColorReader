@@ -24,7 +24,16 @@ export function useCreateAnnotation(bookId: string | null) {
   return useMutation({
     mutationFn: (input: Omit<NewAnnotation, "bookId">) => {
       if (!bookId || !isDesktopRuntime) return Promise.resolve<Annotation | null>(null);
-      return ipc.annotationCreate({ ...input, bookId });
+      return ipc.annotationCreate(
+        bookId,
+        input.chapterIdx,
+        input.startChar,
+        input.endChar,
+        input.text,
+        input.cfi ?? null,
+        input.color ?? null,
+        input.style ?? null,
+      );
     },
     onSuccess: (created) => {
       if (!bookId || !created) return;

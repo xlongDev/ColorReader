@@ -13,6 +13,7 @@ use crate::state::AppState;
 
 /// `reader.toc` — chapter metadata in reading order.
 #[tauri::command]
+#[specta::specta]
 pub async fn reader_toc(
     state: State<'_, AppState>,
     book_id: String,
@@ -25,6 +26,7 @@ pub async fn reader_toc(
 
 /// `reader.chapter` — the body of one chapter.
 #[tauri::command]
+#[specta::specta]
 pub fn reader_chapter(
     state: State<'_, AppState>,
     book_id: String,
@@ -40,6 +42,7 @@ pub fn reader_chapter(
 /// fraction alone (a CFI for foliate-rendered Kindle books). `None` keeps the
 /// stored anchor, so the prose path never clears a Kindle position.
 #[tauri::command]
+#[specta::specta]
 pub fn reader_set_progress(
     state: State<'_, AppState>,
     book_id: String,

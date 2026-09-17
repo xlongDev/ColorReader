@@ -15,7 +15,7 @@ export function useSearch(needle: string, bookId: string | null) {
     queryKey: ["search", trimmed, bookId],
     queryFn: () => {
       if (!isDesktopRuntime) return Promise.resolve<SearchHit[]>([]);
-      return ipc.searchQuery(trimmed, bookId);
+      return ipc.searchQuery(trimmed, bookId, null);
     },
     enabled: trimmed.length > 0,
     staleTime: 10_000,

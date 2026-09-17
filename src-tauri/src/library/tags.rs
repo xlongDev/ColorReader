@@ -18,7 +18,7 @@ use crate::error::{AppError, AppResult};
 pub const MAX_TAG_CHARS: usize = 40;
 
 /// One tag and how many books carry it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TagSummary {
     pub id: String,

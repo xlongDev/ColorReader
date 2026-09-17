@@ -22,6 +22,7 @@ use crate::state::AppState;
 /// "no dictionary here" are answers: the popup falls through to AI on both and
 /// only mentions the first.
 #[tauri::command]
+#[specta::specta]
 pub async fn lookup_dictionary(state: State<'_, AppState>, term: String) -> AppResult<Lookup> {
     let platform = dictionary::define(&term);
     let miss_or_unavailable = match platform {
@@ -45,6 +46,7 @@ pub async fn lookup_dictionary(state: State<'_, AppState>, term: String) -> AppR
 
 /// `dictionary.list` — every imported dictionary, in the order they were added.
 #[tauri::command]
+#[specta::specta]
 pub fn dictionary_list(state: State<'_, AppState>) -> AppResult<Vec<Dictionary>> {
     dictionaries::list(&state.library)
 }
@@ -52,6 +54,7 @@ pub fn dictionary_list(state: State<'_, AppState>) -> AppResult<Vec<Dictionary>>
 /// `dictionary.import` — `path` is the picked `.ifo`; its siblings are read
 /// from the same directory.
 #[tauri::command]
+#[specta::specta]
 pub async fn dictionary_import(state: State<'_, AppState>, path: String) -> AppResult<Dictionary> {
     let library = state.library.clone();
     let root = state.layout.dictionaries_dir.clone();
@@ -62,6 +65,7 @@ pub async fn dictionary_import(state: State<'_, AppState>, path: String) -> AppR
 
 /// `dictionary.delete` — forgets one dictionary and removes its files.
 #[tauri::command]
+#[specta::specta]
 pub fn dictionary_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     dictionaries::remove(&state.library, &state.layout.dictionaries_dir, &id)
 }

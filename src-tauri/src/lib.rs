@@ -176,3 +176,106 @@ pub fn run() -> tauri::Result<()> {
     app.run(|_handle, _event| {});
     Ok(())
 }
+
+/// Generates `src/lib/bindings.ts` from the command signatures.
+///
+/// Run with `cargo test export_bindings`; the file is committed like any other
+/// generated artefact.
+///
+/// Dispatch deliberately stays on `tauri::generate_handler!` (see `run`):
+/// `book_asset` and `book_source_file` return `tauri::ipc::Response` — raw
+/// bytes over the binary channel — which Specta cannot describe, so they are
+/// excluded here and hand-written in `src/lib/ipc.ts`.
+///
+/// ponytail: the command list is therefore spelled out twice. That duplication
+/// cannot drift silently: a command missing from `collect_commands!` stops
+/// existing in the generated `commands` object, which fails `tsc`.
+#[cfg(test)]
+mod specta_bindings {
+    use super::commands;
+
+    #[test]
+    fn export_bindings() {
+        let builder = tauri_specta::Builder::<tauri::Wry>::new()
+            .commands(tauri_specta::collect_commands![
+                commands::ai::ai_get_config,
+                commands::ai::ai_set_config,
+                commands::ai::ai_test,
+                commands::ai::ai_chat,
+                commands::ai::ai_digest,
+                commands::annotation::annotation_create,
+                commands::annotation::annotation_update,
+                commands::annotation::annotation_anchor,
+                commands::annotation::annotation_note,
+                commands::annotation::annotation_list,
+                commands::annotation::annotation_delete,
+                commands::book::book_list,
+                commands::book::book_get,
+                commands::book::book_stats,
+                commands::book::book_images,
+                commands::book::book_source_url,
+                commands::book::book_cover_save,
+                commands::book::book_import,
+                commands::book::pack_export,
+                commands::book::book_delete,
+                commands::book::book_set_favorite,
+                commands::bookmark::bookmark_create,
+                commands::bookmark::bookmark_list,
+                commands::bookmark::bookmark_delete,
+                commands::clippings::clippings_import,
+                commands::dictionary::lookup_dictionary,
+                commands::dictionary::dictionary_list,
+                commands::dictionary::dictionary_import,
+                commands::dictionary::dictionary_delete,
+                commands::export::notes_export,
+                commands::font::font_list,
+                commands::font::font_import,
+                commands::font::font_delete,
+                commands::graph::graph_status,
+                commands::graph::graph_build,
+                commands::graph::graph_query,
+                commands::lookup::lookup_translate,
+                commands::lookup::lookup_wikipedia,
+                commands::rag::rag_status,
+                commands::rag::rag_index_book,
+                commands::rag::rag_chat,
+                commands::reader::reader_toc,
+                commands::reader::reader_chapter,
+                commands::reader::reader_set_progress,
+                commands::search::search_query,
+                commands::source::source_list,
+                commands::source::source_save,
+                commands::source::source_delete,
+                commands::source::source_search,
+                commands::source::source_book,
+                commands::source::source_chapters,
+                commands::source::source_download,
+                commands::stats::stats_record_session,
+                commands::stats::stats_reading,
+                commands::sync::sync_get_config,
+                commands::sync::sync_set_config,
+                commands::sync::sync_test,
+                commands::sync::sync_now,
+                commands::system::system_info,
+                commands::tag::tag_list,
+                commands::tag::tag_delete,
+                commands::tag::book_set_tags,
+                commands::tts::tts_edge_voices,
+                commands::tts::tts_edge_speak,
+            ])
+            // Event payloads. They never appear in a command signature, so they
+            // are not reachable from `collect_commands!` and have to be named
+            // here or the frontend would have to hand-write them again.
+            .typ::<commands::book::ImportProgress>()
+            .typ::<commands::ai::AiDelta>()
+            .typ::<commands::rag::RagProgress>()
+            .typ::<commands::graph::GraphProgress>()
+            .typ::<commands::source::SourceProgress>()
+            .error_handling(tauri_specta::ErrorHandlingMode::Throw)
+            .dangerously_cast_bigints_to_number();
+
+        builder
+            .export(specta_typescript::Typescript::default(), "../src/lib/bindings.ts")
+            .expect("failed to export typescript bindings");
+    }
+}

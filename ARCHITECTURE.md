@@ -384,14 +384,37 @@ stats.*       sync.*        system.*      tag.*         tts.*
 
 示例：`system_info`、`book_import`、`reader_chapter`、`search_query`、`annotation_create`、`pack_export`。
 
-Tauri 命令名在 Rust 里是 snake_case，前端通过 `src/lib/ipc.ts` 的单一出口做类型转换，**不散落 `invoke` 调用**。返回值类型镜像在 `src/types/ipc.ts`。
+Tauri 命令名在 Rust 里是 snake_case，前端通过 `src/lib/ipc.ts` 的单一出口调用，**不散落 `invoke` 调用**。返回值类型由 Rust 签名生成，落在 `src/lib/bindings.ts`（`src/types/ipc.ts` 只做转出与少量别名）。
 
-> `tauri-specta` 可以在编译期生成这份绑定、取代手写的镜像（可省去 `lib/ipc.ts` + `types/ipc.ts` 约 900 行）。已调研并**暂缓**：面向 Tauri 2 的分支至今只有 pre-release（当前最高 `2.0.0-rc.25`），且要引入 8 个 RC crate 与一个 codegen 步骤；等上游发稳定版再议。
+### 绑定由 Rust 生成（tauri-specta）
+
+66 个命令里 64 个由 `#[specta::specta]` 标注生成，2 个例外见下。生成产物 `src/lib/bindings.ts`
+**要提交**，改动 Rust 签名后重新生成：
+
+```sh
+cd src-tauri && cargo test --lib specta_bindings::export_bindings
+pnpm exec prettier --write src/lib/bindings.ts   # 生成物未格式化，pre-commit 会卡住
+```
+
+几条不能忘的约定：
+
+- **派发仍是 `tauri::generate_handler!`**，`tauri-specta` 只当类型生成器。`book_asset` / `book_source_file`
+  返回 `tauri::ipc::Response`（二进制通道），specta 建不了模；而 `tauri::ipc::Invoke` 没有 `Clone`，
+  两个 invoke handler 拼不起来。代价是命令清单写两遍，但漏加会让 `tsc` 直接报错，不会静默漂移。
+- `.error_handling(ErrorHandlingMode::Throw)`：生成的 `Promise<T>` 在 `Err` 时 reject，TanStack Query 的
+  `onError` 语义不变（默认的 Result 联合类型会逼所有调用点改错误处理）。
+- `.dangerously_cast_bigints_to_number()` 必开，否则 `u64`/`usize` 拒绝导出。
+- `AppError` 的 `Type` 必须**手写成 String**（它的 `Serialize` 是纯字符串，derive 会变成 tagged enum）。
+  注意路径是 `specta::datatype::DataType`，写错会让所有 `Result<T, AppError>` 报一堆假错误。
+- 事件负载不在任何命令签名里，必须 `.typ::<T>()` 显式注册（`ImportProgress`、`AiDelta`、
+  `RagProgress`、`GraphProgress`、`SourceProgress`）。
+- 生成类型是 Rust 类型的事实：`f64` → `number | null`；`#[serde(default)]` → 可选字段；
+  `skip_deserializing` → `_Serialize` / `_Deserialize` 分裂（如 `Font`，前端取 `Font_Serialize`）。
 
 ### 事件
 
 事件名统一为 `<域>://<事件名>`，Rust 侧是 `commands/<域>.rs` 里的
-`pub const <X>_EVENT`，负载类型镜像在 `src/types/ipc.ts`：
+`pub const <X>_EVENT`，负载类型由 Rust 生成（见上），经 `src/types/ipc.ts` 转出：
 
 ```text
 book://import-progress       { done, total, path }

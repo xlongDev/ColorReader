@@ -24,13 +24,13 @@ export function useCreateBookmark(bookId: string | null) {
   return useMutation({
     mutationFn: (input: Omit<NewBookmark, "bookId">) => {
       if (!bookId || !isDesktopRuntime) return Promise.resolve<Bookmark | null>(null);
-      return ipc.bookmarkCreate({ ...input, bookId });
+      return ipc.bookmarkCreate(bookId, input.chapterIdx, input.fraction, input.label);
     },
     onSuccess: (created) => {
       if (!bookId || !created) return;
       queryClient.setQueryData<Bookmark[]>(bookmarksKey(bookId), (old = []) =>
         [...old, created].toSorted(
-          (a, b) => a.chapterIdx - b.chapterIdx || a.fraction - b.fraction,
+          (a, b) => a.chapterIdx - b.chapterIdx || (a.fraction ?? 0) - (b.fraction ?? 0),
         ),
       );
     },

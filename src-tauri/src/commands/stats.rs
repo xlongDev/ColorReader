@@ -11,6 +11,7 @@ const WINDOW_DAYS: usize = 182;
 
 /// `stats.recordSession` — adds `seconds` to today's row for `book_id`.
 #[tauri::command]
+#[specta::specta]
 pub fn stats_record_session(
     state: State<'_, AppState>,
     book_id: String,
@@ -22,6 +23,7 @@ pub fn stats_record_session(
 /// `stats.reading` — today, the last week, the lifetime total, the streak and
 /// the trailing days for the heat map.
 #[tauri::command]
+#[specta::specta]
 pub fn stats_reading(state: State<'_, AppState>) -> AppResult<ReadingStats> {
     state.library.with(|conn| stats::reading_stats(conn, WINDOW_DAYS))
 }

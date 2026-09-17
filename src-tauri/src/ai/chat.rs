@@ -13,14 +13,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// One turn in a conversation. `system` arrives separately, not as a message.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChatMessage {
     pub role: Role,
     pub content: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(specta::Type, Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
     System,

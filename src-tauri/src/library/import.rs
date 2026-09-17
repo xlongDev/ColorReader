@@ -17,7 +17,7 @@ use crate::document::{self, detect_format};
 use crate::error::{AppError, AppResult};
 
 /// What happened to one file in the batch.
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum ImportOutcome {
     Imported {

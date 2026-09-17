@@ -25,7 +25,7 @@ use crate::error::{AppError, AppResult};
 use crate::library::{annotations, bookmarks};
 
 /// Where the state document lives and how to sign in.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncConfig {
     /// WebDAV collection, e.g. `https://dav.example.com/dav/ColorReader`.
@@ -172,7 +172,7 @@ pub struct LocalBook {
 
 /// What the merge decided for one book. Struct variants so the serialized
 /// form is a flat `{ decision, title, progress }` object.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "decision")]
 pub enum Change {
     /// Only the local side knew this position; it went up.
@@ -301,7 +301,7 @@ pub fn apply_downloaded(
 }
 
 /// Counts of what a merge did to one kind of item, for the sync report.
-#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Tally {
     pub uploaded: usize,
@@ -312,7 +312,7 @@ pub struct Tally {
 /// Everything one `sync.now` did: the per-book decisions plus highlight and
 /// bookmark tallies. The latter are counts, not lists — a library can hold
 /// hundreds of highlights and listing each would drown the panel.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncReport {
     pub books: Vec<Change>,

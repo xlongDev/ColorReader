@@ -9,6 +9,7 @@ use crate::state::AppState;
 
 /// `annotation.create` — records one highlight and returns it.
 #[tauri::command]
+#[specta::specta]
 #[allow(clippy::too_many_arguments)]
 pub fn annotation_create(
     state: State<'_, AppState>,
@@ -40,6 +41,7 @@ pub fn annotation_create(
 
 /// `annotation.update` — restyles one highlight (re-colour / re-shape).
 #[tauri::command]
+#[specta::specta]
 pub fn annotation_update(
     state: State<'_, AppState>,
     id: String,
@@ -53,6 +55,7 @@ pub fn annotation_update(
 /// without. The reader calls it once it has located the highlight's text in a
 /// section, which is the only place a CFI can be minted.
 #[tauri::command]
+#[specta::specta]
 pub fn annotation_anchor(
     state: State<'_, AppState>,
     id: String,
@@ -64,6 +67,7 @@ pub fn annotation_anchor(
 /// `annotation.note` — writes the reader's own note on a highlight, or clears
 /// it when `note` is absent or blank.
 #[tauri::command]
+#[specta::specta]
 pub fn annotation_note(
     state: State<'_, AppState>,
     id: String,
@@ -74,12 +78,14 @@ pub fn annotation_note(
 
 /// `annotation.list` — every highlight for a book, in reading order.
 #[tauri::command]
+#[specta::specta]
 pub fn annotation_list(state: State<'_, AppState>, book_id: String) -> AppResult<Vec<Annotation>> {
     state.library.with(|conn| annotations::list(conn, &book_id))
 }
 
 /// `annotation.delete` — removes one highlight.
 #[tauri::command]
+#[specta::specta]
 pub fn annotation_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.library.with(|conn| annotations::delete(conn, &id))
 }

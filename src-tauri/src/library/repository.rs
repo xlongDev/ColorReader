@@ -34,7 +34,7 @@ pub struct NewBook<'a> {
 }
 
 /// A book as the UI sees it.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(specta::Type, Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct BookSummary {
     pub id: String,
@@ -63,7 +63,7 @@ pub struct BookSummary {
 }
 
 /// Which shelf the user is looking at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(specta::Type, Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LibraryFilter {
     #[default]
@@ -83,7 +83,7 @@ impl LibraryFilter {
 }
 
 /// Sort orders exposed by the UI.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[derive(specta::Type, Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum LibrarySort {
     #[default]
@@ -114,7 +114,7 @@ impl LibrarySort {
 }
 
 /// Parsed list request coming from the frontend.
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(specta::Type, Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookQuery {
     #[serde(default)]
@@ -132,7 +132,7 @@ pub struct BookQuery {
 }
 
 /// Aggregate counts shown above the shelf.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(specta::Type, Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryStats {
     pub total: i64,

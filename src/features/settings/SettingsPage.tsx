@@ -26,14 +26,7 @@ import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from 
 import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
 import { useDeleteFont, useFonts, useImportFont } from "@/hooks/useFonts";
 import { useUpdater, type UpdateState } from "@/hooks/useUpdater";
-import type {
-  AiConfig,
-  LocalDictionary,
-  SyncChange,
-  SyncConfig,
-  SyncReport,
-  SyncTally,
-} from "@/types/ipc";
+import type { AiConfig, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
 import { cn } from "@/lib/cn";
 import { SPRING, useMotion } from "@/lib/motion";
 
@@ -582,7 +575,7 @@ function AiForm({ initial }: { initial: AiConfig }) {
 }
 
 /** What each bundle format is called in the list. */
-const FORMAT_LABELS: Record<LocalDictionary["kind"], string> = {
+const FORMAT_LABELS: Record<string, string> = {
   stardict: "StarDict",
   mdict: "MDict",
 };
@@ -638,7 +631,11 @@ function DictionarySection() {
         <Row label="已导入" hint="还没有导入词典。" />
       ) : (
         list.map((dictionary) => (
-          <Row key={dictionary.id} label={dictionary.name} hint={FORMAT_LABELS[dictionary.kind]}>
+          <Row
+            key={dictionary.id}
+            label={dictionary.name}
+            hint={FORMAT_LABELS[dictionary.kind ?? "stardict"]}
+          >
             <span className="text-text-3 text-[12.5px]">
               {dictionary.wordcount.toLocaleString()} 条
             </span>
@@ -863,7 +860,7 @@ function SyncForm({ initial }: { initial: SyncConfig }) {
                 <span className="text-text-1">{change.title}</span>
                 <span className="text-text-3">
                   {" "}
-                  · {DECISION_LABELS[change.decision]} · {Math.round(change.progress * 100)}%
+                  · {DECISION_LABELS[change.decision]} · {Math.round((change.progress ?? 0) * 100)}%
                 </span>
               </li>
             ))}

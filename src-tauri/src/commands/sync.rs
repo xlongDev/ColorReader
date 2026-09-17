@@ -8,24 +8,28 @@ use crate::state::AppState;
 
 /// `sync.getConfig`
 #[tauri::command]
+#[specta::specta]
 pub fn sync_get_config(state: State<'_, AppState>) -> AppResult<SyncConfig> {
     sync::config(&state.library)
 }
 
 /// `sync.setConfig` — returns the stored, normalized form.
 #[tauri::command]
+#[specta::specta]
 pub fn sync_set_config(state: State<'_, AppState>, config: SyncConfig) -> AppResult<SyncConfig> {
     sync::set_config(&state.library, &config)
 }
 
 /// `sync.test` — proves the server is reachable and authorized; does not save.
 #[tauri::command]
+#[specta::specta]
 pub async fn sync_test(config: SyncConfig) -> AppResult<()> {
     sync::test_connection(&config).await
 }
 
 /// `sync.now` — pull, merge, apply and push; returns what each side kept.
 #[tauri::command]
+#[specta::specta]
 pub async fn sync_now(state: State<'_, AppState>, config: SyncConfig) -> AppResult<SyncReport> {
     sync::run(&state.library, &config).await
 }

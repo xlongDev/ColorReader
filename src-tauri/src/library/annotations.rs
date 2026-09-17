@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// A highlight as the UI sees it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Annotation {
     pub id: String,

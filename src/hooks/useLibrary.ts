@@ -60,7 +60,7 @@ export function usePdfCovers(books: BookSummary[]) {
     for (const book of pending) {
       coverAttempted.add(book.id);
       renderFirstPagePng(book.id)
-        .then((bytes) => ipc.bookCoverSave(book.id, bytes))
+        .then((bytes) => ipc.bookCoverSave(book.id, Array.from(new Uint8Array(bytes))))
         .then(() => queryClient.invalidateQueries({ queryKey: ["books"] }))
         .catch(() => {
           // Scanned or damaged PDFs simply keep the placeholder cover.
@@ -78,7 +78,7 @@ export function useImportBooks() {
   const invalidate = useInvalidateShelf();
   return useMutation({
     mutationFn: ({ paths, password }: { paths: string[]; password?: string }) =>
-      ipc.bookImport(paths, password),
+      ipc.bookImport(paths, password ?? null),
     onSettled: invalidate,
   });
 }
@@ -89,7 +89,7 @@ export function useImportBooks() {
 export function useExportPack() {
   return useMutation({
     mutationFn: ({ id, path, password }: { id: string; path: string; password?: string }) =>
-      ipc.packExport(id, path, password),
+      ipc.packExport(id, path, password ?? null),
   });
 }
 

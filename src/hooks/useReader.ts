@@ -86,7 +86,7 @@ export function useSetProgress(bookId: string | null) {
   return useMutation({
     mutationFn: ({ progress, location }: { progress: number; location?: string }) => {
       if (!bookId || !isDesktopRuntime) return Promise.resolve();
-      return ipc.readerSetProgress(bookId, progress, location);
+      return ipc.readerSetProgress(bookId, progress, location ?? null);
     },
   });
 }

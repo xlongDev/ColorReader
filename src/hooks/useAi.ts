@@ -82,7 +82,9 @@ export function useAiChat() {
     }));
   });
 
-  const start = useCallback((run: (requestId: string) => Promise<void>) => {
+  // `unknown`, not `void`: the generated commands resolve to `null` for a
+  // Rust `()`, and nothing here reads the value — only `.catch` matters.
+  const start = useCallback((run: (requestId: string) => Promise<unknown>) => {
     const requestId = crypto.randomUUID();
     activeRequest.current = requestId;
     setState({ text: "", streaming: true, error: null, citations: [] });

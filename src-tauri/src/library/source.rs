@@ -14,8 +14,8 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 
 /// How one search call finds books.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SearchRules {
     /// Request path; `{{keyword}}` is replaced by the percent-encoded query.
     pub url: String,
@@ -30,8 +30,8 @@ pub struct SearchRules {
 }
 
 /// How one book-detail call reads the metadata.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct BookRules {
     pub title: String,
     pub author: String,
@@ -40,8 +40,8 @@ pub struct BookRules {
 }
 
 /// How one chapter-list call finds chapters.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ChapterRules {
     pub list: String,
     pub title: String,
@@ -50,15 +50,15 @@ pub struct ChapterRules {
 
 /// How one content call yields body text: a string (split on newlines) or an
 /// array of paragraph strings.
-#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct ContentRules {
     pub paragraphs: String,
 }
 
 /// One complete source definition, stored as JSON in the `sources` table.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(default)]
+#[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SourceDef {
     pub name: String,
     pub base_url: String,
@@ -97,7 +97,7 @@ impl SourceDef {
 }
 
 /// A book as a search result or detail response describes it.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceBook {
     pub title: String,
@@ -109,7 +109,7 @@ pub struct SourceBook {
 }
 
 /// One chapter of a book's table of contents.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 pub struct SourceChapter {
     pub title: String,
     /// Absolute URL; resolved when the list is fetched.
@@ -365,7 +365,7 @@ fn build_txt(title: &str, author: &str, chapters: &[(String, Vec<String>)]) -> S
 
 /// The download outcome: the shelf entry that was created (or was already
 /// there, when the same bytes were downloaded before).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Downloaded {
     pub book_id: String,
@@ -439,7 +439,7 @@ pub async fn download(
 // ---------------------------------------------------------------------------
 
 /// One stored source, definition included so the editor can round-trip it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceEntry {
     pub id: String,
@@ -508,6 +508,18 @@ pub fn delete(library: &crate::db::Library, id: &str) -> AppResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The wire keys are camelCase, like the rest of the IPC surface. The old
+    /// hand-written TS assumed that while this struct silently did not, so the
+    /// `baseUrl` / `bookUrl` rules were dropped on the floor.
+    #[test]
+    fn the_wire_shape_is_camel_case() {
+        let def = serde_json::to_value(def()).expect("serialises");
+        assert!(def.get("baseUrl").is_some(), "SourceDef must send baseUrl");
+        assert!(def.get("base_url").is_none());
+        assert!(def["search"].get("bookUrl").is_some(), "SearchRules must send bookUrl");
+        assert!(def["search"].get("book_url").is_none());
+    }
     use serde_json::json;
 
     fn def() -> SourceDef {

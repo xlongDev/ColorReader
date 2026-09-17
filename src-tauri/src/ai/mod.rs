@@ -21,7 +21,7 @@ use crate::db::Library;
 use crate::error::{AppError, AppResult};
 
 /// Where chat completions are sent and how they are signed.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiConfig {
     /// Origin only, e.g. `https://api.openai.com/v1`.

@@ -1954,7 +1954,8 @@ function ReaderView({
     () =>
       (bookmarkData ?? []).some(
         (bookmark) =>
-          bookmark.chapterIdx === chapterIdx && Math.abs(bookmark.fraction - fraction) <= 0.01,
+          bookmark.chapterIdx === chapterIdx &&
+          Math.abs((bookmark.fraction ?? 0) - fraction) <= 0.01,
       ),
     [bookmarkData, chapterIdx, fraction],
   );
@@ -1963,7 +1964,7 @@ function ReaderView({
     const frac = fractionRef.current;
     const existing = (bookmarkData ?? []).find(
       (bookmark) =>
-        bookmark.chapterIdx === chapterIdx && Math.abs(bookmark.fraction - frac) <= 0.01,
+        bookmark.chapterIdx === chapterIdx && Math.abs((bookmark.fraction ?? 0) - frac) <= 0.01,
     );
     // Toggle: tapping a bookmarked spot again removes that bookmark.
     if (existing) {
@@ -2697,7 +2698,10 @@ function ReaderView({
                             >
                               <mark
                                 className="text-inherit"
-                                style={markInk(segment.color, segment.style)}
+                                style={markInk(
+                                  segment.color,
+                                  segment.style as AnnotationStyle | null,
+                                )}
                               >
                                 {segment.text}
                               </mark>
@@ -2957,7 +2961,7 @@ function ReaderView({
                   }}
                   onJumpBookmark={(bookmark: Bookmark) => {
                     setPanel("none");
-                    jumpTo(bookmark.chapterIdx, bookmark.fraction);
+                    jumpTo(bookmark.chapterIdx, bookmark.fraction ?? 0);
                   }}
                   onDeleteBookmark={(id) => deleteBookmark.mutate(id)}
                   onAddBookmark={addBookmark}
@@ -3189,7 +3193,7 @@ export function ReaderPage() {
       bookLanguage={bookSummary.language}
       format={bookSummary.format}
       chapters={chapters}
-      initialProgress={bookSummary.progress}
+      initialProgress={bookSummary.progress ?? 0}
       initialCfi={bookSummary.location}
       initialChapter={initialChapter}
       initialQuery={initialQuery}

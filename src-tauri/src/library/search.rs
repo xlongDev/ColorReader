@@ -28,7 +28,7 @@ pub const MARK_END: char = '\u{3}';
 const WINDOW_CHARS: usize = 40;
 
 /// One place where the needle occurs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchHit {
     pub book_id: String,

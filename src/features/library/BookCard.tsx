@@ -116,11 +116,11 @@ export function BookCard({
               "motion-reduce:hidden",
             )}
           />
-          {book.progress > 0 && (
+          {(book.progress ?? 0) > 0 && (
             <span className="absolute right-0 bottom-0 left-0 block h-1 bg-black/30">
               <span
                 className="bg-accent block h-full transition-[width] duration-500 ease-out motion-reduce:transition-none"
-                style={{ width: `${Math.round(Math.min(book.progress, 1) * 100)}%` }}
+                style={{ width: `${Math.round(Math.min(book.progress ?? 0, 1) * 100)}%` }}
               />
             </span>
           )}

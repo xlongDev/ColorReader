@@ -325,7 +325,7 @@ fn by_author<'a>(candidates: &[&'a Entry], author: &str) -> Option<&'a Entry> {
 
 /// What the dialog renders: before the import as a preview, after it as the
 /// receipt. Both come out of the same run.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(specta::Type, Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Outcome {
     /// Highlight entries in the file, notes and bookmarks excluded.
@@ -345,7 +345,7 @@ pub struct Outcome {
     pub unknown_titles: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookOutcome {
     pub book_id: String,

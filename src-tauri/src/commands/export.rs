@@ -15,6 +15,7 @@ use crate::state::AppState;
 /// annotation list and touches the disk — small work, but the reader is waiting
 /// on a button.
 #[tauri::command]
+#[specta::specta]
 pub async fn notes_export(state: State<'_, AppState>, id: String, path: String) -> AppResult<()> {
     let library = state.library.clone();
     tauri::async_runtime::spawn_blocking(move || {

@@ -15,7 +15,7 @@ use crate::error::AppResult;
 use crate::library::repository;
 
 /// One chapter row, ready to hand to the frontend without its body.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterMeta {
     pub idx: usize,
@@ -25,7 +25,7 @@ pub struct ChapterMeta {
 }
 
 /// A single chapter's body, returned by the reader.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChapterContent {
     pub idx: usize,
@@ -34,7 +34,7 @@ pub struct ChapterContent {
 }
 
 /// One in-book image: the chapter it sits in and its archive entry path.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BookImage {
     pub chapter_idx: usize,

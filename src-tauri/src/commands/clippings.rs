@@ -23,6 +23,7 @@ const MAX_BYTES: u64 = 32 * 1024 * 1024;
 /// work on a clipping file that has been growing for years — hence the blocking
 /// task rather than a synchronous command.
 #[tauri::command]
+#[specta::specta]
 pub async fn clippings_import(
     state: State<'_, AppState>,
     path: String,

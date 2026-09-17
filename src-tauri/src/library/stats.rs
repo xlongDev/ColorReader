@@ -18,7 +18,7 @@ use serde::Serialize;
 use crate::error::AppResult;
 
 /// Reading time for one calendar day.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DayTotal {
     /// Local day, `YYYY-MM-DD`.
@@ -27,7 +27,7 @@ pub struct DayTotal {
 }
 
 /// Everything the stats page draws.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReadingStats {
     /// Today, local time.

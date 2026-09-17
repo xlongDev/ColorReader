@@ -68,6 +68,9 @@ tauri-plugin-single-instance = { version = "2.4.4", features = ["deep-link"] }
 # Imported StarDict dictionaries ship their bodies as `.dict.dz`. Inflated on
 # the way in so a lookup is a seek and a read (see `library/dictionaries.rs`).
 flate2 = "1"
+tauri-specta = { version = "=2.0.0-rc.25", features = ["typescript"] }
+specta = { version = "=2.0.0-rc.25", features = ["derive"] }
+specta-typescript = "=0.0.12"
 
 # The platform's own dictionary, for the 词典 action's zero-config layer. macOS
 # only, because DictionaryServices is macOS only. `core-foundation-sys` is

@@ -133,14 +133,14 @@ fn timestamp() -> String {
 }
 
 /// One word the service reports, `at` seconds from the start of the clip.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 pub struct EdgeWord {
     pub at: f64,
     pub text: String,
 }
 
 /// One utterance: its audio, and where each word sits inside it.
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeClip {
     /// 24 kHz mono MP3, base64.
@@ -153,7 +153,7 @@ pub struct EdgeClip {
 }
 
 /// A voice the service offers.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeVoice {
     /// The service's id, e.g. `zh-CN-YunjianNeural`. This is what crosses the

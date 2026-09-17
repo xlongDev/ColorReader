@@ -8,12 +8,14 @@ use crate::state::AppState;
 
 /// `tag.list`
 #[tauri::command]
+#[specta::specta]
 pub fn tag_list(state: State<'_, AppState>) -> AppResult<Vec<TagSummary>> {
     state.library.with(tags::list)
 }
 
 /// `tag.delete` — removes one tag from every book that carries it.
 #[tauri::command]
+#[specta::specta]
 pub fn tag_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.library.with(|conn| tags::delete(conn, &id))
 }
@@ -25,6 +27,7 @@ pub fn tag_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
 /// the bar never knew about. One command instead of two, because the operation
 /// really is one: a difference applied to a set of books.
 #[tauri::command]
+#[specta::specta]
 pub fn book_set_tags(
     state: State<'_, AppState>,
     ids: Vec<String>,

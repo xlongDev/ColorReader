@@ -19,7 +19,7 @@ const RECALL_MULTIPLIER: usize = 4;
 /// Progress of one book's index build.
 pub const RAG_INDEX_EVENT: &str = "rag://index-progress";
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RagProgress {
     pub done: usize,
@@ -27,7 +27,7 @@ pub struct RagProgress {
 }
 
 /// Index status for one book and the library at large.
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RagStatus {
     /// Chunks stored for `book_id`.
@@ -40,6 +40,7 @@ pub struct RagStatus {
 
 /// `rag.status` — what the AI drawer needs to decide which controls to show.
 #[tauri::command]
+#[specta::specta]
 pub fn rag_status(state: State<'_, AppState>, book_id: String) -> AppResult<RagStatus> {
     let (book_chunks, library_chunks) = state.library.with(|conn| rag::counts(conn, &book_id))?;
     let embedding_model = ai::config(&state.library)?.embedding_model;
@@ -48,6 +49,7 @@ pub fn rag_status(state: State<'_, AppState>, book_id: String) -> AppResult<RagS
 
 /// `rag.indexBook` — rebuilds the embedding index for one book.
 #[tauri::command]
+#[specta::specta]
 pub async fn rag_index_book(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -74,6 +76,7 @@ pub async fn rag_index_book(
 /// `rag.chat` — retrieval-backed answer: embed the question, take the top
 /// chunks, then stream an answer that cites them.
 #[tauri::command]
+#[specta::specta]
 pub async fn rag_chat(
     app: AppHandle,
     state: State<'_, AppState>,

@@ -147,7 +147,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const m = useMotion();
   const picking = importBooks.isPending;
   const list = books.data ?? [];
-  const continueReading = filter === "all" ? list.find((b) => b.progress > 0) : undefined;
+  const continueReading = filter === "all" ? list.find((b) => (b.progress ?? 0) > 0) : undefined;
 
   const exitManaging = () => {
     setManaging(false);
@@ -653,7 +653,7 @@ function ContinueReadingCard({
     );
   }
 
-  const percent = Math.round(Math.min(book.progress, 1) * 100);
+  const percent = Math.round(Math.min(book.progress ?? 0, 1) * 100);
   return (
     <motion.button
       type="button"

@@ -24,7 +24,7 @@ const TARGET_CHARS: usize = 600;
 pub const TOP_K: usize = 6;
 
 /// One retrieved chunk, handed to the frontend and to the prompt builder.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RagHit {
     pub book_id: String,

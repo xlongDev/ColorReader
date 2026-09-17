@@ -41,7 +41,7 @@ const STARDICT: &str = "stardict";
 const MDICT: &str = "mdict";
 
 /// One imported dictionary, as the settings document and the UI hold it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Dictionary {
     pub id: String,

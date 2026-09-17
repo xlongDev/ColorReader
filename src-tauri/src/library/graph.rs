@@ -24,7 +24,7 @@ const MIN_CHAPTER_CHARS: usize = 40;
 const MAX_NAME_CHARS: usize = 30;
 
 /// One extracted entity.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphEntity {
     pub name: String,
@@ -33,7 +33,7 @@ pub struct GraphEntity {
 }
 
 /// One extracted relation, anchored to the chapter it first appeared in.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphRelation {
     pub subject: String,
@@ -44,7 +44,7 @@ pub struct GraphRelation {
 }
 
 /// What the frontend renders: all entities, or the neighborhood of one.
-#[derive(Debug, Default, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Default, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphView {
     /// All entities (top of the list by mentions) when `entity` is `None`.

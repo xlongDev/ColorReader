@@ -16,6 +16,7 @@ const MAX_LIMIT: usize = 200;
 /// Runs on a blocking task: books imported before the reader engine existed get
 /// their chapters extracted on first use, which reads the source file.
 #[tauri::command]
+#[specta::specta]
 pub async fn search_query(
     state: State<'_, AppState>,
     needle: String,

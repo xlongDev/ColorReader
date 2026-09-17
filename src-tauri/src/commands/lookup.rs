@@ -15,6 +15,7 @@ use crate::state::AppState;
 /// in the same settings row as the AI config; an empty key is the frontend's
 /// signal to fall back to the streaming AI translation instead.
 #[tauri::command]
+#[specta::specta]
 pub async fn lookup_translate(state: State<'_, AppState>, text: String) -> AppResult<Translation> {
     let config = crate::ai::config(&state.library)?;
     let client = super::ai::client()?;
@@ -24,6 +25,7 @@ pub async fn lookup_translate(state: State<'_, AppState>, text: String) -> AppRe
 /// `lookup.wikipedia` — best-matching article summary for a term, zh wiki
 /// first for CJK selections with the English edition as fallback.
 #[tauri::command]
+#[specta::specta]
 pub async fn lookup_wikipedia(term: String) -> AppResult<WikiSummary> {
     let client = super::ai::client()?;
     lookup::wikipedia_summary(&client, &term).await

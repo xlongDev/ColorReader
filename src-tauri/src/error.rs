@@ -52,6 +52,16 @@ impl Serialize for AppError {
     }
 }
 
+/// Specta sees the same shape `Serialize` emits: a plain string message.
+///
+/// Deriving `Type` would describe a tagged enum, which is not what crosses the
+/// IPC boundary — Tauri turns an `Err` into a rejection carrying this string.
+impl specta::Type for AppError {
+    fn definition(types: &mut specta::Types) -> specta::datatype::DataType {
+        <String as specta::Type>::definition(types)
+    }
+}
+
 /// Result alias used by all command handlers.
 pub type AppResult<T> = Result<T, AppError>;
 

@@ -49,7 +49,7 @@ pub fn wiki_langs(text: &str) -> &'static [&'static str] {
 
 /// One DeepL translation: the rendered text plus what DeepL thought the
 /// source was, shown as a small tag in the popup.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Translation {
     pub text: String,
@@ -117,7 +117,7 @@ pub async fn deepl_translate(
 }
 
 /// A Wikipedia article summary, ready to render in the lookup popup.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WikiSummary {
     pub title: String,

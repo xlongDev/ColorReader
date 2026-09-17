@@ -20,18 +20,21 @@ pub const IMPORT_PROGRESS_EVENT: &str = "book://import-progress";
 
 /// `book.list`
 #[tauri::command]
+#[specta::specta]
 pub fn book_list(state: State<'_, AppState>, query: BookQuery) -> AppResult<Vec<BookSummary>> {
     state.library.with(|conn| crate::library::repository::list(conn, &query))
 }
 
 /// `book.get`
 #[tauri::command]
+#[specta::specta]
 pub fn book_get(state: State<'_, AppState>, id: String) -> AppResult<Option<BookSummary>> {
     state.library.with(|conn| crate::library::repository::get(conn, &id))
 }
 
 /// `book.stats`
 #[tauri::command]
+#[specta::specta]
 pub fn book_stats(state: State<'_, AppState>) -> AppResult<LibraryStats> {
     state.library.with(crate::library::repository::stats)
 }
@@ -39,6 +42,7 @@ pub fn book_stats(state: State<'_, AppState>) -> AppResult<LibraryStats> {
 /// `book.images` — every image in the book, in reading order, with the
 /// chapter each one sits in. Powers the lightbox's book-wide browsing.
 #[tauri::command]
+#[specta::specta]
 pub fn book_images(
     state: State<'_, AppState>,
     id: String,
@@ -92,6 +96,7 @@ pub async fn book_source_file(
 /// from. Pure: the origin is a compile-time constant per platform, so this
 /// does no I/O and answers instantly.
 #[tauri::command]
+#[specta::specta]
 pub fn book_source_url(id: String) -> String {
     crate::library::book_url(&id)
 }
@@ -101,6 +106,7 @@ pub fn book_source_url(id: String) -> String {
 /// pdf.js). The bytes must start with the PNG magic; anything else is a bug
 /// in the caller, not user input to decode.
 #[tauri::command]
+#[specta::specta]
 pub async fn book_cover_save(
     state: State<'_, AppState>,
     id: String,
@@ -140,6 +146,7 @@ pub async fn book_cover_save(
 /// `password` only matters to `.ctzx` packs. It travels as an argument rather
 /// than in a prompt callback so the whole batch runs on one blocking task.
 #[tauri::command]
+#[specta::specta]
 pub async fn book_import(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -178,6 +185,7 @@ pub async fn book_import(
 /// The destination extension picks the format: `.ctzx` requires `password` and
 /// encrypts the archive with AES-256-GCM under an Argon2id key.
 #[tauri::command]
+#[specta::specta]
 pub async fn pack_export(
     state: State<'_, AppState>,
     id: String,
@@ -199,6 +207,7 @@ pub async fn pack_export(
 
 /// `book.delete`
 #[tauri::command]
+#[specta::specta]
 pub async fn book_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     let library = state.library.clone();
     tauri::async_runtime::spawn_blocking(move || library::delete_book(&library, &id))
@@ -208,12 +217,13 @@ pub async fn book_delete(state: State<'_, AppState>, id: String) -> AppResult<()
 
 /// `book.setFavorite`
 #[tauri::command]
+#[specta::specta]
 pub fn book_set_favorite(state: State<'_, AppState>, id: String, favorite: bool) -> AppResult<()> {
     state.library.with(|conn| crate::library::repository::set_favorite(conn, &id, favorite))
 }
 
 /// Progress payload for [`IMPORT_PROGRESS_EVENT`].
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportProgress {
     pub done: usize,

@@ -133,7 +133,11 @@ export function SelectionToolbar({
   // The draft ink: what the next apply paints. Edit mode starts from the
   // highlight's own values, a fresh selection from the reader's last pick.
   const [color, setColor] = useState(annotation?.color ?? defaultColor);
-  const [style, setStyle] = useState<AnnotationStyle>(annotation?.style ?? defaultStyle);
+  // Rust stores the ink style as a plain `String` (validated on the way in), so
+  // the narrowing to the three legal values happens here.
+  const [style, setStyle] = useState<AnnotationStyle>(
+    (annotation?.style as AnnotationStyle | undefined) ?? defaultStyle,
+  );
   // The note field, open on demand and pre-filled from the highlight's own
   // note: `null` means closed, a string (even empty) means open. Escape
   // rewinds, so the blur that closing triggers must not commit what it just
@@ -694,7 +698,7 @@ function WikiLookup({
 }) {
   const query = useQuery({
     queryKey: ["wikipedia", text],
-    queryFn: () => ipc.wikipediaSummary(text),
+    queryFn: () => ipc.lookupWikipedia(text),
     staleTime: 5 * 60_000,
     retry: false,
   });

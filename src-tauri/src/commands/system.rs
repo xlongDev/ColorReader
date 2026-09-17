@@ -8,7 +8,7 @@ use tauri::{State, webview_version};
 use crate::state::AppState;
 
 /// Runtime description of the running application.
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemInfo {
     pub app_name: String,
@@ -25,6 +25,7 @@ pub struct SystemInfo {
 
 /// `system.info`
 #[tauri::command]
+#[specta::specta]
 pub fn system_info(state: State<'_, AppState>) -> SystemInfo {
     SystemInfo {
         app_name: env!("CARGO_PKG_NAME").to_string(),

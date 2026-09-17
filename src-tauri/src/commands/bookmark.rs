@@ -8,6 +8,7 @@ use crate::state::AppState;
 
 /// `bookmark.create` — pins the current position and returns it.
 #[tauri::command]
+#[specta::specta]
 pub fn bookmark_create(
     state: State<'_, AppState>,
     book_id: String,
@@ -20,12 +21,14 @@ pub fn bookmark_create(
 
 /// `bookmark.list` — every bookmark for a book, in reading order.
 #[tauri::command]
+#[specta::specta]
 pub fn bookmark_list(state: State<'_, AppState>, book_id: String) -> AppResult<Vec<Bookmark>> {
     state.library.with(|conn| bookmarks::list(conn, &book_id))
 }
 
 /// `bookmark.delete` — removes one bookmark.
 #[tauri::command]
+#[specta::specta]
 pub fn bookmark_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.library.with(|conn| bookmarks::delete(conn, &id))
 }

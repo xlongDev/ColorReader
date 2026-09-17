@@ -30,7 +30,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// One chunk of a streamed answer.
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiDelta {
     /// Echoed back so a reopened panel can ignore a stream it no longer owns.
@@ -50,12 +50,14 @@ pub struct AiDelta {
 
 /// `ai.getConfig`
 #[tauri::command]
+#[specta::specta]
 pub fn ai_get_config(state: State<'_, AppState>) -> AppResult<AiConfig> {
     crate::ai::config(&state.library)
 }
 
 /// `ai.setConfig`
 #[tauri::command]
+#[specta::specta]
 pub fn ai_set_config(state: State<'_, AppState>, config: AiConfig) -> AppResult<AiConfig> {
     crate::ai::set_config(&state.library, &config)?;
     // Return the stored form: the caller trimmed and normalized it, and the UI
@@ -68,6 +70,7 @@ pub fn ai_set_config(state: State<'_, AppState>, config: AiConfig) -> AppResult<
 /// Deliberately does not save: pressing "测试连接" must not persist a half-typed
 /// key. The UI saves explicitly.
 #[tauri::command]
+#[specta::specta]
 pub async fn ai_test(config: AiConfig) -> AppResult<()> {
     if !is_ready(&config) {
         return Err(AppError::InvalidArgument("先填写接口地址与模型名称".into()));
@@ -95,6 +98,7 @@ pub async fn ai_test(config: AiConfig) -> AppResult<()> {
 /// of events and is terminated by one with `done: true`, which also carries
 /// `error` when the stream failed part way through.
 #[tauri::command]
+#[specta::specta]
 pub async fn ai_chat(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -209,6 +213,7 @@ pub(crate) async fn run_stream(
 /// Only a complete answer is cached. A stream that failed half way through is
 /// left out, so the next open regenerates instead of showing the stump forever.
 #[tauri::command]
+#[specta::specta]
 pub async fn ai_digest(
     app: AppHandle,
     state: State<'_, AppState>,

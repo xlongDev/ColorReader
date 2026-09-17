@@ -14,7 +14,7 @@ use crate::state::AppState;
 /// Progress of one book's graph build.
 pub const GRAPH_BUILD_EVENT: &str = "graph://build-progress";
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphProgress {
     pub done: usize,
@@ -22,7 +22,7 @@ pub struct GraphProgress {
 }
 
 /// Node and edge counts plus the chat model that would do the extraction.
-#[derive(Debug, Clone, Serialize)]
+#[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GraphStatus {
     pub entities: usize,
@@ -32,6 +32,7 @@ pub struct GraphStatus {
 
 /// `graph.status` — what the panel needs to decide what to show.
 #[tauri::command]
+#[specta::specta]
 pub fn graph_status(state: State<'_, AppState>, book_id: String) -> AppResult<GraphStatus> {
     let (entities, relations) = state.library.with(|conn| graph::counts(conn, &book_id))?;
     let model = ai::config(&state.library)?.model;
@@ -41,6 +42,7 @@ pub fn graph_status(state: State<'_, AppState>, book_id: String) -> AppResult<Gr
 /// `graph.build` — extracts entities and relations chapter by chapter and
 /// replaces the book's graph. Progress arrives on [`GRAPH_BUILD_EVENT`].
 #[tauri::command]
+#[specta::specta]
 pub async fn graph_build(
     app: AppHandle,
     state: State<'_, AppState>,
@@ -67,6 +69,7 @@ pub async fn graph_build(
 /// `graph.query` — all entities when `entity` is `null`, otherwise the
 /// neighborhood of that one entity.
 #[tauri::command]
+#[specta::specta]
 pub fn graph_query(
     state: State<'_, AppState>,
     book_id: String,

@@ -9,12 +9,14 @@ use crate::tts::{self, EdgeClip, EdgeVoice};
 
 /// `tts.edgeVoices` — every voice the service offers.
 #[tauri::command]
+#[specta::specta]
 pub async fn tts_edge_voices() -> AppResult<Vec<EdgeVoice>> {
     tts::voices().await
 }
 
 /// `tts.edgeSpeak` — one utterance, with its word timings.
 #[tauri::command]
+#[specta::specta]
 pub async fn tts_edge_speak(text: String, voice: String, rate: f64) -> AppResult<EdgeClip> {
     tts::speak(&text, &voice, rate).await
 }

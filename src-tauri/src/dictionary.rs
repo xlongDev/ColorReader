@@ -26,7 +26,7 @@
 use serde::Serialize;
 
 /// What a lookup turned up.
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(specta::Type, Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "status")]
 pub enum Lookup {
     /// Something knew the term. `text` is the entry verbatim; `source` names the

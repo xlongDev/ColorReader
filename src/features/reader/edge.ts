@@ -228,7 +228,10 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
       if (generation !== current || mine !== settings) return;
       const buffer = await audio().decodeAudioData(bytesOf(clip.audio));
       if (generation !== current || mine !== settings) return;
-      ready.set(index, { buffer, cues: wordCues(text, clip.words), chars: text.length });
+      // Specta types `f64` as `number | null` (JSON cannot carry NaN/Infinity);
+      // the service always reports a finite offset, so a missing one is zero.
+      const words = clip.words.map((word) => ({ at: word.at ?? 0, text: word.text }));
+      ready.set(index, { buffer, cues: wordCues(text, words), chars: text.length });
     } catch (error) {
       if (generation !== current) return;
       events.fail(messageOf(error));
