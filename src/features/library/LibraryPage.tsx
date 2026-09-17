@@ -45,6 +45,7 @@ import {
 import { batchNeedsPassword, PACK_EXTENSIONS } from "@/features/library/pack";
 import { TagBar } from "@/features/library/TagBar";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
+import { useShelfWindow } from "@/hooks/useShelfWindow";
 import { useAssignTags, useTags } from "@/hooks/useTags";
 
 // Dialog chunks load on first open; local disk, so no spinner is needed.
@@ -99,10 +100,16 @@ function greeting(now: Date): string {
  */
 const shelfScroll = new Map<LibraryFilter, number>();
 
+/** See `list`. */
+const NO_BOOKS: BookSummary[] = [];
+
 export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const navigate = useNavigate();
   const meta = titleForFilter(filter);
   const scrollerRef = useRef<HTMLDivElement>(null);
+  /** The card grid. Owned here and handed to `useShelfWindow`, which measures
+   *  it: a ref returned by a hook cannot be told apart from the data beside it. */
+  const gridRef = useRef<HTMLDivElement>(null);
   // Before paint, or the reader sees the top of the shelf for a frame and then
   // a jump. The place is remembered as it is scrolled rather than on unmount:
   // the route transition keeps the outgoing shelf mounted until its exit
@@ -237,8 +244,36 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
 
   const m = useMotion();
   const picking = importBooks.isPending;
-  const list = books.data ?? [];
+  /** One shared empty list, so `list` keeps its identity while the books are
+   *  still loading — a fresh `[]` per render is a new dependency everywhere it
+   *  is used. */
+  const list = books.data ?? NO_BOOKS;
   const continueReading = filter === "all" ? list.find((b) => (b.progress ?? 0) > 0) : undefined;
+
+  /**
+   * Only the cards the viewport can reach are rendered (see `useShelfWindow`);
+   * the rest of the list is held open by the two spacers below.
+   *
+   * Declared *here*, after the scroll restore above: the window has to be
+   * measured from the restored position. Effects run in the order they are
+   * written, and a window measured before the restore would be the top of the
+   * list — which is where the cover flying home would then fail to find a tile.
+   */
+  const shelf = useShelfWindow(
+    scrollerRef,
+    gridRef,
+    list.length,
+    `${filter}|${sort}|${search}|${tag ?? ""}`,
+    shelfScroll.get(filter) ?? 0,
+  );
+  /**
+   * The label line is part of every tile in a list that has labels anywhere, so
+   * that rows keep one height — the window's arithmetic has no way to know that
+   * the fourth card of a row is a line taller than its neighbours. Taken over
+   * the whole list rather than the window, because a window that scrolls into
+   * tagged books would otherwise change the row height under the reader.
+   */
+  const tagRow = useMemo(() => list.some((book) => book.tags.length > 0), [list]);
 
   const exitManaging = () => {
     setManaging(false);
@@ -340,7 +375,11 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         </AnimatePresence>
       </header>
 
-      <div ref={scrollerRef} data-shelf-scroller className="flex-1 overflow-y-auto px-8 pb-8">
+      <div
+        ref={scrollerRef}
+        data-shelf-scroller
+        className="flex-1 overflow-y-auto px-8 pb-8 [overflow-anchor:none]"
+      >
         {filter === "all" && <ContinueReadingCard book={continueReading} onOpen={openBook} />}
 
         {filter === "tags" && <TagBar tags={tags.data ?? []} selected={tag} onSelect={setTag} />}
@@ -433,15 +472,35 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             }
           />
         ) : (
-          <div className="grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6">
-            {/* AnimatePresence + the cards' layout FLIP: removed cards shrink
-                in place while the survivors glide into their slots. */}
-            <AnimatePresence initial={false}>
-              {list.map((book, index) => (
+          <>
+            {/* The rows above the window, held open at exactly the height they
+                would have taken: the two spacers and the grid add up to the full
+                list's height, gap for gap. Empty boxes rather than padding on
+                the scroller, so the scrollbar length never depends on which
+                rows happen to be rendered. */}
+            {shelf.top > 0 && <div style={{ height: shelf.top }} aria-hidden />}
+            <div
+              ref={gridRef}
+              className="grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6"
+            >
+              {/* No `AnimatePresence` around the window. Its children set changes
+                  on every scroll, and an exit animation is not something that can
+                  be told apart from a filter change — so the removed tiles were
+                  kept in the DOM for it (measured: one whole window's worth, back
+                  in flow, which made the grid twice the height of the list it
+                  stands for and pushed the scroll position around under the
+                  reader). Tiles leaving the window therefore stop being rendered,
+                  and what is left of the filter-change motion is the survivors'
+                  FLIP below plus the arriving cards' stagger. */}
+              {list.slice(shelf.start, shelf.end).map((book, index) => (
                 <BookCard
                   key={book.id}
                   book={book}
-                  delay={staggerDelay(index, m.stagger)}
+                  // The stagger is a position in the *list* — the window's own
+                  // order would restart it at every scroll.
+                  delay={staggerDelay(shelf.start + index, m.stagger)}
+                  entering={!shelf.sliding}
+                  reserveTags={tagRow}
                   busy={setFavorite.isPending || deleteBook.isPending}
                   selecting={managing}
                   selected={selected.has(book.id)}
@@ -455,8 +514,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
                   onEditTags={(target) => setTagTarget([target])}
                 />
               ))}
-            </AnimatePresence>
-          </div>
+            </div>
+            {shelf.bottom > 0 && <div style={{ height: shelf.bottom }} aria-hidden />}
+          </>
         )}
       </div>
 

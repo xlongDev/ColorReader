@@ -8,17 +8,17 @@ import { expect, test, type Page } from "@playwright/test";
  *
  * 1. The four shelf views (书库 / 最近 / 收藏 / 标签) are one page with four
  *    filters, so a swap between them must not mount the shelf twice. A remount
- *    put two of them on screen for the length of every swap — 168 covers for an
- *    84-book library, on the switches a reader makes most.
+ *    put two of them on screen for the length of every swap, on the switches a
+ *    reader makes most.
  * 2. A swap between pages travels the way the reader moved down the sidebar:
  *    the page they left carries on, the one they asked for comes in from the
  *    other side. Read off the wrapper's own offset, which is why the shell
  *    tags it (`data-page-swap`).
  *
- * `?demo=1&books=84` sizes the sample shelf like a real one. With the fixture's
- * default three books neither contract could fail.
+ * `?demo=1&books=500` sizes the sample shelf like the library this is for. With
+ * the fixture's default three books neither contract could fail.
  */
-const SHELF = "/?demo=1&books=84";
+const SHELF = "/?demo=1&books=500";
 
 /** Peaks of everything that must not double up while pages are swapped. */
 async function watchPeaks(page: Page) {
@@ -51,11 +51,24 @@ test("the four shelf views never mount two shelves", async ({ page }) => {
     await page.waitForTimeout(450);
   }
 
-  const peak = await page.evaluate(
-    () => (window as unknown as { peak: { shelves: number; covers: number } }).peak,
-  );
-  expect(peak.shelves, "one shelf at a time").toBe(1);
-  expect(peak.covers, "84 books, 84 covers — never 168").toBe(84);
+  const watched = await page.evaluate(() => {
+    const w = window as unknown as { peak: { shelves: number; covers: number } };
+    return {
+      peak: w.peak,
+      covers: document.querySelectorAll("[data-book-cover]").length,
+    };
+  });
+  // The shelf is one element and stays one: this is the line that catches a
+  // second shelf being mounted, because that is exactly what the old
+  // `key={pathname}` did.
+  expect(watched.peak.shelves, "one shelf at a time").toBe(1);
+  // And the shelf renders a window rather than the library (see
+  // `useShelfWindow`), so the count belongs to the viewport: 500 books, and the
+  // peak stays within a window of them however often the view is switched. A
+  // second shelf would put twice the window on screen — which is still far
+  // under 500, so this line alone would not see it; the one above does.
+  expect(watched.covers, "a window, not the library").toBeLessThan(500);
+  expect(watched.peak.covers, "never two windows of them").toBeLessThan(watched.covers * 2);
 });
 
 /**

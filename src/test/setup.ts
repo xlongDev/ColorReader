@@ -19,6 +19,18 @@ if (!window.matchMedia) {
   });
 }
 
+// jsdom ships no ResizeObserver either, and the shelf's window watches the
+// scroller with one. A no-op is the right stub here: nothing in a unit test
+// resizes, and the observer only ever means "measure again" — which the e2e
+// suite exercises for real.
+if (!globalThis.ResizeObserver) {
+  globalThis.ResizeObserver = class {
+    observe() {}
+    unobserve() {}
+    disconnect() {}
+  };
+}
+
 beforeEach(() => {
   localStorage.clear();
 });

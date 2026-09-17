@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { motion } from "motion/react";
 import { BookOpen, Check, Export, Star, Tag, Trash } from "@phosphor-icons/react";
 
@@ -16,6 +16,18 @@ interface BookCardProps {
   busy?: boolean;
   /** Entrance offset inside a staggered shelf; see `staggerDelay`. */
   delay?: number;
+  /**
+   * Whether this tile arrived with the content (a filter, a sort, a first paint
+   * of the shelf: it should animate in) or because the window slid under it,
+   * which is scrolling and should show no motion at all. Read once, on mount.
+   */
+  entering?: boolean;
+  /**
+   * Keep the label line's space when the book has no labels. Rows have to be one
+   * height for the window to compute them; only worth doing on a shelf whose
+   * books carry labels at all (see `LibraryPage`).
+   */
+  reserveTags?: boolean;
   onOpen: (book: BookSummary) => void;
   onToggleFavorite: (book: BookSummary) => void;
   onAskDelete: (book: BookSummary) => void;
@@ -48,6 +60,8 @@ export function BookCard({
   book,
   busy,
   delay = 0,
+  entering = true,
+  reserveTags = false,
   onOpen,
   onToggleFavorite,
   onAskDelete,
@@ -61,6 +75,12 @@ export function BookCard({
   const m = useMotion();
   const beginHandoff = useBookHandoff((s) => s.begin);
   const coverRef = useRef<HTMLSpanElement>(null);
+  /**
+   * `entering` as it was when this tile appeared. A scroll after the fact must
+   * not turn a tile's own exit animation off: the flag is about how the card
+   * arrived, not about what the shelf is doing now.
+   */
+  const [animated] = useState(entering);
 
   /** Hands the cover off to the reader's header before the route changes. */
   const open = () => {
@@ -93,10 +113,15 @@ export function BookCard({
       // wrapper still scaling up from 0.96 would move the box the flight is
       // aiming at (about 5px on a 138px cover), and a flight whose target moves
       // restarts its transition on every frame the target moves.
-      initial={flying ? false : { opacity: 0, scale: m.reduce ? 1 : 0.96 }}
+      initial={animated && !flying ? { opacity: 0, scale: m.reduce ? 1 : 0.96 } : false}
       animate={{ opacity: 1, scale: 1 }}
-      exit={{ opacity: 0, scale: m.reduce ? 1 : 0.94 }}
-      transition={{ ...m.layout, delay }}
+      // No `exit`: the grid does not keep a removed tile alive for one (see
+      // `LibraryPage` — with a window, tiles leave on every scroll, and the ones
+      // held back for an exit put the grid out of step with the list it stands
+      // for). A tile that scrolls out simply stops being rendered; a filter or a
+      // sort still reads as motion, because the survivors glide into their new
+      // slots and the arriving cards enter on the stagger.
+      transition={{ ...m.layout, delay: animated ? delay : 0 }}
       whileTap={busy || m.reduce ? undefined : { scale: 0.985 }}
       className="group relative"
     >
@@ -172,12 +197,15 @@ export function BookCard({
           {authors || book.format.toUpperCase()}
           {book.fileSize > 0 && ` · ${formatFileSize(book.fileSize)}`}
         </p>
-        {/* Only when there are labels: an untagged shelf keeps the two-line
-            rhythm it had, and a tagged one gets a single extra line that
-            truncates rather than reflowing the grid. */}
-        {book.tags.length > 0 && (
+        {/* Labels get one extra line that truncates rather than reflowing the
+            grid. On a shelf where any book at all has labels, every tile keeps
+            that line — an empty one still holds its height — because the window
+            counts rows and cannot know that this tile is a line shorter than the
+            ones beside it. A shelf with no labels keeps the two-line rhythm it
+            had. */}
+        {(book.tags.length > 0 || reserveTags) && (
           <p className="text-accent mt-1 truncate text-[11px]">
-            {book.tags.map((tag) => `#${tag}`).join("  ")}
+            {book.tags.length > 0 ? book.tags.map((tag) => `#${tag}`).join("  ") : "\u00a0"}
           </p>
         )}
       </button>
