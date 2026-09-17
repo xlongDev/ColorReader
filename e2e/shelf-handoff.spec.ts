@@ -145,7 +145,10 @@ test("leaving the reader flies the cover home and restores the shelf's place", a
     };
   });
 
-  expect(watched.samples, "a flight has to have been seen in the air").toBeGreaterThan(3);
+  // Seen at all — not seen *often*. How many samples a 16ms timer catches of a
+  // 420ms flight is the machine's business (a loaded runner can block the thread
+  // through most of it); that the flight was in the air is what this says.
+  expect(watched.samples, "a flight has to have been seen in the air").toBeGreaterThan(0);
   expect(watched.flying, "and it has to be over").toBe(0);
   // The flight wears the corner of the cover it left: it sits exactly on the
   // tile while the tile stops showing its own, so a radius of its own would
@@ -291,13 +294,11 @@ test("scrolling the shelf mid-flight hands the cover straight back", async ({ pa
 
   // Counting starts at the wheel, so what it measures is the flight's survival.
   await page.evaluate(() => {
-    const w = window as unknown as { after?: { counting: boolean; frames: number; cover: string } };
-    w.after = { counting: false, frames: 0, cover: "" };
+    const w = window as unknown as { after?: { counting: boolean; frames: number } };
+    w.after = { counting: false, frames: 0 };
     const sample = () => {
       if (!w.after!.counting) return;
       if (document.querySelector("[data-cover-flight]")) w.after!.frames += 1;
-      const cover = document.querySelector("[data-book-cover]");
-      if (cover) w.after!.cover = getComputedStyle(cover).opacity;
     };
     window.setInterval(sample, 16);
   });
@@ -316,10 +317,12 @@ test("scrolling the shelf mid-flight hands the cover straight back", async ({ pa
   await page.waitForTimeout(700);
 
   const after = await page.evaluate(
-    () => (window as unknown as { after: { frames: number; cover: string } }).after,
+    () => (window as unknown as { after: { frames: number } }).after,
   );
   // Gone within a frame or two of the gesture — not the ~350ms it had left.
   expect(after.frames, "the flight does not outlive the scroll").toBeLessThanOrEqual(3);
-  // And its tile is showing its own cover again.
-  expect(after.cover, "the cover is back on its tile").toBe("1");
+  // And its tile is showing its own cover again — polled rather than read off the
+  // sampler, whose last sample is one 16ms window and can land before the tile's
+  // own cover has finished fading back up.
+  await expect(page.locator("[data-book-cover]").first()).toHaveCSS("opacity", "1");
 });
