@@ -1,4 +1,4 @@
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import type { Icon } from "@phosphor-icons/react";
 import {
@@ -42,6 +42,25 @@ const ITEMS: NavItem[] = [
   { to: "/search", label: "搜索", icon: MagnifyingGlass },
 ];
 
+/**
+ * Which way a click moves down this list, for the page transition to travel in.
+ *
+ * It is carried on the navigation itself (`state`) rather than remembered by the
+ * shell, because "which way did we come from" is the one thing a route change
+ * cannot tell you about itself — and the alternative, holding the previous route
+ * in a ref or state, means either reading a ref while rendering or paying a
+ * second full render of a heavy page on every navigation.
+ *
+ * `Link` ignores `state` it does not use, and navigations that are not this
+ * list (the command palette, a deep link, the reader) simply do not set it —
+ * which reads as 0, a plain cross-fade.
+ */
+function stepFrom(from: string, to: string): number {
+  const here = ITEMS.findIndex((item) => item.to === from);
+  const there = ITEMS.findIndex((item) => item.to === to);
+  return here < 0 || there < 0 ? 0 : Math.sign(there - here);
+}
+
 const ROW = cn(
   "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13.5px]",
   "border border-transparent transition-colors",
@@ -57,6 +76,7 @@ function rowState(isActive: boolean): string {
 export function NavList() {
   const collapsed = useSettings((s) => s.sidebarCollapsed);
   const reduce = useReducedMotion();
+  const { pathname } = useLocation();
   // Remounting on activation gives the fill/outline swap a springy pop.
   const iconSpring = {
     initial: reduce ? false : { scale: 0.6, opacity: 0.4 },
@@ -70,6 +90,7 @@ export function NavList() {
           key={item.to}
           to={item.to}
           end={item.end}
+          state={{ step: stepFrom(pathname, item.to) }}
           // Collapsed rail keeps the label for assistive tech and as a native
           // tooltip; dropping the node entirely left the icon with no name.
           title={collapsed ? item.label : undefined}

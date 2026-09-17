@@ -33,7 +33,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { GlassInput } from "@/components/glass/input";
 import { isDesktopRuntime } from "@/lib/ipc";
-import { DURATION, SPRING, staggerDelay, useMotion } from "@/lib/motion";
+import { DURATION, EASE_OUT, SPRING, staggerDelay, useMotion } from "@/lib/motion";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import { BookCard, DeleteBookDialog } from "@/features/library/BookCard";
 import {
@@ -281,10 +281,28 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       <header className="px-8 pt-8 pb-6">
         <p className="text-text-2 text-sm">{greeting(now)}</p>
         <div className="mt-1 flex flex-wrap items-end justify-between gap-3">
-          <div>
-            <h1 className="text-text-1 text-2xl font-semibold tracking-tight">{meta.title}</h1>
-            <p className="text-text-2 mt-1 text-sm">{meta.subtitle}</p>
-          </div>
+          {/* 书库 / 最近 / 收藏 / 标签 are one page with four filters — the shell
+              keeps them mounted (see `AppShell`), so changing filter has nowhere
+              else to show itself. The heading steps out and the new one rises
+              into its place, while the grid reflows underneath: the incoming
+              cards glide, the outgoing ones shrink away.
+
+              Only the heading moves. The buttons beside it are part of the same
+              gesture but are pinned right by `justify-between` and must not be
+              re-mounted out from under a click — which is also why `popLayout`
+              (the leaving heading goes out of flow) is safe here. */}
+          <AnimatePresence mode="popLayout" initial={false}>
+            <motion.div
+              key={filter}
+              initial={{ opacity: 0, y: m.reduce ? 0 : 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: m.reduce ? 0 : -8 }}
+              transition={{ duration: m.reduce ? 0 : DURATION.fast, ease: EASE_OUT }}
+            >
+              <h1 className="text-text-1 text-2xl font-semibold tracking-tight">{meta.title}</h1>
+              <p className="text-text-2 mt-1 text-sm">{meta.subtitle}</p>
+            </motion.div>
+          </AnimatePresence>
           <div className="flex items-center gap-2">
             <GlassButton size="md" onClick={() => setClippingsOpen(true)}>
               <Highlighter size={15} /> 导入摘录

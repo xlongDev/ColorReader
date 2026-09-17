@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useMemo, type CSSProperties } from "react";
 import { useLocation, useOutlet } from "react-router-dom";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion, type Variants } from "motion/react";
 import { CaretRight } from "@phosphor-icons/react";
 
 import { TitleBar } from "@/components/layout/TitleBar";
@@ -14,7 +14,6 @@ import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { BookCoverFlight } from "@/components/motion/BookCoverFlight";
 import { fontFaceCss, readerGlassVars, resolveSurface } from "@/features/reader/theme";
 import { useCommandPalette } from "@/stores/command-palette";
-import { useBookHandoff } from "@/stores/book-handoff";
 import { useSettings } from "@/stores/settings";
 import { useReaderSettings } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
@@ -23,7 +22,7 @@ import { useDeepLink } from "@/hooks/useDeepLink";
 import { useFonts } from "@/hooks/useFonts";
 import { useHotkeys } from "@/hooks/useHotkeys";
 import { registerCoreCommands, useNavigationBridge } from "@/features/command/registerCoreCommands";
-import { DURATION, EASE_OUT, RISE } from "@/lib/motion";
+import { DURATION, EASE_OUT } from "@/lib/motion";
 
 // Sidebar content, shared verbatim by the docked pane and the fullscreen edge
 // overlay — the overlay is the same sidebar the user already has, just
@@ -44,6 +43,55 @@ function sidebarBody(collapsed: boolean) {
   );
 }
 
+/**
+ * The four shelf views — one page with four filters.
+ *
+ * Keyed together so the transition does not treat them as four pages. A change
+ * of filter then keeps the same `LibraryPage`: the chrome is identical, so only
+ * the content should move, and remounting the shelf meant **two** of them on
+ * screen for the length of every swap — 168 covers for an 84-book library, on
+ * the switches a reader makes most.
+ */
+const SHELF_VIEWS = new Set(["/", "/recent", "/favorites", "/tags"]);
+
+/**
+ * How far a page travels while being swapped for a sibling, in px.
+ *
+ * Longer than the vocabulary's `RISE` (10px) on purpose: this is the one motion
+ * in the shell that is about *direction* rather than arrival, and 10px reads as
+ * a settle rather than a step.
+ */
+const PAGE_SHIFT = 28;
+
+/**
+ * The direction the sidebar recorded on the link that was clicked: +1 for a step
+ * down the list, -1 for a step up, 0 for everything that is not a step in that
+ * list (the reader, 设置, the command palette, a deep link). See `NavList`.
+ */
+function stepOf(state: unknown): number {
+  const step = (state as { step?: unknown } | null)?.step;
+  return typeof step === "number" ? step : 0;
+}
+
+/**
+ * The swap, as variants, because `custom` is how the direction reaches the
+ * leaving page: `AnimatePresence` renders that one from the element it captured
+ * before the route changed, so it cannot read the new location for itself.
+ *
+ * `enter` comes in from the side the reader moved toward and `exit` carries on
+ * that way, so the two pages move as one surface stepping through the list.
+ * Both collapse to a plain cross-fade at step 0.
+ */
+const swap: Variants = {
+  enter: (direction: number) => ({ opacity: 0, y: direction * PAGE_SHIFT }),
+  center: { opacity: 1, y: 0 },
+  exit: (direction: number) => ({
+    opacity: 0,
+    y: direction * -PAGE_SHIFT,
+    transition: { duration: DURATION.fast, ease: EASE_OUT },
+  }),
+};
+
 export function AppShell() {
   useHotkeys();
   useNavigationBridge();
@@ -63,20 +111,16 @@ export function AppShell() {
   // backdrop, so title bar, sidebar and panels read as one material with the
   // page. A manually picked night surface darkens the chrome even in a light
   // app theme, and vice versa.
-  const { pathname } = useLocation();
+  const { pathname, state } = useLocation();
   const reading = pathname.startsWith("/reader");
 
   /**
-   * Whether a cover is in the air between the two pages right now.
-   *
-   * The arriving page then gives up its travel and only cross-fades. A cover in
-   * flight is a shared element: the page it is flying to is moving while the
-   * flight is trying to land on it, and a CSS transition whose target moves is
-   * a transition that restarts — so the flight ends up chasing the page a frame
-   * at a time instead of running its 420ms curve, and finishes wherever it was
-   * when the chasing stopped. Opacity moves nothing, so the cross-fade stays.
+   * Which way the reader moved down the sidebar, for the swap this render is
+   * about to start. Carried on the navigation (`NavList` writes it), so it is
+   * available here without either reading a ref while rendering or holding the
+   * previous route in state for a second render of a heavy page.
    */
-  const coverFlying = useBookHandoff((s) => s.id !== null);
+  const step = stepOf(state);
 
   /**
    * The route element, resolved here rather than by an `<Outlet/>` in the tree.
@@ -198,13 +242,13 @@ export function AppShell() {
             {/* Lazy route chunks resolve on first navigation; local disk,
                 so a plain fallback is enough. */}
             <Suspense fallback={null}>
-              {/* Cross-fade between pages: the outgoing view lifts away while
-                  the incoming one rises into place, keyed on pathname so the
-                  reader route stays stable across chapter navigations
-                  (query-only changes). `popLayout` takes the leaving page out
-                  of flow, so the arriving one is laid out at its final place
-                  on the first frame rather than being pushed around by a page
-                  that is already on its way out.
+              {/* Swapping pages: the page the reader left carries on in the
+                  direction they moved down the sidebar, and the one they asked
+                  for comes in from the other side, so the two read as one
+                  surface stepping through the list. `popLayout` takes the
+                  leaving page out of flow, so the arriving one is laid out at
+                  its final place on the first frame rather than being pushed
+                  around by a page that is already on its way out.
 
                   What this must not animate is anything that changes the
                   resolution of the page's raster, and both alternatives did:
@@ -223,31 +267,19 @@ export function AppShell() {
                      worst cases for it, and the reader -> shelf direction pays
                      it twice, on both pages at once.
 
-                  A translate moves an already-rasterised layer, and 10px is the
-                  vocabulary's own entrance travel (`RISE`), so the rise reads
-                  as the same gesture as everything else that enters. At rest
-                  motion normalises the offset away, so the wrapper is neither a
-                  filter nor a transform and fixed overlays inside a page keep
-                  the viewport as their containing block.
-
-                  The one exception is a page arriving under a cover that is
-                  already in the air: then the rise is dropped and only the
-                  fade is kept, because that 10px of travel is exactly what
-                  makes the flight miss (see `coverFlying`). */}
-              <AnimatePresence mode="popLayout" initial={false}>
+                  A translate moves an already-rasterised layer. At rest motion
+                  normalises the offset away, so the wrapper is neither a filter
+                  nor a transform and fixed overlays inside a page keep the
+                  viewport as their containing block. */}
+              <AnimatePresence mode="popLayout" initial={false} custom={step}>
                 <motion.div
-                  key={pathname}
-                  initial={reduce ? false : coverFlying ? { opacity: 0 } : { opacity: 0, y: RISE }}
-                  animate={{ opacity: 1, y: 0 }}
-                  exit={
-                    reduce
-                      ? undefined
-                      : {
-                          opacity: 0,
-                          y: -RISE,
-                          transition: { duration: DURATION.fast, ease: EASE_OUT },
-                        }
-                  }
+                  key={SHELF_VIEWS.has(pathname) ? "shelf" : pathname}
+                  data-page-swap={pathname}
+                  custom={step}
+                  variants={swap}
+                  initial={reduce ? false : "enter"}
+                  animate="center"
+                  exit={reduce ? undefined : "exit"}
                   // Leaving is quicker than arriving. Both pages are mounted for
                   // as long as the exit runs, and the page being left is the
                   // expensive one — the reader holds the whole book and its
