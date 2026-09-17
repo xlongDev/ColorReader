@@ -32,19 +32,7 @@ jobs:
       # installing chromium alone left the webkit project failing to launch
       # (and the whole job red) since this step was added.
       - run: pnpm exec playwright install --with-deps chromium webkit
-      # TEMPORARY DIAGNOSTIC — revert once the failing test is named.
-      - name: Run e2e (diagnostic)
-        run: |
-          set +e
-          pnpm test:e2e > /tmp/e2e.log 2>&1
-          code=$?
-          if [ "$code" -ne 0 ]; then
-            # One annotation per relevant line, taken from the end of the log:
-            # GitHub keeps ten per step and drops the rest.
-            grep -aE "✘|Error|Expected|Received|passed|failed|browserType|Timed out" /tmp/e2e.log \
-              | tail -n 10 | cut -c1-800 | while IFS= read -r line; do echo "::error::E2E $line"; done
-          fi
-          exit $code
+      - run: pnpm test:e2e
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
