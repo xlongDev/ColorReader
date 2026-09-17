@@ -7,6 +7,7 @@ import type { LayoutMode, PageTransition } from "./theme";
 import { speechUnits, unitsFromOffset, TTS_WASH_BOOK } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
 import { buildStyleSheet } from "./foliateStyle";
+import { markLoneFigures } from "./loneFigure";
 import type { FoliateStyle } from "./foliateStyle";
 import { inkWash, selectionBottom } from "./selection";
 import { findInSections, findRange, indexText } from "./textAnchor";
@@ -892,6 +893,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       // black over the `#background` layer. Drop the tag and the scheme is
       // ours again. The `:root { color-scheme }` form is covered by the sheet.
       doc.querySelector('meta[name="color-scheme" i]')?.remove();
+      markLoneFigures(doc);
       doc.addEventListener("keydown", forwardKeyFromSection, true);
       doc.addEventListener("mouseup", () => captureSelection(doc), true);
       doc.addEventListener("click", onSectionClick, true);

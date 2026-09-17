@@ -6,6 +6,8 @@
  * WebKit fixture loads this exact string).
  */
 
+import { LONE_FIGURE_ATTR } from "./loneFigure";
+
 /** Typography and palette pushed into the book's own document. */
 export type FoliateStyle = {
   fontSize: number;
@@ -105,17 +107,18 @@ html, body, p, li, blockquote, dd, dt, td, th, div {
 }
 /* Both sides of the gap, not just the bottom: these books set a large
    margin-top on their paragraph classes (27–63px measured), which swamped
-   a bottom-only override and made 紧凑 and 标准 look identical.
-   Paragraph <div>s get the same gap. The :has() guard keeps structural
-   container divs (those holding block children) out of the rule so we do
-   not inflate spacing around layout boxes; it is kept in its own rule so
-   that on a WebView without :has() support only this div clause is dropped,
-   not the p/li clause above. */
+   a bottom-only override and made 紧凑 and 标准 look identical. */
 p, li, blockquote, dd {
   margin-top: ${paraGap}em !important;
   margin-bottom: ${paraGap}em !important;
 }
-div:not([class*="pagebreak"]):not(:has(> p, > div, > section, > table, > ul, > ol, > blockquote, > h1, > h2, > h3, > h4, > h5, > h6)) {
+/* A paragraph <div> gets the same gap, but only when it really is one: an
+   empty div, or one whose children are all blocks or all replaced elements,
+   is a layout box the book put there to position something — and a gap on
+   those is not cosmetic, see the figure note below. Kept in its own rule so
+   that on a WebView without :has() support only this div clause is dropped,
+   not the p/li clause above. */
+div:not(:empty):not([class*="pagebreak"]):not(:has(> p, > div, > section, > table, > ul, > ol, > blockquote, > h1, > h2, > h3, > h4, > h5, > h6, > img, > svg, > picture, > figure, > video, > canvas)) {
   margin-top: ${paraGap}em !important;
   margin-bottom: ${paraGap}em !important;
 }
@@ -125,7 +128,7 @@ div:not([class*="pagebreak"]):not(:has(> p, > div, > section, > table, > ul, > o
 p {
   text-indent: ${indent ? "2em" : "0"} !important;
 }
-div:not([class*="pagebreak"]):not(:has(> p, > div, > section, > table, > ul, > ol, > blockquote, > h1, > h2, > h3, > h4, > h5, > h6)) {
+div:not(:empty):not([class*="pagebreak"]):not(:has(> p, > div, > section, > table, > ul, > ol, > blockquote, > h1, > h2, > h3, > h4, > h5, > h6, > img, > svg, > picture, > figure, > video, > canvas)) {
   text-indent: ${indent ? "2em" : "0"} !important;
 }
 /* Replaced elements are the one thing a book cannot be trusted to size: a
@@ -138,6 +141,33 @@ img, svg, video, canvas, image {
   max-width: 100% !important;
   max-height: 100% !important;
   object-fit: contain;
+}
+/* A picture the paginator sizes to the full column is laid out on a line of
+   its own, and a replaced element sits on a baseline, so that line box also
+   carries the strut's descent *below* the picture — taller than the page. The
+   residue spills into the next column and, nothing visible having gone with
+   it, the reader renders that column as a blank page (an image-only Calibre
+   section took three columns instead of one). Aligning to the box bottom
+   drops the descent. Only for a picture that really owns its line, though:
+   the same declaration is what moves an icon sharing a line with text off the
+   baseline it was authored on (measured: 9px on an 18px icon), and a
+   paragraph's markup cannot tell the two apart on its own — hence the mark,
+   which attachSection puts on the sections as they load. */
+[${LONE_FIGURE_ATTR}] {
+  vertical-align: bottom !important;
+}
+/* The same defect from the other side. A Calibre cover is an <svg> with
+   width="100%" height="100%" and preserveAspectRatio="none", and setImageSize
+   caps that height at one column: holding the width at 100% while the height
+   is capped squashes the artwork into whatever shape the page happens to be
+   (measured: a 950x1388 cover painted 720x427). "none" means "stretch to the
+   box", so the box *is* the picture — let the viewBox ratio size it instead.
+   The max-width/max-height above still bound it, and the artwork keeps its
+   proportions. Only the fill-the-box recipe is touched: an SVG that carries
+   its own size keeps it. */
+svg[viewBox][width*="%"][height*="%"] {
+  width: auto !important;
+  height: auto !important;
 }
 /* Same reason for a wrapper the book fixed to print width: the page has to
    fit the column, not the other way round. Only an explicit pixel width is

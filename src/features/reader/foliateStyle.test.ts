@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { buildStyleSheet, type FoliateStyle } from "./foliateStyle";
+import { LONE_FIGURE_ATTR } from "./loneFigure";
 
 /** A night page, so each case only states the field it is about. */
 const style = (over: Partial<FoliateStyle> = {}): FoliateStyle => ({
@@ -45,8 +46,37 @@ describe("buildStyleSheet", () => {
     expect(buildStyleSheet(style({ dark: false }))).toContain("color-scheme: normal !important");
   });
 
+  it("drops the baseline descent under a picture that owns its line", () => {
+    // The paginator sizes a figure to the whole column (setImageSize). An
+    // inline picture sits on a baseline, so its line box also carries the
+    // strut's descent below it — taller than the page, and the residue spills
+    // into a column with nothing visible in it, which the reader shows as a
+    // blank page (measured: 3 columns for a 1-page cover).
+    const css = buildStyleSheet(style({ dark: false }));
+    expect(css).toContain("vertical-align: bottom !important");
+    // Scoped to the marked figures: the same declaration would sink an icon
+    // that shares a line with text, and the mark is what tells them apart.
+    expect(css).toContain(`[${LONE_FIGURE_ATTR}]`);
+  });
+
+  it("lets an SVG keep its own proportions instead of the page's", () => {
+    // A Calibre cover is `width="100%" height="100%" preserveAspectRatio="none"`
+    // and the paginator caps only the height, so the artwork is stretched into
+    // whatever shape the page is (measured: a 950x1388 cover painted 720x427).
+    expect(buildStyleSheet(style({ dark: false }))).toContain("svg[viewBox]");
+  });
+
   it("caps replaced elements the paginator would let overflow the column", () => {
     expect(buildStyleSheet(style({ dark: false }))).toContain("max-width: 100% !important");
+  });
+
+  it("keeps the paragraph gap off the book's own layout boxes", () => {
+    const css = buildStyleSheet(style({ dark: false }));
+    // An empty div, or one wrapping a picture, is not a paragraph: the gap
+    // lands in front of a full-column figure and pushes it into the next
+    // column, leaving the page it came from blank.
+    expect(css).toContain("div:not(:empty)");
+    expect(css).toContain("> img, > svg");
   });
 
   it("carries the imported faces into the section, which is its own document", () => {

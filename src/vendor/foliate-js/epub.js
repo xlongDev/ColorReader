@@ -1088,9 +1088,19 @@ class Loader {
             for (const el of doc.querySelectorAll('[src]')) await replace(el, 'src')
             for (const el of doc.querySelectorAll('[poster]')) await replace(el, 'poster')
             for (const el of doc.querySelectorAll('object[data]')) await replace(el, 'data')
-            for (const el of doc.querySelectorAll('[*|href]:not([href])'))
-                el.setAttributeNS(NS.XLINK, 'href', await this.loadHref(
-                    el.getAttributeNS(NS.XLINK, 'href'), href, parents))
+            for (const el of doc.querySelectorAll('[*|href]:not([href])')) {
+                const source = el.getAttributeNS(NS.XLINK, 'href')
+                const replaced = await this.loadHref(source, href, parents)
+                el.setAttributeNS(NS.XLINK, 'href', replaced)
+                // Same local patch as the `[src]` branch above, and the reason
+                // the reader can open a picture at all: every Calibre cover and
+                // many of its full-page plates are an SVG `<image>`, which is
+                // reached through this branch alone — without the path the
+                // click on the cover page had nothing to look the picture up
+                // by and did nothing.
+                if (source && typeof replaced === 'string' && replaced.startsWith('blob:'))
+                    el.setAttribute('data-path', resolveURL(source, href))
+            }
             for (const el of doc.querySelectorAll('[srcset]'))
                 el.setAttribute('srcset', await replaceSeries(el.getAttribute('srcset'),
                     /(\s*)(.+?)\s*((?:\s[\d.]+[wx])+\s*(?:,|$)|,\s+|$)/g,
