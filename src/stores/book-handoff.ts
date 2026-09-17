@@ -55,8 +55,13 @@ interface Handoff {
   side: "shelf" | "reader" | null;
   /** Where it left from — the shelf tile the reader clicked. */
   from: CoverBox | null;
-  /** Where it should land — registered by the reader's header thumbnail. */
+  /** Where it should land — registered by the far end's cover. */
   to: CoverBox | null;
+  /**
+   * Whether the flight has left. The pad keeps its aim on the destination until
+   * this turns true, and goes quiet the moment it does — see `useLandingBox`.
+   */
+  launched: boolean;
   begin: (payload: {
     id: string;
     coverUrl: string | null;
@@ -64,6 +69,7 @@ interface Handoff {
     side: "shelf" | "reader";
   }) => void;
   land: (id: string, to: CoverBox) => void;
+  markLaunched: () => void;
   end: () => void;
 }
 
@@ -90,7 +96,10 @@ export const useBookHandoff = create<Handoff>((set) => ({
   from: null,
   to: null,
   side: null,
-  begin: ({ id, coverUrl, from, side }) => set({ id, coverUrl, from, side, to: null }),
+  launched: false,
+  begin: ({ id, coverUrl, from, side }) =>
+    set({ id, coverUrl, from, side, to: null, launched: false }),
   land: (id, to) => set((state) => (state.id === id ? { ...state, to } : state)),
+  markLaunched: () => set((state) => (state.launched ? state : { ...state, launched: true })),
   end: () => set((state) => (state.id === null ? state : { id: null, to: null, side: null })),
 }));

@@ -64,24 +64,41 @@ function Flight({
   to: CoverBox | null;
   onDone: () => void;
 }) {
+  /**
+   * The frame this layer starts moving is the last frame the pad may aim at it.
+   *
+   * Marked in the store *in the same callback* that starts the transform, so the
+   * pad's own frame — which reads the flag straight from the store — cannot land
+   * one report after the transition is under way. A report after that is a new
+   * end value, and a transition whose target changes restarts its duration.
+   */
+  const markLaunched = useBookHandoff((s) => s.markLaunched);
+
   // Launch on the frame *after* there is somewhere to fly to: the browser needs
   // the "at the shelf" transform committed *and painted* to transition from, or
-  // it snaps straight to the end.
+  // it snaps straight to the end. A fresh `to` restarts that wait, which is what
+  // keeps the aim on a destination that is still settling — see `useLandingBox`.
   const [launched, setLaunched] = useState(false);
   useEffect(() => {
     if (to === null) return;
-    const frame = requestAnimationFrame(() => setLaunched(true));
+    const frame = requestAnimationFrame(() => {
+      markLaunched();
+      setLaunched(true);
+    });
     return () => cancelAnimationFrame(frame);
-  }, [to]);
+  }, [to, markLaunched]);
 
   // ...but not forever. A cold route chunk can take longer than the gesture
   // reads as connected, and a book with no cover never registers a landing at
   // all; either way the cover lifts and dissolves rather than hovering. Setting
   // an already-true state is a no-op, so this is safe to run unconditionally.
   useEffect(() => {
-    const timer = window.setTimeout(() => setLaunched(true), DISSOLVE_AFTER);
+    const timer = window.setTimeout(() => {
+      markLaunched();
+      setLaunched(true);
+    }, DISSOLVE_AFTER);
     return () => window.clearTimeout(timer);
-  }, []);
+  }, [markLaunched]);
 
   // Without a landing box the cover still has to leave: a cold route chunk can
   // take longer than the gesture reads as connected, and a book with no cover
