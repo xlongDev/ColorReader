@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { buildBookQuery } from "@/features/library/LibraryPage";
+import { buildBookQuery } from "@/features/library/shelfQuery";
 
 describe("buildBookQuery", () => {
   it("forwards the sort unchanged on the `recent` filter", () => {
