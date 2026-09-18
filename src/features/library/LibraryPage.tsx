@@ -191,7 +191,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const [lockedBatch, setLockedBatch] = useState<string[] | null>(null);
   const [lastOutcomes, setLastOutcomes] = useState<ImportOutcome[] | null>(null);
   const [sourceOpen, setSourceOpen] = useState(false);
-  /** The Kindle clippings sheet; a file picker plus a preview lives inside. */
+  /** The import-clippings sheet; a file picker plus a preview lives inside. */
   const [clippingsOpen, setClippingsOpen] = useState(false);
   /** True when the import button was clicked in the browser, which has no backend. */
   const [webNotice, setWebNotice] = useState(false);
@@ -507,8 +507,24 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           {/* Shelf layout: grid tiles (cover-on-top) or single-column rows.
               Same `layoutId` highlight as the sidebar's theme pill: one
               stadium springs between the two cells instead of each cell
-              rendering its own background, so the choice reads as motion. */}
-          <div className="border-hairline bg-surface-1 relative inline-flex h-9 items-center rounded-md border p-0.5">
+              rendering its own background, so the choice reads as motion.
+
+              The thumb's radius is derived from the track's rather than being
+              a literal. The track is a stadium (36px tall, `--radius-md` 18px),
+              so 1px of border and 4px of padding leave a 13px inner curve — and
+              a thumb whose radius does not match it cuts across the curve the
+              track has already turned away from. Measured with the old 7px
+              literal, the thumb's corner sat 10.9px outside the track's outline
+              and read as "the thumb is too big" even though it fitted inside
+              with 2px to spare.
+
+              The padding is 4px rather than the usual 2px for the same reason:
+              at 2px the thumb is 32px in a 36px track, and a 13-16px radius on
+              a near-square 36×32 cell renders as a circle — rounder than the
+              track it sits in, which reads as *bigger*, not smaller. 26×36 is
+              a stadium that is wider than it is tall, which is what a
+              segmented thumb is supposed to look like. */}
+          <div className="border-hairline bg-surface-1 relative inline-flex h-9 items-stretch rounded-md border p-1">
             {(
               [
                 { value: "grid", icon: SquaresFour, label: "网格视图" },
@@ -526,15 +542,14 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
                   aria-pressed={active}
                   onClick={() => setShelfLayout(option.value)}
                   className={cn(
-                    "relative flex h-8 w-9 items-center justify-center rounded-[7px] transition-colors",
+                    "focus-visible:focus-ring relative flex w-9 items-center justify-center rounded-[calc(var(--radius-md)-5px)] transition-colors",
                     active ? "text-text-1" : "text-text-3 hover:text-text-2",
-                    "focus-visible:focus-ring",
                   )}
                 >
                   {active && (
                     <motion.span
                       layoutId="shelf-layout-pill"
-                      className="bg-surface-3 shadow-glass absolute inset-0 rounded-[7px]"
+                      className="bg-surface-3 shadow-glass absolute inset-0 rounded-[calc(var(--radius-md)-5px)]"
                       transition={reduce ? { duration: 0 } : SPRING.layout}
                     />
                   )}
