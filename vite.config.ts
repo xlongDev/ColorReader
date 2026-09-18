@@ -40,6 +40,38 @@ export default defineConfig({
   // GitHub Pages serves the web build under /<repo>/; the Tauri builds keep
   // the root base so bundled assets resolve the same way as always.
   base: process.env.PAGES_BASE ?? "/",
+  css: {
+    postcss: {
+      plugins: [
+        /**
+         * `font-display: block` on every `@font-face` in the app document.
+         *
+         * The LXGW webfont package authors its 582 subsets with `swap`, which
+         * is the right default for a page that can afford a fallback and the
+         * wrong one here: a reader switching to 霞鹜文楷 watches the book render
+         * in 楷体 — the next family in the stack — for as long as the subsets
+         * take to arrive, then change under them. `block` spends that moment
+         * showing nothing instead of the wrong face, and the subsets come out
+         * of the app bundle, so the moment is short.
+         *
+         * Scoped to `@font-face` rather than to the file: the app declares no
+         * other faces in CSS (imported ones are generated at runtime by
+         * `fontFaceCss`), so this can only ever touch the bundled package. The
+         * foliate sections need the same rewrite and get it in `theme.ts`,
+         * where the rules are read back out of this sheet.
+         */
+        {
+          postcssPlugin: "font-display-block",
+          Declaration(decl) {
+            if (decl.prop !== "font-display" || decl.value !== "swap") return;
+            if (decl.parent?.type !== "atrule") return;
+            if (decl.parent.name !== "font-face") return;
+            decl.value = "block";
+          },
+        },
+      ],
+    },
+  },
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),

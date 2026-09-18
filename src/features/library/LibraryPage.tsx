@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   BookOpen,
@@ -19,6 +19,7 @@ import {
   Globe,
   Highlighter,
   MagnifyingGlass,
+  Rows,
   Sparkle,
   SquaresFour,
   Star,
@@ -34,10 +35,12 @@ import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { GlassInput } from "@/components/glass/input";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { DURATION, EASE_OUT, SPRING, staggerDelay, useMotion } from "@/lib/motion";
+import { cn } from "@/lib/cn";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import { BookCard, DeleteBookDialog } from "@/features/library/BookCard";
 import {
   failedMessage,
+  pickContinueReading,
   sortOptions,
   summarizeOutcomes,
   titleForFilter,
@@ -47,6 +50,7 @@ import { TagBar } from "@/features/library/TagBar";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useShelfWindow } from "@/hooks/useShelfWindow";
 import { useAssignTags, useTags } from "@/hooks/useTags";
+import { useSettings } from "@/stores/settings";
 
 // Dialog chunks load on first open; local disk, so no spinner is needed.
 const ExportPackDialog = lazy(() =>
@@ -191,6 +195,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const [clippingsOpen, setClippingsOpen] = useState(false);
   /** True when the import button was clicked in the browser, which has no backend. */
   const [webNotice, setWebNotice] = useState(false);
+  /** The batch bar's element, so the pane-centring effect above can place it
+   *  without going through state. */
+  const batchBarRef = useRef<HTMLDivElement>(null);
   /** Batch-manage mode: cards toggle selection instead of opening. */
   const [managing, setManaging] = useState(false);
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
@@ -204,6 +211,50 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     const id = window.setInterval(() => setNow(new Date()), 60_000);
     return () => window.clearInterval(id);
   }, []);
+
+  /**
+   * Where the batch bar belongs, horizontally.
+   *
+   * The bar is `position: fixed` in the shell's overlay host, and that host is
+   * the window — so a plain `left: 50%` is the *window's* middle. The bar acts
+   * on the shelf, which the sidebar pushes ~130px right of that middle
+   * (measured at 1440 with the rail open: bar centre 720, pane centre 850),
+   * and the bar read as misaligned by exactly that.
+   *
+   * So the placement is written as the pane's *gutters* — padding on a
+   * full-width wrapper — rather than as a `left` on the bar itself. That is
+   * not a style preference: an absolutely positioned box with a `left` and no
+   * `right` is shrink-to-fit against the space between that `left` and the
+   * viewport edge, so a bar told to sit at the pane's centre was silently
+   * capped at (viewport − centre) wide. At 1280 that is 765px and the bar
+   * needed 510, so nothing showed; at the ~1080 window in the bug report it is
+   * ~416px, and every label in the bar wrapped to one character per line —
+   * 已选 0 本 and 取消收藏 stacked vertically. Padding on a full-width wrapper
+   * has no such ceiling, and `justify-center` inside it centres on the pane.
+   *
+   * Written straight onto the element instead of into state: the sidebar
+   * animates its own width over ~340ms, so this tracks the spring frame by
+   * frame, and a re-render per frame is the one thing the shelf's windowed
+   * grid cannot afford.
+   *
+   * `scrollerRef.parentElement` is the page's own root, which is the pane's
+   * content box — the pane carries no padding of its own.
+   */
+  useLayoutEffect(() => {
+    if (!managing) return;
+    const pane = scrollerRef.current?.parentElement;
+    const bar = batchBarRef.current;
+    if (!pane || !bar) return;
+    const place = () => {
+      const box = pane.getBoundingClientRect();
+      bar.style.paddingLeft = `${box.left}px`;
+      bar.style.paddingRight = `${window.innerWidth - box.right}px`;
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, [managing]);
 
   const query: BookQuery = useMemo(
     () => ({
@@ -243,12 +294,15 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const dragging = useDragDropImport((paths) => importPaths(paths));
 
   const m = useMotion();
+  const reduce = useReducedMotion();
   const picking = importBooks.isPending;
   /** One shared empty list, so `list` keeps its identity while the books are
    *  still loading — a fresh `[]` per render is a new dependency everywhere it
    *  is used. */
   const list = books.data ?? NO_BOOKS;
-  const continueReading = filter === "all" ? list.find((b) => (b.progress ?? 0) > 0) : undefined;
+  const shelfLayout = useSettings((s) => s.shelfLayout);
+  const setShelfLayout = useSettings((s) => s.setShelfLayout);
+  const continueReading = filter === "all" ? pickContinueReading(list) : undefined;
 
   /**
    * Only the cards the viewport can reach are rendered (see `useShelfWindow`);
@@ -265,6 +319,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     list.length,
     `${filter}|${sort}|${search}|${tag ?? ""}`,
     shelfScroll.get(filter) ?? 0,
+    shelfLayout,
   );
   /**
    * The label line is part of every tile in a list that has labels anywhere, so
@@ -275,11 +330,32 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
    */
   const tagRow = useMemo(() => list.some((book) => book.tags.length > 0), [list]);
 
-  const exitManaging = () => {
+  const exitManaging = useCallback(() => {
     setManaging(false);
     setSelected(new Set());
     setBatchDeleteOpen(false);
-  };
+  }, []);
+
+  /**
+   * Escape leaves batch-manage mode.
+   *
+   * It has to be a key handler rather than a click target, because the shelf
+   * is the mode's own selection surface and any layer that catches a click
+   * "outside" catches clicks on the books too. A keyboard user still needs a
+   * way out that is not the bar's 完成 button.
+   *
+   * Suppressed while the delete confirmation is up, so Escape there closes
+   * the dialog rather than the mode behind it.
+   */
+  useEffect(() => {
+    if (!managing) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || batchDeleteOpen) return;
+      exitManaging();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [managing, batchDeleteOpen, exitManaging]);
   const toggleSelect = (book: BookSummary) =>
     setSelected((prev) => {
       const next = new Set(prev);
@@ -428,6 +504,46 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             />
           </div>
 
+          {/* Shelf layout: grid tiles (cover-on-top) or single-column rows.
+              Same `layoutId` highlight as the sidebar's theme pill: one
+              stadium springs between the two cells instead of each cell
+              rendering its own background, so the choice reads as motion. */}
+          <div className="border-hairline bg-surface-1 relative inline-flex h-9 items-center rounded-md border p-0.5">
+            {(
+              [
+                { value: "grid", icon: SquaresFour, label: "网格视图" },
+                { value: "list", icon: Rows, label: "列表视图" },
+              ] as const
+            ).map((option) => {
+              const active = shelfLayout === option.value;
+              const Icon = option.icon;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  title={option.label}
+                  aria-label={option.label}
+                  aria-pressed={active}
+                  onClick={() => setShelfLayout(option.value)}
+                  className={cn(
+                    "relative flex h-8 w-9 items-center justify-center rounded-[7px] transition-colors",
+                    active ? "text-text-1" : "text-text-3 hover:text-text-2",
+                    "focus-visible:focus-ring",
+                  )}
+                >
+                  {active && (
+                    <motion.span
+                      layoutId="shelf-layout-pill"
+                      className="bg-surface-3 shadow-glass absolute inset-0 rounded-[7px]"
+                      transition={reduce ? { duration: 0 } : SPRING.layout}
+                    />
+                  )}
+                  <Icon size={14} weight={active ? "fill" : "regular"} className="relative" />
+                </button>
+              );
+            })}
+          </div>
+
           <GlassButton
             size="md"
             variant={managing ? "primary" : "subtle"}
@@ -481,7 +597,43 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             {shelf.top > 0 && <div style={{ height: shelf.top }} aria-hidden />}
             <div
               ref={gridRef}
-              className="grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6"
+              // The track list is pinned from the window's count as soon as
+              // there is one, and pinning it is what makes a column change
+              // animate (see `ShelfWindow.columns`). Left to `auto-fill` alone,
+              // the tracks follow the pane the instant the sidebar moves — a
+              // reflow with no DOM mutation for motion to snapshot around, so
+              // the cards teleported into their new slots. Hence an inline
+              // `style` and not only a class: this has to be a *render*.
+              // `--shelf-track` keeps the pinned `repeat()` and the `auto-fill`
+              // fallback (the class, used until the first measurement lands) on
+              // one number.
+              style={
+                shelfLayout === "grid" && shelf.columns > 0
+                  ? {
+                      gridTemplateColumns: `repeat(${shelf.columns}, minmax(0, var(--shelf-track)))`,
+                    }
+                  : undefined
+              }
+              className={cn(
+                shelfLayout === "grid"
+                  ? // A fixed cover width, not `1fr` columns. `1fr` ties the
+                    // cover to the pane, and the pane is 248px narrower with
+                    // the sidebar open — so toggling the rail resized every
+                    // cover on the shelf (measured at 1440: 165px open,
+                    // 194px closed, a 17% swing on a gesture that is not
+                    // about the books). With a fixed track the rail buys
+                    // another *column* instead, and a cover is the same
+                    // object in both states. The track is sized to the width
+                    // the six-column shelf has at the default window, so the
+                    // common case is untouched; the leftover at other widths
+                    // is a right margin, which is what a shelf of fixed
+                    // objects does.
+                    "grid grid-cols-[repeat(auto-fill,minmax(0,var(--shelf-track)))] gap-x-5 gap-y-6"
+                  : // List: a single column, tight row gap (the row itself pads
+                    // itself). The list row already sizes its own cover + meta
+                    // inside; only the gap between rows is the grid's job.
+                    "grid grid-cols-1 gap-y-2",
+              )}
             >
               {/* No `AnimatePresence` around the window. Its children set changes
                   on every scroll, and an exit animation is not something that can
@@ -500,12 +652,13 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
                   // order would restart it at every scroll.
                   delay={staggerDelay(shelf.start + index, m.stagger)}
                   entering={!shelf.sliding}
-                  reserveTags={tagRow}
+                  reserveTags={tagRow && shelfLayout === "grid"}
                   busy={setFavorite.isPending || deleteBook.isPending}
                   selecting={managing}
                   selected={selected.has(book.id)}
                   onToggleSelect={toggleSelect}
                   onOpen={openBook}
+                  variant={shelfLayout}
                   onToggleFavorite={(target) =>
                     setFavorite.mutate({ id: target.id, favorite: !target.favorite })
                   }
@@ -521,70 +674,97 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       </div>
 
       <OverlayPortal>
-        <AnimatePresence>
-          {managing && (
-            <motion.div
-              initial={{ opacity: 0, y: m.reduce ? 0 : 16, scale: m.reduce ? 1 : 0.96, x: "-50%" }}
-              animate={{ opacity: 1, y: 0, scale: 1, x: "-50%" }}
-              exit={{ opacity: 0, y: m.reduce ? 0 : 16, scale: m.reduce ? 1 : 0.96, x: "-50%" }}
-              transition={m.panel}
-              className="glass-2 shadow-panel fixed bottom-6 left-1/2 z-40 flex items-center gap-1.5 rounded-2xl p-2 pl-4"
-            >
-              <span className="text-text-2 mr-1 text-sm whitespace-nowrap">
-                已选{" "}
-                <motion.span
-                  key={selected.size}
-                  initial={{ y: 8, opacity: 0 }}
-                  animate={{ y: 0, opacity: 1 }}
-                  transition={SPRING.tap}
-                  className="text-text-1 inline-block font-semibold tabular-nums"
+        {/* No scrim behind the bar.
+            One used to sit here — a `fixed inset-0 z-30` button whose job was
+            "click outside to exit". It also covered the shelf, and the shelf
+            is the thing this mode is *for*: every click on a card landed on
+            the scrim instead, so the mode exited and nothing was ever
+            selected (measured in both engines: the topmost element at a
+            card's centre was the scrim, not the card). A selection mode whose
+            selection surface is behind a dismiss layer is not a mode.
+            The way out is 完成, or Escape — see the key handler above.
+
+            The wrapper is always mounted, with the bar itself inside
+            `AnimatePresence`: the placement effect writes the pane's gutters
+            onto it as padding, and a `fixed inset-x-0` box has no width
+            ceiling for those gutters to run into. Empty it is zero-height and
+            `pointer-events-none`, so it costs nothing between uses. */}
+        <div
+          ref={batchBarRef}
+          className="pointer-events-none fixed inset-x-0 bottom-6 z-40 flex justify-center"
+        >
+          <AnimatePresence>
+            {managing && (
+              <motion.div
+                initial={{ opacity: 0, y: m.reduce ? 0 : 16, scale: m.reduce ? 1 : 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: m.reduce ? 0 : 16, scale: m.reduce ? 1 : 0.96 }}
+                transition={m.panel}
+                // Centred by the wrapper's flex, not by a `-translate-x-1/2`:
+                // motion writes `transform` for the spring, and the half-width
+                // nudge is only safe in a property it does not touch. The
+                // `whitespace-nowrap` is the last line of defence — a label
+                // that wrapped to one character per line is what this bug
+                // looked like from the outside.
+                className="glass-2 shadow-panel pointer-events-auto flex items-center gap-1.5 rounded-2xl p-2 pl-4 whitespace-nowrap"
+                data-batch-bar
+              >
+                <span className="text-text-2 mr-1 text-sm whitespace-nowrap">
+                  已选{" "}
+                  <motion.span
+                    key={selected.size}
+                    initial={{ y: 8, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    transition={SPRING.tap}
+                    className="text-text-1 inline-block font-semibold tabular-nums"
+                  >
+                    {selected.size}
+                  </motion.span>{" "}
+                  本
+                </span>
+                <GlassButton size="sm" variant="subtle" onClick={toggleSelectAll}>
+                  {allSelected ? "取消全选" : "全选"}
+                </GlassButton>
+                <GlassButton
+                  size="sm"
+                  variant="subtle"
+                  disabled={selected.size === 0}
+                  onClick={openBatchTags}
                 >
-                  {selected.size}
-                </motion.span>{" "}
-                本
-              </span>
-              <GlassButton size="sm" variant="subtle" onClick={toggleSelectAll}>
-                {allSelected ? "取消全选" : "全选"}
-              </GlassButton>
-              <GlassButton
-                size="sm"
-                variant="subtle"
-                disabled={selected.size === 0}
-                onClick={openBatchTags}
-              >
-                <Tag size={13} /> 打标签
-              </GlassButton>
-              <GlassButton
-                size="sm"
-                variant="subtle"
-                disabled={selected.size === 0 || setFavorite.isPending}
-                onClick={() => batchFavorite(true)}
-              >
-                <Star size={13} /> 收藏
-              </GlassButton>
-              <GlassButton
-                size="sm"
-                variant="subtle"
-                disabled={selected.size === 0 || setFavorite.isPending}
-                onClick={() => batchFavorite(false)}
-              >
-                取消收藏
-              </GlassButton>
-              <GlassButton
-                size="sm"
-                variant="ghost"
-                className="text-danger"
-                disabled={selected.size === 0 || deleteBook.isPending}
-                onClick={() => setBatchDeleteOpen(true)}
-              >
-                删除
-              </GlassButton>
-              <GlassButton size="sm" variant="primary" onClick={exitManaging}>
-                完成
-              </GlassButton>
-            </motion.div>
-          )}
-        </AnimatePresence>
+                  <Tag size={13} /> 打标签
+                </GlassButton>
+                <GlassButton
+                  size="sm"
+                  variant="subtle"
+                  disabled={selected.size === 0 || setFavorite.isPending}
+                  onClick={() => batchFavorite(true)}
+                >
+                  <Star size={13} /> 收藏
+                </GlassButton>
+                <GlassButton
+                  size="sm"
+                  variant="subtle"
+                  disabled={selected.size === 0 || setFavorite.isPending}
+                  onClick={() => batchFavorite(false)}
+                >
+                  取消收藏
+                </GlassButton>
+                <GlassButton
+                  size="sm"
+                  variant="ghost"
+                  className="text-danger"
+                  disabled={selected.size === 0 || deleteBook.isPending}
+                  onClick={() => setBatchDeleteOpen(true)}
+                >
+                  删除
+                </GlassButton>
+                <GlassButton size="sm" variant="primary" onClick={exitManaging}>
+                  完成
+                </GlassButton>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </OverlayPortal>
 
       {sourceOpen && (
@@ -737,9 +917,11 @@ function ShelfSkeleton() {
   return (
     // Mirrors the real tile's box (cover + two text lines) so the grid does not
     // jump when the books land, and announces itself once for screen readers.
+    // The track must match the real grid's (see the shelf below) or the covers
+    // shift sideways the moment the books arrive.
     <output
       aria-label="正在加载书架"
-      className="grid grid-cols-2 gap-x-5 gap-y-6 sm:grid-cols-3 lg:grid-cols-5 xl:grid-cols-6"
+      className="grid grid-cols-[repeat(auto-fill,minmax(0,var(--shelf-track)))] gap-x-5 gap-y-6"
     >
       {Array.from({ length: 6 }, (_, index) => (
         <div key={index}>

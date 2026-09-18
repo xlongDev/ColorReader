@@ -19,6 +19,9 @@ const SettingsPage = lazy(() =>
 const StatsPage = lazy(() =>
   import("@/features/stats/StatsPage").then((m) => ({ default: m.StatsPage })),
 );
+const NotesPage = lazy(() =>
+  import("@/features/notes/NotesPage").then((m) => ({ default: m.NotesPage })),
+);
 
 const routes: RouteObject[] = [
   {
@@ -29,6 +32,7 @@ const routes: RouteObject[] = [
       { path: "recent", element: <LibraryPage filter="recent" /> },
       { path: "favorites", element: <LibraryPage filter="favorites" /> },
       { path: "tags", element: <LibraryPage filter="tags" /> },
+      { path: "notes", element: <NotesPage /> },
       { path: "reader", element: <ReaderPage /> },
       { path: "search", element: <SearchPage /> },
       { path: "stats", element: <StatsPage /> },

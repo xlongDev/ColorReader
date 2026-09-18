@@ -15,7 +15,10 @@ export default defineConfig({
   testDir: "./e2e",
   timeout: 30_000,
   fullyParallel: false,
-  retries: 0,
+  // One retry on CI: the flight and page-swap assertions are timing-sensitive,
+  // and a loaded runner misses frames a laptop does not. Local stays at zero so
+  // a real flake is seen while it is being written, not after it ships.
+  retries: process.env.CI ? 1 : 0,
   reporter: "list",
   use: {
     baseURL: "http://localhost:4173",
@@ -26,7 +29,9 @@ export default defineConfig({
     { name: "webkit", use: { browserName: "webkit" } },
   ],
   webServer: {
-    command: "pnpm vite preview --port 4173 --strictPort",
+    // `npx` rather than `pnpm`: a stale project link in the pnpm store
+    // makes `pnpm vite preview` exit before it ever starts the server.
+    command: "npx vite preview --port 4173 --strictPort",
     url: "http://localhost:4173",
     reuseExistingServer: false,
     timeout: 60_000,

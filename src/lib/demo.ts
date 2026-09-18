@@ -1,4 +1,10 @@
-import type { BookSummary, ChapterContent, ChapterMeta, LibraryStats } from "@/types/ipc";
+import type {
+  Annotation,
+  BookSummary,
+  ChapterContent,
+  ChapterMeta,
+  LibraryStats,
+} from "@/types/ipc";
 
 /**
  * Sample content for `pnpm dev` in a browser.
@@ -84,7 +90,12 @@ export const demoBooks: BookSummary[] = Array.from({ length: COUNT }, (_, index)
   ),
   addedAt: 0,
   updatedAt: 0,
-  lastReadAt: null,
+  // Two of the three samples carry a `lastReadAt` so the shelf's "continue
+  // reading" card has something to point at on `?demo=1`. demo-2 is the
+  // more recent of the two — so it, not the first book with progress, is
+  // what the card surfaces. `null` for the rest (the duplicates beyond the
+  // first three) keeps the card pointing at a single book.
+  lastReadAt: index === 0 ? 100 : index === 1 ? 200 : null,
   progress: index === 0 ? 0.18 : index === 1 ? 0.62 : 0,
   location: null,
   favorite: index === 0,
@@ -98,6 +109,111 @@ export const demoLibraryStats: LibraryStats = {
   reading: 2,
   finished: 0,
 } as unknown as LibraryStats;
+
+/**
+ * Sample highlights, so the notes surface has something to aggregate.
+ *
+ * The notes page is *made of* other books' highlights; with an empty store it
+ * could only ever render its empty state, and a browser dev session could not
+ * tell a working aggregation from a broken one. Two books carry samples on
+ * purpose — one with a note written and one without — because "全部 / 有笔记"
+ * is the filter the page exists to offer, and a single book could not show it
+ * doing anything.
+ *
+ * Unlike `demoBooks` this is mutable: a note edited on the page has to survive
+ * the round trip through the query cache, or the surface reads as broken. The
+ * fixtures are handed out as copies so a caller cannot edit them in place.
+ */
+const demoAnnotations: Annotation[] = [
+  {
+    id: "demo-a1",
+    bookId: "demo-1",
+    chapterIdx: 0,
+    startChar: 0,
+    endChar: 47,
+    text: "身体是一台被反复修补过的机器。演化并不设计，它只保留此刻还能留下的东西。",
+    cfi: null,
+    color: "#ffd12e",
+    style: "highlight",
+    note: "全书的主线：把「设计」换成「修补」，很多奇怪的症状就说得通了。",
+    createdAt: 1_700_000_100_000,
+  },
+  {
+    id: "demo-a2",
+    bookId: "demo-1",
+    chapterIdx: 1,
+    startChar: 120,
+    endChar: 162,
+    text: "咳嗽、发烧、呕吐，这些让人难受的反应大多是防御本身，而不是疾病。",
+    cfi: null,
+    color: "#f76f6f",
+    style: "highlight",
+    note: null,
+    createdAt: 1_700_000_200_000,
+  },
+  {
+    id: "demo-a3",
+    bookId: "demo-1",
+    chapterIdx: 2,
+    startChar: 240,
+    endChar: 291,
+    text: "为什么自然选择没有把衰老剔除掉？因为选择在繁殖之后就放手了。",
+    cfi: null,
+    color: "#56aee2",
+    style: "underline",
+    note: "和《自私的基因》里那段对读。",
+    createdAt: 1_700_000_300_000,
+  },
+  {
+    id: "demo-a4",
+    bookId: "demo-2",
+    chapterIdx: 0,
+    startChar: 60,
+    endChar: 104,
+    text: "医学擅长处理近因——哪一种细菌、哪一条通路；演化医学追问远因。",
+    cfi: null,
+    color: "#7cd92c",
+    style: "highlight",
+    note: null,
+    createdAt: 1_700_000_400_000,
+  },
+  {
+    id: "demo-a5",
+    bookId: "demo-2",
+    chapterIdx: 3,
+    startChar: 180,
+    endChar: 231,
+    text: "理解这一点并不会立刻治好什么病，但它会改变提问的方式。",
+    cfi: null,
+    color: "#b08fe8",
+    style: "squiggly",
+    note: "提问方式决定找得到什么答案——这句可以拿去当书签。",
+    createdAt: 1_700_000_500_000,
+  },
+];
+
+/** One book's highlights, in reading order.
+ *
+ *  Handed out by reference, which is safe because nothing ever writes to an
+ *  entry in place — every edit below replaces the element. */
+export function demoAnnotationList(bookId: string): Annotation[] {
+  return demoAnnotations.filter((entry) => entry.bookId === bookId);
+}
+
+/** Writes (or clears) a note on a sample highlight; `null` when it is gone. */
+export function demoAnnotationNote(id: string, note: string | null): Annotation | null {
+  const at = demoAnnotations.findIndex((entry) => entry.id === id);
+  if (at < 0) return null;
+  const updated = { ...demoAnnotations[at]!, note };
+  demoAnnotations[at] = updated;
+  return updated;
+}
+
+/** Drops a sample highlight. */
+export function demoAnnotationDelete(id: string): void {
+  const at = demoAnnotations.findIndex((entry) => entry.id === id);
+  if (at >= 0) demoAnnotations.splice(at, 1);
+}
 
 const CHAPTER_TITLES = [
   "第一章 疾病的谜题",

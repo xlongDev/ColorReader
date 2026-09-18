@@ -92,7 +92,13 @@ import {
   type SpeechUnit,
 } from "@/features/reader/speech";
 import { FoliateSearchPanel } from "./FoliateSearchPanel";
-import { fontFaceCss, resolveFont, resolveSurface, readerGlassVars } from "@/features/reader/theme";
+import {
+  bundledFacesFor,
+  fontFaceCss,
+  resolveFont,
+  resolveSurface,
+  readerGlassVars,
+} from "@/features/reader/theme";
 import { SearchPanel } from "@/features/search/SearchPanel";
 import {
   useAnnotations,
@@ -1899,9 +1905,13 @@ function ReaderView({
       dark: surface.mode === "dark",
       // Inverting a book's pictures is the reader's call, not the surface's.
       invertImages: invertBookImages,
-      // A section is its own document, so the imported faces have to travel
-      // with the sheet rather than come from the app's own style.
-      fontFaces: fontFaceCss(fonts),
+      // A section is its own document, so the faces have to travel with the
+      // sheet rather than come from the app's own style — the imported ones
+      // and the ones the app ships (霞鹜文楷), which is the difference between
+      // the reader picking it and the reader getting the system 楷体.
+      fontFaces: [fontFaceCss(fonts), bundledFacesFor(settings.fontFamily)]
+        .filter(Boolean)
+        .join("\n"),
     }),
     [
       fontSize,

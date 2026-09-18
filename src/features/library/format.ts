@@ -32,6 +32,28 @@ export function authorLine(book: BookSummary): string {
   return book.authors.join(" / ");
 }
 
+/**
+ * The book the reader was last in.
+ *
+ * Returns the book with the highest `lastReadAt`, or `undefined` when none
+ * has been opened yet. Picking by timestamp — rather than by the first
+ * `progress > 0` in the recently-added list — means the shelf always points
+ * at *the book that was actually opened last*, regardless of where it sits
+ * in the add order or how much of it was read.
+ *
+ * Pure function so the page can call it without owning the walk, and so
+ * the rule is testable without rendering the shelf.
+ */
+export function pickContinueReading(list: BookSummary[]): BookSummary | undefined {
+  let latest: BookSummary | undefined;
+  for (const book of list) {
+    if (book.lastReadAt === null) continue;
+    const ts = book.lastReadAt;
+    if (latest === undefined || ts > (latest.lastReadAt ?? ts)) latest = book;
+  }
+  return latest;
+}
+
 /** One line summarising an import batch, e.g. "2 本已导入，1 本重复". */
 export function summarizeOutcomes(outcomes: ImportOutcome[]): string {
   const imported = outcomes.filter((o) => o.kind === "imported").length;

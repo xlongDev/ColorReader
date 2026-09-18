@@ -46,6 +46,42 @@ interface ShelfWindow {
   /** Room held open above and below them, in px. */
   top: number;
   bottom: number;
+  /**
+   * How many tracks the grid should have at the pane width it now has.
+   *
+   * This is the one field here that is *written back*, not merely compared:
+   * the caller pins it onto the grid as an inline `grid-template-columns`.
+   * That is deliberate, and it is the whole reason the field exists.
+   *
+   * The grid used to let CSS decide — `repeat(auto-fill, minmax(0, …))` — and
+   * that made a column change a *stylesheet* reflow: the browser re-laid the
+   * tracks out the instant the pane grew, with no DOM mutation and no React
+   * involvement. Motion's FLIP cannot see one. It snapshots in
+   * `getSnapshotBeforeUpdate` (`MeasureLayout` in framer-motion) — i.e.
+   * *before* React mutates the DOM — and compares that with a measurement
+   * taken after the mutation; a move the DOM never performed is already in
+   * the "before" box, so the delta is zero and nothing animates. Measured on
+   * a 24-book shelf: the re-render fired exactly as intended at the frame the
+   * grid went 4 → 5 columns, and every card's `transform` stayed `none` while
+   * a tile crossed 170px in a single frame.
+   *
+   * With the count pinned, the tracks no longer follow the pane on their own.
+   * The browser reflows nothing, this hook measures the new width, the count
+   * changes, React writes the new track list, and *that* is the mutation
+   * motion snapshots around — so the cards glide to their new slots the same
+   * way they do on a filter or a sort. It also keeps the field in the
+   * equality check below, where a column change that leaves `start`/`end`/
+   * `top`/`bottom` alone (a one-row shelf, or any change that only moves
+   * cards between columns) would otherwise be skipped as "nothing changed".
+   *
+   * One thing this does *not* animate, on purpose: dragging the window wider.
+   * Motion blocks every layout animation while `window.innerWidth` is
+   * changing (`updateBlockedByResize`, cleared 250ms after the last resize) so
+   * a window drag cannot start a FLIP storm across the tree. The sidebar
+   * moving does not change the window, so it is not blocked — which is the
+   * whole of the difference between the two gestures.
+   */
+  columns: number;
 }
 
 /**
@@ -60,6 +96,9 @@ interface ShelfWindow {
  * home to out of the DOM. So the first frame holds enough room open for that
  * scroll to be settable at all; the window replaces it in the same commit,
  * before anything is painted.
+ * @param layout the grid's shape, because the column count is derived here and
+ * the caller pins it back (see `ShelfWindow.columns`). `list` is one column
+ * whatever the pane is doing.
  */
 export function useShelfWindow(
   scrollerRef: RefObject<HTMLElement | null>,
@@ -67,12 +106,14 @@ export function useShelfWindow(
   total: number,
   contentKey: string,
   initialScroll: number,
+  layout: "grid" | "list",
 ) {
   const [range, setRange] = useState<ShelfWindow>(() => ({
     start: 0,
     end: Math.min(1, total),
     top: 0,
     bottom: initialScroll + FALLBACK_VIEWPORT,
+    columns: 0,
   }));
   const shown = useRef(range);
   const frame = useRef(0);
@@ -96,15 +137,34 @@ export function useShelfWindow(
     const grid = gridRef.current;
     if (!scroller || !grid) return null;
     const card = grid.firstElementChild as HTMLElement | null;
-    const columns = getComputedStyle(grid).gridTemplateColumns;
-    if (columns === "none") return null;
-    const count = columns.split(" ").length;
-    const gap = Number.parseFloat(getComputedStyle(grid).rowGap) || 0;
+    const style = getComputedStyle(grid);
+    const columnGap = Number.parseFloat(style.columnGap) || 0;
+    // The track as the stylesheet *declares* it, not as the grid resolved it.
+    // `minmax(0, …)` lets a track shrink below the token whenever the tracks do
+    // not fit, and a shrunken track feeds straight back into this arithmetic:
+    // a grid pinned to one column too many would then ask for exactly that
+    // many again, for ever. Measured on a 530px pane, 4 tracks resolved to
+    // 117.5px each, `(530 + 20) / (117.5 + 20)` floored to 4, and the shelf
+    // never came back from a narrow window — the pin only ever grew. The token
+    // is the number the tracks are meant to be, so it is the number to divide
+    // by, and it is read rather than repeated here so there is one of it.
+    const track = Number.parseFloat(style.getPropertyValue("--shelf-track")) || 0;
+    if (!(track > 0)) return null;
+    // The grid is a block-level box, so this is the room its tracks have — and
+    // it is a read of the *pane*, not of the tracks, which is why pinning the
+    // count cannot feed back into it. This is `auto-fill`'s own arithmetic,
+    // done here so the result can be handed back to React.
+    const available = grid.getBoundingClientRect().width;
+    const count =
+      layout === "list"
+        ? 1
+        : Math.max(1, Math.floor((available + columnGap) / (track + columnGap)));
+    const gap = Number.parseFloat(style.rowGap) || 0;
     // `offsetHeight`, not a rectangle: a card is scaled while it enters, and a
     // rectangle would report the scaled height as the row pitch. A lone card is
     // still as wide as its column, so one row is enough to measure with.
     const pitch = card ? card.offsetHeight + gap : FALLBACK_PITCH;
-    if (!(count > 0) || !(pitch > 0)) return null;
+    if (!(pitch > 0)) return null;
     const totalRows = Math.ceil(total / count);
     // Anchored on the *first row of the list*: the grid sits below the rows the
     // window is holding open, so the spacer that is actually in the DOM is taken
@@ -127,8 +187,9 @@ export function useShelfWindow(
       end: Math.min(total, endRow * count),
       top: startRow * pitch,
       bottom: (totalRows - endRow) * pitch,
+      columns: count,
     };
-  }, [scrollerRef, gridRef, total]);
+  }, [scrollerRef, gridRef, total, layout]);
 
   const sync = useCallback(() => {
     const next = read();
@@ -138,7 +199,11 @@ export function useShelfWindow(
       next.start === now.start &&
       next.end === now.end &&
       next.top === now.top &&
-      next.bottom === now.bottom
+      next.bottom === now.bottom &&
+      // See `ShelfWindow.columns`: the count is *rendered from*, not just
+      // compared, so a change here has to reach the DOM even when the window
+      // range it produces is identical.
+      next.columns === now.columns
     ) {
       return;
     }
@@ -179,13 +244,14 @@ export function useShelfWindow(
       });
     };
     scroller.addEventListener("scroll", onScroll, { passive: true });
-    // Two things to watch: the scroller, whose width decides the columns, and the
-    // grid, whose height changes when the window does — which is also the signal
-    // that there is a card to measure at last (the window can only be read once
-    // something is rendered). Reading is cheap and the state update is skipped
-    // when nothing changed, which is what keeps this from looping on its own
-    // re-render. This effect is rebuilt when `total` changes, which is the only
-    // way the grid can come or go.
+    // Two things to watch: the scroller, whose width is what the grid's tracks
+    // are derived from, and the grid, whose height changes when the window does
+    // — which is also the signal that there is a card to measure at last (the
+    // window can only be read once something is rendered). Reading is cheap and
+    // the state update is skipped when nothing changed, which is what keeps
+    // this from looping on its own re-render. This effect is rebuilt when
+    // `total` or `layout` changes, which is the only way the grid can come, go
+    // or change shape.
     const observer = new ResizeObserver(() => sync());
     observer.observe(scroller);
     if (gridRef.current) observer.observe(gridRef.current);
@@ -200,5 +266,12 @@ export function useShelfWindow(
     if (!flying) sync();
   }, [flying, sync]);
 
-  return { start: range.start, end: range.end, top: range.top, bottom: range.bottom, sliding };
+  return {
+    start: range.start,
+    end: range.end,
+    top: range.top,
+    bottom: range.bottom,
+    columns: range.columns,
+    sliding,
+  };
 }

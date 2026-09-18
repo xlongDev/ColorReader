@@ -40,6 +40,7 @@
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.11.0",
     "clsx": "^2.1.1",
+    "lxgw-wenkai-webfont": "^1.7.0",
     "motion": "^13.1.1",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.2.8",

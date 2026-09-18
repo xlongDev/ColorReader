@@ -4,6 +4,7 @@ import { BookOpen, Check, Export, Star, Tag, Trash } from "@phosphor-icons/react
 
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
+import { MarqueeText } from "@/components/common/MarqueeText";
 import { authorLine, formatFileSize } from "@/features/library/format";
 import { cn } from "@/lib/cn";
 import { SPRING, useMotion } from "@/lib/motion";
@@ -37,6 +38,9 @@ interface BookCardProps {
   selecting?: boolean;
   selected?: boolean;
   onToggleSelect?: (book: BookSummary) => void;
+  /** `grid` is the cover-on-top tile; `list` is a shallow row with the cover
+   *  beside the text. Same gesture either way. */
+  variant?: "grid" | "list";
 }
 
 /** One hover action on the cover: black glass, white icon — keyed to the cover
@@ -70,6 +74,7 @@ export function BookCard({
   selecting = false,
   selected = false,
   onToggleSelect,
+  variant = "grid",
 }: BookCardProps) {
   const authors = authorLine(book);
   const m = useMotion();
@@ -123,13 +128,19 @@ export function BookCard({
       // slots and the arriving cards enter on the stagger.
       transition={{ ...m.layout, delay: animated ? delay : 0 }}
       whileTap={busy || m.reduce ? undefined : { scale: 0.985 }}
-      className="group relative"
+      className={cn(
+        "group relative",
+        variant === "list" && "flex items-center gap-4 rounded-lg px-2 py-2",
+      )}
     >
       <button
         type="button"
         onClick={() => (selecting ? onToggleSelect?.(book) : open())}
         aria-pressed={selecting ? selected : undefined}
-        className="focus-visible:focus-ring w-full rounded-md text-left disabled:opacity-50"
+        className={cn(
+          "focus-visible:focus-ring text-left disabled:opacity-50",
+          variant === "grid" ? "w-full rounded-md" : "flex w-full items-center gap-4 rounded-lg",
+        )}
         disabled={busy}
       >
         {/* The cover carries the whole hover gesture — it rises, deepens its
@@ -140,6 +151,7 @@ export function BookCard({
           data-book-cover
           className={cn(
             "glass relative block aspect-[3/4] overflow-hidden rounded-md",
+            variant === "list" && "w-16 shrink-0",
             // Tailwind v4 moves `translate-y-*` with the `translate` property,
             // not `transform` — listing `transform` here would leave the lift
             // un-animated and snapping into place.
@@ -151,8 +163,16 @@ export function BookCard({
             // the reveal is what made the cover look redrawn once the flight
             // landed (measured: the flight at 0.04 opacity, this cover at 0,
             // then a 0.53/0.86/0.93 ramp back up).
-            "transition-[translate,box-shadow] duration-300 ease-out",
-            "group-hover:-translate-y-1 group-hover:shadow-[var(--shadow-cover-lift)]",
+            //
+            // The lift is slower and softer than the 300 ms twitch it replaced:
+            // the previous `cubic-bezier(0.16,1,0.3,1)` had already done 95% of
+            // the travel by 200 ms, so the eye saw a snap. The `--ease-land`
+            // curve (90% at 60% of the time) reads as the book being *picked
+            // up* — it should still be settling when the eye arrives. 350 ms is
+            // the shortest this curve can be and still read as a lift rather
+            // than a hop; a pointer crossing the shelf is not left waiting.
+            "transition-[translate,box-shadow] duration-350 ease-[cubic-bezier(0.33,1,0.68,1)]",
+            "group-hover:-translate-y-1.5 group-hover:shadow-[var(--shadow-cover-lift)]",
             "motion-reduce:transition-none motion-reduce:group-hover:translate-y-0",
             // Hidden only while this card's cover is in the air; the flight
             // ends the handoff and this cover is the one that lands.
@@ -173,14 +193,16 @@ export function BookCard({
             </span>
           )}
           {/* Light sweeping the gloss: one pass per hover, no pointer tracking,
-              so a 200-book shelf stays cheap. */}
+              so a 200-book shelf stays cheap. The sweep waits for the cover
+              to finish its lift so the two motions feel layered rather than
+              racing. */}
           <span
             aria-hidden
             className={cn(
               "pointer-events-none absolute inset-0 -translate-x-full",
               "bg-gradient-to-r from-transparent via-white/12 to-transparent",
-              "transition-[translate] duration-700 ease-out group-hover:translate-x-full",
-              "motion-reduce:hidden",
+              "transition-[translate] duration-1000 ease-[cubic-bezier(0.33,1,0.68,1)] group-hover:translate-x-full",
+              "group-hover:delay-200 motion-reduce:hidden",
             )}
           />
           {(book.progress ?? 0) > 0 && (
@@ -192,22 +214,37 @@ export function BookCard({
             </span>
           )}
         </span>
-        <p className="text-text-1 mt-2 truncate text-sm font-medium">{book.title}</p>
-        <p className="text-text-3 mt-0.5 truncate text-xs">
-          {authors || book.format.toUpperCase()}
-          {book.fileSize > 0 && ` · ${formatFileSize(book.fileSize)}`}
-        </p>
-        {/* Labels get one extra line that truncates rather than reflowing the
-            grid. On a shelf where any book at all has labels, every tile keeps
-            that line — an empty one still holds its height — because the window
-            counts rows and cannot know that this tile is a line shorter than the
-            ones beside it. A shelf with no labels keeps the two-line rhythm it
-            had. */}
-        {(book.tags.length > 0 || reserveTags) && (
-          <p className="text-accent mt-1 truncate text-[11px]">
-            {book.tags.length > 0 ? book.tags.map((tag) => `#${tag}`).join("  ") : "\u00a0"}
+        <span className={cn("block min-w-0", variant === "list" && "flex-1")}>
+          <p className="text-text-1 mt-2 truncate text-sm font-medium">{book.title}</p>
+          {/* Author truncates; format and size never do — a long author name
+              used to push the size out of the line entirely, and the format was
+              only ever shown for a book with no author at all. The author now
+              marquees on hover when the name is longer than the slot. */}
+          <p className="text-text-3 mt-0.5 flex items-center gap-1.5 text-xs">
+            {authors && (
+              // `flex-1` claims the rest of the line; `min-w-0` lets the flex
+              // actually shrink the slot — without it the inner span would
+              // measure wider than its parent and the marquee would never
+              // see overflow.
+              <MarqueeText className="min-w-0 flex-1">{authors}</MarqueeText>
+            )}
+            <span className="shrink-0 text-[11px] tracking-wide">
+              {book.format.toUpperCase()}
+              {book.fileSize > 0 && ` · ${formatFileSize(book.fileSize)}`}
+            </span>
           </p>
-        )}
+          {/* Labels get one extra line that truncates rather than reflowing the
+              grid. On a shelf where any book at all has labels, every tile keeps
+              that line — an empty one still holds its height — because the window
+              counts rows and cannot know that this tile is a line shorter than the
+              ones beside it. A shelf with no labels keeps the two-line rhythm it
+              had. */}
+          {(book.tags.length > 0 || reserveTags) && (
+            <p className="text-accent mt-1 truncate text-[11px]">
+              {book.tags.length > 0 ? book.tags.map((tag) => `#${tag}`).join("  ") : "\u00a0"}
+            </p>
+          )}
+        </span>
       </button>
 
       {selecting ? (
@@ -233,10 +270,25 @@ export function BookCard({
             // the cover, so four actions fit a tile at any breakpoint instead
             // of riding out past the cover's edge (what a fixed-width pill
             // did on the 6-column shelf).
-            "absolute inset-x-1.5 top-1.5 grid grid-cols-4 place-items-center gap-0.5",
-            "translate-y-1 opacity-0 transition-all duration-200 ease-out",
-            "group-hover:translate-y-0 group-hover:opacity-100",
-            "focus-within:translate-y-0 focus-within:opacity-100",
+            //
+            // The grid tiles slide the row in under the lift; a list row is too
+            // shallow for that — its own centering uses `translate-y`, which
+            // would fight the slide — so it fades in place instead.
+            variant === "grid"
+              ? "absolute inset-x-1.5 top-1.5 grid grid-cols-4 place-items-center gap-0.5"
+              : "absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-1",
+            variant === "grid" ? "translate-y-2 group-hover:translate-y-0" : "",
+            // The row follows the lift rather than racing it: it waits well
+            // past the cover (180 ms vs the cover's 60 ms) and travels the
+            // `ease-land` curve so the chips settle in last, like they were
+            // laid down on top of the lifted book. Longer than the 300 ms
+            // cubic-bezier it replaced — the old curve had done 95% of the
+            // travel in 100 ms, which read as the buttons snapping into place.
+            "opacity-0 transition-all duration-[450ms] ease-[cubic-bezier(0.33,1,0.68,1)]",
+            // Hidden state also drops pointer events — an invisible button that
+            // still clicks is a mis-tap waiting to happen.
+            "pointer-events-none group-hover:pointer-events-auto group-hover:opacity-100 group-hover:delay-[180ms]",
+            "focus-within:pointer-events-auto focus-within:opacity-100",
             "motion-reduce:transition-none",
           )}
         >

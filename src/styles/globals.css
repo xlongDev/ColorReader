@@ -28,6 +28,13 @@
   --blur-lg: 30px;
   --blur-xl: 48px;
 
+  /* The shelf's cover track. A token rather than a literal in the grid's
+     class because the class is no longer the only thing that names it: the
+     grid pins its own track list from a render (see `useShelfWindow`), and
+     the pinned `repeat()` and the `auto-fill` fallback have to be the same
+     number or the shelf would resize itself the moment it was measured. */
+  --shelf-track: 138px;
+
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-in-out: cubic-bezier(0.32, 0.72, 0, 1);
   /* Travel that has to *arrive*, not drift in.

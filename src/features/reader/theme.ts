@@ -174,6 +174,15 @@ export interface FontOption {
   label: string;
   /** CSS `font-family` for the article body. */
   stack: string;
+  /**
+   * The `font-family` this option's `@font-face` is declared under in the *app*
+   * document, when the face ships with the app rather than being imported.
+   *
+   * It has to be named here because a book section cannot see the app's own
+   * declarations (see [`bundledFontFaces`]), and the stack alone is not enough
+   * to go on: it lists four families, only the first of which is bundled.
+   */
+  bundled?: string;
 }
 
 export const FONT_STACKS: FontOption[] = [
@@ -184,6 +193,15 @@ export const FONT_STACKS: FontOption[] = [
     key: "hei",
     label: "黑体",
     stack: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
+  },
+  // 霞鹜文楷 — the `@font-face` ships with the app (see `main.tsx`), so
+  // the reader can pick it without the user having to import a font. Falls
+  // back to the system kaiti stack on the rare platform without LXGW.
+  {
+    key: "lxgw",
+    label: "霞鹜文楷",
+    stack: '"LXGW WenKai", "LXGW WenKai Screen", "Kaiti SC", "STKaiti", "KaiTi", serif',
+    bundled: "LXGW WenKai",
   },
 ];
 
@@ -235,6 +253,94 @@ export function fontFaceCss(fonts: readonly Pick<LocalFont, "id" | "url">[]): st
         `@font-face { font-family: "${customFontFamily(font.id)}"; src: url("${font.url}"); font-display: swap; }`,
     )
     .join("\n");
+}
+
+/**
+ * `@font-face` for a face that ships with the app, read back out of the app's
+ * own stylesheets so a book section can carry a copy.
+ *
+ * The bug this exists for: 霞鹜文楷 is installed in the app document (`main.tsx`
+ * imports the webfont package's 582 `unicode-range` subsets), and a foliate
+ * section is a document of its own. A section asking for `"LXGW WenKai"` finds
+ * no such face in *its* document, falls through the stack, and renders as
+ * `"Kaiti SC"` — the reader picks 霞鹜文楷 and gets the system 楷体. The rules
+ * have to be handed to the section, which is the same thing `fontFaceCss`
+ * already does for imported faces.
+ *
+ * Reading them back rather than importing the package's CSS a second time
+ * keeps one copy of the 29 MB of subsets in the build: the URLs in these rules
+ * are the ones Vite already emitted for the app's own sheet. They are resolved
+ * against the sheet they came from, because in a production build the sheet is
+ * a hashed `/assets/*.css` and its `src` is relative to *that*, not to the
+ * page.
+ *
+ * Only the weights a book's body text uses. The package also ships 300 and a
+ * monospace cut; carrying those would add ~320 KB of rules to every section
+ * document for nothing. Measured cost of the remaining 194 rules: ~2 ms to
+ * inject into a document, and only the handful of subsets the section's own
+ * glyphs fall into are ever fetched.
+ */
+export function bundledFontFaces(
+  family: string,
+  weights: readonly string[] = ["400", "700"],
+): string {
+  const rules: string[] = [];
+  for (const sheet of document.styleSheets) {
+    let cssRules: CSSRuleList;
+    try {
+      cssRules = sheet.cssRules;
+    } catch {
+      // A cross-origin sheet cannot be read. Everything the app ships is
+      // same-origin, so this is only ever a third party's.
+      continue;
+    }
+    for (const rule of cssRules) {
+      if (!(rule instanceof CSSFontFaceRule)) continue;
+      const declared = rule.style.getPropertyValue("font-family").replace(/["']/g, "").trim();
+      if (declared !== family) continue;
+      if (!weights.includes(rule.style.getPropertyValue("font-weight"))) continue;
+      rules.push(
+        withBlockDisplay(rule.cssText).replace(
+          /url\((["']?)([^"')]+)\1\)/g,
+          (_match, _quote: string, url: string) =>
+            `url("${new URL(url, sheet.href ?? document.baseURI).href}")`,
+        ),
+      );
+    }
+  }
+  return rules.join("\n");
+}
+
+/**
+ * The same face, held back until it has arrived instead of swapping in late.
+ *
+ * The webfont package authors all 582 subsets with `font-display: swap`, which
+ * is the right default for a page that can afford a fallback and the wrong one
+ * here: a reader switching to 霞鹜文楷 watches the book render in 楷体 — the
+ * next family in the stack — for as long as the subsets take to arrive, and
+ * then change under them. That flash is what "只是变成了楷体" looked like.
+ *
+ * `block` spends the same moment showing *nothing* rather than the wrong face.
+ * It is a short moment: the subsets are served out of the app bundle, a section
+ * only ever needs the handful its own glyphs fall into, and the rules are
+ * injected before the section paints — so the reader sees the text arrive
+ * already in the font they chose.
+ *
+ * The app document gets the same treatment at the build layer (`vite.config.ts`
+ * rewrites the package's CSS), because a `.txt` book renders there rather than
+ * in a foliate section, and it flashed for exactly the same reason.
+ */
+function withBlockDisplay(css: string): string {
+  return /font-display\s*:/.test(css)
+    ? css.replace(/font-display\s*:\s*[a-z]+/i, "font-display: block")
+    : css.replace(/\{\s*/, "{ font-display: block; ");
+}
+
+/** The bundled `@font-face` rules a font key needs inside a book section, or
+ *  an empty string for every face the app does not ship itself. */
+export function bundledFacesFor(key: string): string {
+  const family = FONT_STACKS.find((font) => font.key === key)?.bundled;
+  return family ? bundledFontFaces(family) : "";
 }
 
 export const PAGE_TRANSITIONS: { key: PageTransition; label: string }[] = [

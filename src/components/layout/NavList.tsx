@@ -1,5 +1,5 @@
 import { NavLink, useLocation, useNavigate } from "react-router-dom";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, LayoutGroup, motion, useReducedMotion } from "motion/react";
 import type { Icon } from "@phosphor-icons/react";
 import {
   Books,
@@ -15,6 +15,7 @@ import {
   GithubLogo,
   Monitor,
   Moon,
+  Notebook,
   Sun,
 } from "@phosphor-icons/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -38,6 +39,7 @@ const ITEMS: NavItem[] = [
   { to: "/recent", label: "最近", icon: ClockCounterClockwise },
   { to: "/favorites", label: "收藏", icon: Star },
   { to: "/tags", label: "标签", icon: Tag },
+  { to: "/notes", label: "笔记", icon: Notebook },
   { to: "/stats", label: "统计", icon: ChartLine },
   { to: "/search", label: "搜索", icon: MagnifyingGlass },
 ];
@@ -62,26 +64,38 @@ function stepFrom(from: string, to: string): number {
 }
 
 const ROW = cn(
-  "flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13.5px]",
-  "border border-transparent transition-colors",
+  // `relative` so the shared-layout pill can absolutely fill the row
+  // underneath the icon and label — it is the row that owns the position,
+  // not the pill, so it is the row that must establish a containing block.
+  "relative flex items-center gap-2.5 rounded-md px-2.5 py-2 text-[13.5px]",
+  // Active and inactive are both transparent (the active row's fill is the
+  // sliding pill underneath), so the only thing the row itself animates is
+  // the text colour — a longer curve keeps the icon and label reading as
+  // part of the same gesture as the pill.
+  "border border-transparent transition-colors duration-200 ease-[cubic-bezier(0.33,1,0.68,1)]",
   "press focus-visible:focus-ring",
 );
 
+/** Pill — text colour only. Background is the shared-layout indicator that
+ *  springs between rows; the row itself stays transparent in both states
+ *  so a row that has never been hovered never paints a stale fill under the
+ *  pill as it lands. */
 function rowState(isActive: boolean): string {
-  return isActive
-    ? "bg-accent-soft text-text-1"
-    : "text-text-2 hover:bg-surface-1 hover:text-text-1";
+  return isActive ? "text-text-1" : "text-text-2 hover:bg-surface-1 hover:text-text-1";
 }
 
 export function NavList() {
   const collapsed = useSettings((s) => s.sidebarCollapsed);
   const reduce = useReducedMotion();
   const { pathname } = useLocation();
-  // Remounting on activation gives the fill/outline swap a springy pop.
+  // Remounting on activation gives the fill/outline swap a soft pop. `tap`
+  // (stiffness 560) used to feel like a button press; `enter` is the same
+  // settle without the urgency — a sidebar selection is unhurried, and the
+  // icon should land with the rest of the page rather than outrun it.
   const iconSpring = {
     initial: reduce ? false : { scale: 0.6, opacity: 0.4 },
     animate: { scale: 1, opacity: 1 },
-    transition: SPRING.tap,
+    transition: SPRING.enter,
   } as const;
   return (
     <nav className="flex flex-col gap-0.5 px-1" aria-label="主导航">
@@ -98,14 +112,39 @@ export function NavList() {
         >
           {({ isActive }) => (
             <>
+              {/* Shared-layout pill: a single accent-soft stadium that lives
+                  on every active row, slides between them on activation, and
+                  unmounts when the row is no longer active. Mounting it on
+                  the active row only is the trick — every other row's
+                  "absent pill" is what lets motion see a single shared
+                  `layoutId` and FLIP it across rows. `SPRING.layout`
+                  (stiffness 400, damping 34) is the same spring the shelf
+                  uses for card reflow, so an active swap and a shelf
+                  reorder read as the same kind of motion. */}
+              {isActive && (
+                <motion.span
+                  layoutId="nav-pill"
+                  className="bg-accent-soft absolute inset-0 rounded-md"
+                  transition={reduce ? { duration: 0 } : SPRING.layout}
+                />
+              )}
               {/* shrink-0: the always-in-layout nowrap label no longer fits
                   the collapsed rail, and flex would otherwise squeeze the
-                  icon (svg min-width:auto = 0) down to nothing. */}
-              <motion.span key={String(isActive)} className="flex shrink-0" {...iconSpring}>
+                  icon (svg min-width:auto = 0) down to nothing. `relative`
+                  keeps the icon (and the label) above the pill's stacking
+                  context — the pill is `absolute inset-0`, so without the
+                  `relative` the icon would paint *under* the pill's
+                  accent-soft fill. */}
+              <motion.span
+                key={String(isActive)}
+                className="relative flex shrink-0"
+                {...iconSpring}
+              >
                 <item.icon size={18} weight={isActive ? "fill" : "regular"} />
               </motion.span>
               {/* Always in layout, fading with the pane transition; nowrap so
-                  the label overflows instead of re-wrapping mid-animation. */}
+                  the label overflows instead of re-wrapping mid-animation.
+                  `relative` mirrors the icon: above the pill, not under it. */}
               <motion.span
                 initial={false}
                 animate={{ opacity: collapsed ? 0 : 1 }}
@@ -113,7 +152,7 @@ export function NavList() {
                   duration: collapsed ? DURATION.fast : DURATION.base,
                   delay: collapsed ? 0 : 0.15,
                 }}
-                className="whitespace-nowrap"
+                className="relative whitespace-nowrap"
               >
                 {item.label}
               </motion.span>
@@ -130,6 +169,24 @@ const THEME_OPTIONS: readonly { value: ThemeMode; label: string; icon: typeof Su
   { value: "dark", label: "深色", icon: Moon },
   { value: "system", label: "跟随系统", icon: Monitor },
 ];
+
+/**
+ * Stable ids that let motion FLIP the footer's icons between the collapsed
+ * rail and the expanded two-row layout.
+ *
+ * The two states share only some icons — `hide` and `palette` only exist when
+ * the rail is open — so the shared ones carry a stable `layoutId` and the
+ * ones that come and go mount inside `AnimatePresence`. `LayoutGroup` in
+ * `Footer` makes the id a global scope inside the footer, so a `layoutId`
+ * can sit in the column in one render and the row in the next and still
+ * animate between them.
+ */
+const ID = {
+  settings: "footer-settings",
+  themeIcon: "footer-theme-icon",
+  toggle: "chrome-toggle",
+  github: "chrome-github",
+} as const;
 
 /** Quick appearance switcher for the sidebar footer.
  *
@@ -155,9 +212,13 @@ function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
           onClick={() => setTheme(next.value)}
           className="text-text-3 hover:text-text-1 hover:bg-surface-1 flex h-8 w-8 items-center justify-center rounded-full transition-colors"
         >
+          {/* The active theme icon also carries the shared theme-icon
+              layoutId, so when the rail expands it glides from the centre
+              of this button to the centre of its radio cell in the pill. */}
           <AnimatePresence mode="wait" initial={false}>
             <motion.span
               key={current.value}
+              layoutId={ID.themeIcon}
               initial={reduce ? false : { opacity: 0, scale: 0.5, rotate: -30 }}
               animate={{ opacity: 1, scale: 1, rotate: 0 }}
               exit={reduce ? undefined : { opacity: 0, scale: 0.5, rotate: 30 }}
@@ -177,15 +238,26 @@ function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
       {/* Full-width pill, p-0.5 + h-7 segments = h-8 total, matching the
           chrome row beneath; four flex-1 cells line up with its four buttons. */}
       <div className="glass flex w-full items-center rounded-full p-0.5">
-        <button
-          type="button"
-          title="设置"
-          aria-label="设置"
-          onClick={() => navigate("/settings")}
-          className="text-text-3 hover:text-text-1 flex h-7 flex-1 items-center justify-center rounded-full transition-colors duration-200"
+        {/* Settings gear carries the shared settings layoutId, so when the
+            rail collapses it glides from this pill cell down to the column
+            slot it occupies below. The cell is a button (not a link) on
+            purpose: clicking it never moves focus away from where the
+            reader is. */}
+        <motion.div
+          layoutId={ID.settings}
+          transition={reduce ? { duration: 0 } : SPRING.layout}
+          className="flex h-7 flex-1 items-center justify-center"
         >
-          <GearSix size={15} />
-        </button>
+          <button
+            type="button"
+            title="设置"
+            aria-label="设置"
+            onClick={() => navigate("/settings")}
+            className="text-text-3 hover:text-text-1 flex h-7 items-center justify-center rounded-full px-2.5 transition-colors duration-200"
+          >
+            <GearSix size={15} />
+          </button>
+        </motion.div>
         {/* Hairline separates the settings glyph from the theme segments. */}
         <div className="bg-hairline h-4 w-px shrink-0" aria-hidden="true" />
         {THEME_OPTIONS.map(({ value, label, icon: Icon }) => {
@@ -217,7 +289,22 @@ function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
                   transition={reduce ? { duration: 0 } : SPRING.layout}
                 />
               )}
-              <Icon size={15} weight={active ? "fill" : "regular"} className="relative" />
+              {/* Only the *active* theme icon carries the theme-icon
+                  layoutId — the other two are decorative and stay put.
+                  Collapsed, the single button renders the same icon under
+                  this id, so a rail ⇄ pill toggle glides it between the
+                  centre of the button and the centre of its radio cell. */}
+              {active ? (
+                <motion.span
+                  layoutId={ID.themeIcon}
+                  transition={reduce ? { duration: 0 } : SPRING.layout}
+                  className="relative flex"
+                >
+                  <Icon size={15} weight="fill" />
+                </motion.span>
+              ) : (
+                <Icon size={15} weight="regular" className="relative" />
+              )}
             </label>
           );
         })}
@@ -241,7 +328,12 @@ interface FooterAction {
  * 1. 设置 (navigation) + the theme pill (appearance).
  * 2. 折叠/隐藏/⌘K/GitHub (chrome actions), equal-width.
  * Collapsed rail: centered vertical stack of the actions that still make
- * sense at zero width. */
+ * sense at zero width.
+ *
+ * The shared `LayoutGroup` lets the icons that exist in both layouts —
+ * settings gear, theme icon, toggle, GitHub — keep a stable `layoutId`
+ * across the toggle and FLIP between their column and row positions,
+ * while `hide` and `palette` (expanded-only) fade in and out. */
 function Footer({ compact }: { compact?: boolean } = {}) {
   const storeCollapsed = useSettings((s) => s.sidebarCollapsed);
   const collapsed = compact ?? storeCollapsed;
@@ -249,12 +341,44 @@ function Footer({ compact }: { compact?: boolean } = {}) {
   const hide = useSettings((s) => s.setSidebarHidden);
   const openPalette = useCommandPalette((s) => s.setOpen);
   const navigate = useNavigate();
+  const reduce = useReducedMotion();
+
+  /**
+   * The toggle's glyph, animated in the direction the rail is about to move.
+   *
+   * A rotation said "this icon changed"; a slide says "the panel went that
+   * way", which is what the button actually does. The glyph itself is a single
+   * caret — a double chevron reads as "jump to the end" (or, at this size, as
+   * a typographic « that says nothing at all), and the button neither jumps
+   * nor goes anywhere but sideways.
+   *
+   * Both directions fall out of one expression. `initial` is read from the
+   * render that *mounts* a glyph and `exit` from the render that unmounts it,
+   * so with `collapsed` on both sides the arriving caret enters from the side
+   * the rail is leaving and the departing one follows it out.
+   */
+  const toggleIcon = (
+    <span className="relative flex h-4 w-4 items-center justify-center">
+      <AnimatePresence initial={false}>
+        <motion.span
+          key={String(collapsed)}
+          initial={reduce ? false : { x: collapsed ? 7 : -7, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={reduce ? undefined : { x: collapsed ? 7 : -7, opacity: 0 }}
+          transition={reduce ? { duration: 0 } : SPRING.tap}
+          className="absolute flex"
+        >
+          {collapsed ? <CaretRight size={16} /> : <CaretLeft size={16} />}
+        </motion.span>
+      </AnimatePresence>
+    </span>
+  );
 
   const chromeActions: FooterAction[] = [
     {
       key: "toggle",
       label: collapsed ? "展开侧边栏" : "折叠侧边栏",
-      icon: collapsed ? <CaretRight size={16} /> : <CaretLeft size={16} />,
+      icon: toggleIcon,
       on: toggle,
     },
     {
@@ -277,53 +401,152 @@ function Footer({ compact }: { compact?: boolean } = {}) {
     },
   ];
 
-  if (collapsed) {
-    const railActions: FooterAction[] = [
-      {
-        key: "settings",
-        label: "设置",
-        icon: <GearSix size={16} />,
-        on: () => navigate("/settings"),
-      },
-      chromeActions[3]!, // GitHub
-      chromeActions[0]!, // 折叠/展开
-    ];
-    return (
-      <div className="flex flex-col items-center gap-1">
-        <ThemeSwitch collapsed />
-        {railActions.map((action) => (
-          <GlassIconButton
-            key={action.key}
-            label={action.label}
-            size="sm"
-            onClick={action.on}
-            title={action.label}
+  // Wraps a chrome button so it FLIPs between its collapsed column slot
+  // and its expanded row slot. `layoutId` makes motion see one element that
+  // changed parents rather than two unrelated renders. The helpers are
+  // defined at module scope so React keeps the same component identity
+  // across renders — defining them inside `Footer` would re-create them
+  // every render and make oxlint flag the file.
+  const chrome = (
+    <>
+      <ChromeButton
+        id={ID.toggle}
+        button={chromeActions[0]!}
+        collapsed={collapsed}
+        reduce={reduce}
+      />
+      {collapsed ? (
+        <>
+          {/* Settings lives in the rail when collapsed and inside the pill
+              when expanded — the ThemeSwitch owns the latter. */}
+          <motion.div
+            layoutId={ID.settings}
+            transition={reduce ? { duration: 0 } : SPRING.layout}
+            className="flex"
           >
-            {action.icon}
-          </GlassIconButton>
-        ))}
-      </div>
-    );
-  }
+            <GlassIconButton
+              label="设置"
+              size="sm"
+              onClick={() => navigate("/settings")}
+              title="设置"
+            >
+              <GearSix size={16} />
+            </GlassIconButton>
+          </motion.div>
+          <ChromeButton
+            id={ID.github}
+            button={chromeActions[3]!}
+            collapsed={collapsed}
+            reduce={reduce}
+          />
+        </>
+      ) : (
+        <>
+          {/* Hide + palette only exist when expanded. AnimatePresence lets
+              each fade and scale in/out without holding the layout back. */}
+          <AnimatePresence initial={false}>
+            <ChromeEphemeral key="hide" button={chromeActions[1]!} reduce={reduce} />
+            <ChromeEphemeral key="palette" button={chromeActions[2]!} reduce={reduce} />
+          </AnimatePresence>
+          <ChromeButton
+            id={ID.github}
+            button={chromeActions[3]!}
+            collapsed={collapsed}
+            reduce={reduce}
+          />
+        </>
+      )}
+    </>
+  );
 
   return (
-    <div className="flex flex-col gap-1.5">
-      <ThemeSwitch collapsed={false} />
-      <div className="flex items-center gap-1.5">
-        {chromeActions.map((action) => (
-          <GlassIconButton
-            key={action.key}
-            label={action.label}
-            size="sm"
-            onClick={action.on}
-            title={action.label}
-            className="flex-1"
-          >
-            {action.icon}
-          </GlassIconButton>
-        ))}
-      </div>
-    </div>
+    // `LayoutGroup` is what makes the layoutIds above a shared scope:
+    // without it, a `layoutId` only animates inside one parent, and a
+    // column→row move would just snap because the parents are different.
+    <LayoutGroup id="sidebar-footer">
+      <motion.div
+        layout
+        transition={reduce ? { duration: 0 } : SPRING.layout}
+        className={cn(collapsed ? "flex flex-col items-center gap-1" : "flex flex-col gap-1.5")}
+      >
+        <ThemeSwitch collapsed={collapsed} />
+        {collapsed ? (
+          <div className="flex flex-col items-center gap-1">{chrome}</div>
+        ) : (
+          <div className="flex items-center gap-1.5">{chrome}</div>
+        )}
+      </motion.div>
+    </LayoutGroup>
+  );
+}
+
+/** Wraps a chrome button so it FLIPs between its collapsed column slot and
+ *  its expanded row slot. Stable identity at module scope — see `Footer`.
+ *
+ *  `flex-1` on the wrapper is what makes the row's four buttons equal width.
+ *  It used to sit on the button itself, which did nothing once the wrapper
+ *  became the flex item: the two wrapped buttons then measured 32px while the
+ *  two `ChromeEphemeral`s grew, and the row read as unevenly spaced
+ *  (measured: gaps of 6 / 41 / 41px against the theme pill's four even
+ *  cells above it). Column layout gets no `flex-1` — there it would stretch
+ *  the button vertically instead. */
+function ChromeButton({
+  id,
+  button,
+  collapsed,
+  reduce,
+}: {
+  id: string;
+  button: FooterAction;
+  collapsed: boolean;
+  reduce: boolean | null;
+}) {
+  return (
+    <motion.div
+      layoutId={id}
+      transition={reduce ? { duration: 0 } : SPRING.layout}
+      className={cn("flex", !collapsed && "flex-1")}
+    >
+      <GlassIconButton
+        label={button.label}
+        size="sm"
+        onClick={button.on}
+        title={button.label}
+        className={collapsed ? undefined : "flex-1"}
+      >
+        {button.icon}
+      </GlassIconButton>
+    </motion.div>
+  );
+}
+
+/** Wraps an expanded-only chrome button so it fades in/out instead of
+ *  snapping on the layout flip. Lives inside AnimatePresence so motion can
+ *  play the exit before tearing it out.
+ *
+ *  The button fills its wrapper for the same reason `ChromeButton`'s does:
+ *  the row's four buttons share the width evenly, and a `flex-1` wrapper
+ *  around a fixed 32px button only moves the unevenness inside it. */
+function ChromeEphemeral({ button, reduce }: { button: FooterAction; reduce: boolean | null }) {
+  return (
+    <motion.div
+      layout
+      initial={reduce ? false : { opacity: 0, scale: 0.85 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={reduce ? undefined : { opacity: 0, scale: 0.85 }}
+      transition={reduce ? { duration: 0 } : SPRING.layout}
+      className="flex flex-1"
+    >
+      <GlassIconButton
+        label={button.label}
+        size="sm"
+        onClick={button.on}
+        title={button.label}
+        className="flex-1"
+      >
+        {button.icon}
+      </GlassIconButton>
+    </motion.div>
   );
 }
 

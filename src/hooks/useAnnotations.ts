@@ -1,20 +1,79 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import {
+  demoAnnotationDelete,
+  demoAnnotationList,
+  demoAnnotationNote,
+  demoEnabled,
+} from "@/lib/demo";
 import type { Annotation, AnnotationStyle, NewAnnotation } from "@/types/ipc";
 
-const annotationsKey = (bookId: string) => ["annotations", bookId];
+/** The cache key every annotation view shares. Exported so the notes page can
+ *  aggregate across books without inventing a second key for the same rows. */
+export const annotationsKey = (bookId: string) => ["annotations", bookId];
+
+/**
+ * Browser dev with `?demo=1` reads the sample store instead of the backend.
+ *
+ * Read once at module scope: the document URL is fixed for the life of the
+ * app (the router is in memory), so this cannot change under a render. On
+ * desktop `isDesktopRuntime` short-circuits it before `demoEnabled()` is even
+ * asked, which is what keeps the fixture unreachable in the shipped build.
+ */
+const demoMode = !isDesktopRuntime && demoEnabled();
+
+/** One book's highlights, from whichever source this runtime has. */
+function listAnnotations(bookId: string): Promise<Annotation[]> {
+  if (demoMode) return Promise.resolve(demoAnnotationList(bookId));
+  if (!isDesktopRuntime) return Promise.resolve<Annotation[]>([]);
+  return ipc.annotationList(bookId);
+}
 
 /** Every highlight for a book, in reading order. */
 export function useAnnotations(bookId: string | null) {
   return useQuery({
     queryKey: annotationsKey(bookId ?? ""),
-    queryFn: () => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve<Annotation[]>([]);
-      return ipc.annotationList(bookId);
-    },
+    queryFn: () => (bookId ? listAnnotations(bookId) : Promise.resolve<Annotation[]>([])),
     enabled: bookId !== null,
     staleTime: 30_000,
+  });
+}
+
+/**
+ * Every book's highlights at once — the notes page's read path.
+ *
+ * One query per book, on the very key `useAnnotations` uses, so the two views
+ * share cache entries: a note written in the reader is already here when the
+ * page comes back, with no refetch and no second copy of the data. That is the
+ * whole reason this is a view over the reader's store rather than a store of
+ * its own.
+ *
+ * The cost is one command per book. `annotation_list` is the only enumeration
+ * the backend has — there is no cross-book listing, and no count to filter by
+ * first — so a shelf of N books costs N indexed reads. They run concurrently
+ * and each is cheap, so a few hundred books land in about one round trip; but
+ * it is N queries, not one, and this is the shape that would change if a bulk
+ * command ever lands.
+ */
+export function useAnnotationsByBook(bookIds: readonly string[]) {
+  return useQueries({
+    queries: bookIds.map((id) => ({
+      queryKey: annotationsKey(id),
+      queryFn: () => listAnnotations(id),
+      staleTime: 30_000,
+    })),
+    // Folded here rather than in the page so the array index never leaks out:
+    // `useQueries` answers in the order it was asked, and a caller that has to
+    // remember that is a caller that will eventually get it wrong.
+    combine: (results) => {
+      const byBook = new Map<string, Annotation[]>();
+      results.forEach((result, index) => {
+        const id = bookIds[index];
+        if (id !== undefined) byBook.set(id, result.data ?? []);
+      });
+      return { byBook, loading: results.some((result) => result.isPending) };
+    },
   });
 }
 
@@ -46,12 +105,22 @@ export function useCreateAnnotation(bookId: string | null) {
   });
 }
 
-/** Deletes a highlight and drops it from the cached list. */
+/**
+ * Deletes a highlight and drops it from the cached list.
+ *
+ * The two mutations the notes page reaches for — this one and the note write
+ * below — carry a `demoMode` branch so the surface works end to end in a
+ * browser. Creating, restyling and anchoring stay backend-only: they are the
+ * reader's own paths, and the reader is not the surface `?demo=1` exists to
+ * stand in for.
+ */
 export function useDeleteAnnotation(bookId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve();
+      if (!bookId) return Promise.resolve();
+      if (demoMode) return Promise.resolve(demoAnnotationDelete(id));
+      if (!isDesktopRuntime) return Promise.resolve();
       return ipc.annotationDelete(id);
     },
     onSuccess: (_result, id) => {
@@ -117,7 +186,9 @@ export function useSetAnnotationNote(bookId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, note }: { id: string; note: string | null }) => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve<Annotation | null>(null);
+      if (!bookId) return Promise.resolve<Annotation | null>(null);
+      if (demoMode) return Promise.resolve(demoAnnotationNote(id, note));
+      if (!isDesktopRuntime) return Promise.resolve<Annotation | null>(null);
       return ipc.annotationNote(id, note);
     },
     onSuccess: (updated) => {
