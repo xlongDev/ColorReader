@@ -1,6 +1,7 @@
 //! The library domain: sorting rules, cover URLs and book removal.
 
 pub mod annotations;
+pub mod backup;
 pub mod bookmarks;
 pub mod chapters;
 pub mod clippings;

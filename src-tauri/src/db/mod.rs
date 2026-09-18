@@ -21,7 +21,7 @@ use rusqlite::{Connection, Transaction};
 use crate::error::{AppError, AppResult};
 
 /// File name of the library database inside the per-user data directory.
-const DB_FILE: &str = "library.sqlite3";
+pub const DB_FILE: &str = "library.sqlite3";
 
 /// Directory holding the imported source files.
 const BOOKS_DIR: &str = "books";

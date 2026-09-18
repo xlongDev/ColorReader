@@ -104,6 +104,8 @@ pub fn run() -> tauri::Result<()> {
             commands::annotation::annotation_list,
             commands::annotation::annotation_delete,
             commands::annotation::annotation_delete_many,
+            commands::backup::backup_export,
+            commands::backup::backup_stage,
             commands::clippings::clippings_import,
             commands::export::notes_export,
             commands::export::notes_export_selection,
@@ -159,6 +161,11 @@ pub fn run() -> tauri::Result<()> {
                     .map_err(|err| AppError::Message(format!("resolve app data dir: {err}")))?;
                 fs::create_dir_all(&data_dir)?;
 
+                // A restore can only be swapped in here: from this point on the
+                // process holds the database open, and a running process cannot
+                // replace the file it already has.
+                library::backup::apply_pending(&data_dir)?;
+
                 let layout = db::Layout::create(data_dir)?;
                 let library = db::Library::open(&layout.data_dir)?;
                 // The fonts directory goes with it: it is the one resource the
@@ -212,6 +219,8 @@ mod specta_bindings {
                 commands::annotation::annotation_list,
                 commands::annotation::annotation_delete,
                 commands::annotation::annotation_delete_many,
+                commands::backup::backup_export,
+                commands::backup::backup_stage,
                 commands::book::book_list,
                 commands::book::book_get,
                 commands::book::book_stats,

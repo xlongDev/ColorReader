@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
+  Archive,
   ArrowsClockwise,
   BookOpenText,
   CloudArrowUp,
@@ -15,6 +16,7 @@ import {
 } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 import { open } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassCard } from "@/components/glass/panel";
@@ -25,11 +27,15 @@ import { resetAllSettings } from "@/stores/reset";
 import { showToast } from "@/stores/toasts";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import { useSystemInfo } from "@/hooks/useSystemInfo";
+import { useSavePath } from "@/hooks/useSavePath";
 import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
 import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from "@/hooks/useSync";
 import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
 import { useDeleteFont, useFonts, useImportFont } from "@/hooks/useFonts";
 import { useUpdater, type UpdateState } from "@/hooks/useUpdater";
+import { useExportBackup, useStageBackup } from "@/hooks/useBackup";
+import { isDesktopRuntime } from "@/lib/ipc";
+import { formatFileSize } from "@/features/library/format";
 import type { AiConfig, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
 import { cn } from "@/lib/cn";
 import { SPRING, useMotion } from "@/lib/motion";
@@ -46,6 +52,7 @@ const SECTIONS = [
   { id: "dictionary", label: "词典", icon: BookOpenText },
   { id: "fonts", label: "字体", icon: TextAa },
   { id: "sync", label: "同步", icon: CloudArrowUp },
+  { id: "backup", label: "备份", icon: Archive },
   { id: "reset", label: "重置", icon: ArrowsClockwise },
   { id: "about", label: "关于", icon: Info },
 ] as const;
@@ -231,6 +238,7 @@ export function SettingsPage() {
             <DictionarySection />
             <FontSection />
             <SyncSection />
+            <BackupSection />
             <ResetSection />
             <AboutSection />
           </div>
@@ -429,6 +437,114 @@ function updateStatus(state: UpdateState): { text: string; bad: boolean } {
     case "failed":
       return { text: state.message, bad: true };
   }
+}
+
+/**
+ * The library as one file — the half of the app that sync does not cover.
+ *
+ * Sync carries progress, highlights and bookmarks and nothing else, so a new
+ * machine still means importing every book again. A backup is the data
+ * directory verbatim, which is also why a restore cannot happen in place: the
+ * running process holds the database open, so it is unpacked beside the data
+ * directory and swapped in on the next start. The displaced library is kept
+ * next to it rather than deleted.
+ */
+function BackupSection() {
+  const { choose, error: dialogError } = useSavePath();
+  const [status, setStatus] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
+  const [busy, setBusy] = useState<"export" | "restore" | null>(null);
+  const backup = useExportBackup();
+  const restore = useStageBackup();
+
+  const onExport = async () => {
+    setStatus(null);
+    const path = await choose({
+      defaultPath: `colorreader-backup-${stamp()}.zip`,
+      filters: [{ name: "书库备份", extensions: ["zip"] }],
+    });
+    if (!path) return;
+    setBusy("export");
+    backup.mutate(path, {
+      onSuccess: (summary) =>
+        setStatus({
+          tone: "ok",
+          text: `已备份 ${summary.files} 个文件 · ${formatFileSize(summary.bytes)}。`,
+        }),
+      onError: (error) => setStatus({ tone: "bad", text: String(error) }),
+      onSettled: () => setBusy(null),
+    });
+  };
+
+  const onRestore = async () => {
+    setStatus(null);
+    const picked = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: "书库备份", extensions: ["zip"] }],
+    });
+    if (typeof picked !== "string") return;
+    setBusy("restore");
+    restore.mutate(picked, {
+      onSuccess: (summary) => {
+        setStatus({ tone: "ok", text: `已展开 ${summary.files} 个文件，正在重启…` });
+        // The swap can only happen before the database is opened, which is
+        // during startup — so the app restarts itself rather than asking.
+        void relaunch();
+      },
+      onError: (error) => {
+        setStatus({ tone: "bad", text: String(error) });
+        setBusy(null);
+      },
+    });
+  };
+
+  return (
+    <SettingsGroup
+      id="backup"
+      icon={Archive}
+      title="书库备份"
+      description="把书文件、封面、词典、字体与阅读记录打包成一个 zip；WebDAV 同步只覆盖进度、标注与书签，不带这些。"
+    >
+      <Row
+        label="备份"
+        hint="整库打包，含导入的词典与字体。备份里带有 AI 与同步的本地凭据，请按密钥一样保管。"
+      >
+        <GlassButton
+          variant="subtle"
+          size="sm"
+          onClick={() => void onExport()}
+          disabled={busy !== null || !isDesktopRuntime}
+        >
+          {busy === "export" ? "正在备份…" : "导出备份"}
+        </GlassButton>
+      </Row>
+      <Row
+        label="恢复"
+        hint="替换当前书库，并重启应用生效。被替换的书库会保留在数据目录旁的 -previous 目录里。"
+      >
+        <GlassButton
+          variant="subtle"
+          size="sm"
+          onClick={() => void onRestore()}
+          disabled={busy !== null || !isDesktopRuntime}
+        >
+          {busy === "restore" ? "正在恢复…" : "从备份恢复"}
+        </GlassButton>
+      </Row>
+      <Actions>
+        <Feedback status={status} />
+        {dialogError && <Feedback status={{ tone: "bad", text: dialogError }} />}
+      </Actions>
+    </SettingsGroup>
+  );
+}
+
+/** Date stamp for the default backup file name: `20260919`. */
+function stamp(): string {
+  const now = new Date();
+  const month = `${now.getMonth() + 1}`.padStart(2, "0");
+  const day = `${now.getDate()}`.padStart(2, "0");
+  return `${now.getFullYear()}${month}${day}`;
 }
 
 /**

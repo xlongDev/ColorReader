@@ -89,6 +89,15 @@ export const commands = {
    */
   annotationDeleteMany: (ids: string[]) =>
     __TAURI_INVOKE<number>("annotation_delete_many", { ids }),
+  /**  `backup.export` */
+  backupExport: (path: string) => __TAURI_INVOKE<BackupSummary>("backup_export", { path }),
+  /**
+   *  `backup.stage`
+   *
+   *  Only unpacks the archive. Replacing the library happens on the next start,
+   *  which is why the caller is expected to restart the app afterwards.
+   */
+  backupStage: (path: string) => __TAURI_INVOKE<BackupSummary>("backup_stage", { path }),
   /**  `book.list` */
   bookList: (query: BookQuery) => __TAURI_INVOKE<BookSummary[]>("book_list", { query }),
   /**  `book.get` */
@@ -445,6 +454,14 @@ export type Annotation = {
    */
   note: string | null;
   createdAt: number;
+};
+
+/**  What one backup or restore moved. */
+export type BackupSummary = {
+  /**  Files written, manifest excluded. */
+  files: number;
+  /**  Bytes before compression. */
+  bytes: number;
 };
 
 /**  Formats the library can hold today. */
