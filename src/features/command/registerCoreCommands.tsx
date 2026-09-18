@@ -1,6 +1,7 @@
 import { useEffect, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  BookOpen,
   Books,
   ClockCounterClockwise,
   Star,
@@ -17,7 +18,10 @@ import {
 import type { Command } from "@/lib/commands";
 import { useCommandStore } from "@/stores/commands";
 import { useSettings, type ThemeMode } from "@/stores/settings";
-import { createLogger } from "@/lib/log";
+import { createLogger, describeError } from "@/lib/log";
+import { desktopQuery, ipc } from "@/lib/ipc";
+import { showToast } from "@/stores/toasts";
+import type { BookSummary } from "@/types/ipc";
 
 const log = createLogger("commands");
 
@@ -32,6 +36,7 @@ const PREFERENCES = { mod: true, key: "," } as const;
 export function registerCoreCommands({ openPalette }: Deps): () => void {
   const commands: Command[] = [
     paletteCommand(openPalette),
+    continueReadingCommand(),
     searchCommand(),
     sidebarCommand(),
     ...themeCommands(),
@@ -52,6 +57,39 @@ function paletteCommand(open: () => void): Command {
     icon: <CommandIcon size={16} />,
     shortcut: [PALETTE],
     run: open,
+  };
+}
+
+/**
+ * Opens the book the reader last had open.
+ *
+ * "Recent" is the backend's own filter (`last_read_at IS NOT NULL`) sorted by
+ * the same timestamp, so the first row is the one to resume — no progress
+ * heuristics on this side.
+ */
+function continueReadingCommand(): Command {
+  return {
+    id: "book.continue",
+    title: "继续阅读",
+    description: "打开最近在读的那本书",
+    group: "书籍",
+    icon: <BookOpen size={16} />,
+    keywords: ["continue", "resume", "继续", "接着读", "最近阅读"],
+    run: async () => {
+      try {
+        const recent = await desktopQuery<BookSummary[]>([], () =>
+          ipc.bookList({ filter: "recent", sort: "recentlyRead" }),
+        )();
+        const next = recent[0];
+        if (!next) {
+          showToast("error", "还没有在读的书");
+          return;
+        }
+        navigateTo(`/reader?book=${next.id}`);
+      } catch (error) {
+        showToast("error", describeError(error).message);
+      }
+    },
   };
 }
 
@@ -118,11 +156,18 @@ function navCommand(to: string, title: string, id: string, icon: ReactNode): Com
     title,
     group: "导航",
     icon,
-    run: () => {
-      // imperative navigation requires the router; use a runtime-side dispatch
-      window.dispatchEvent(new CustomEvent("colorreader:navigate", { detail: to }));
-    },
+    run: () => navigateTo(to),
   };
+}
+
+/** The event a command dispatches to reach the router. Commands live outside
+    React (the registry is a plain store), so navigation goes through the
+    window rather than through a hook. */
+const NAVIGATE_EVENT = "colorreader:navigate";
+
+/** Sends the shell to a route from anywhere, including outside React. */
+export function navigateTo(to: string): void {
+  window.dispatchEvent(new CustomEvent(NAVIGATE_EVENT, { detail: to }));
 }
 
 /** Bridge between the command registry and React Router. Mount once near the root. */
@@ -133,7 +178,7 @@ export function useNavigationBridge(): void {
       const target = event as CustomEvent<string>;
       if (typeof target.detail === "string") navigate(target.detail);
     }
-    window.addEventListener("colorreader:navigate", onNav as EventListener);
-    return () => window.removeEventListener("colorreader:navigate", onNav as EventListener);
+    window.addEventListener(NAVIGATE_EVENT, onNav as EventListener);
+    return () => window.removeEventListener(NAVIGATE_EVENT, onNav as EventListener);
   }, [navigate]);
 }

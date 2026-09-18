@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { ArrowUDownLeft, MagnifyingGlass } from "@phosphor-icons/react";
 
 import { scoreCommand, type Command, type Shortcut } from "@/lib/commands";
+import { useBookCommands } from "@/features/command/useBookCommands";
 import { useCommandStore } from "@/stores/commands";
 import { useCommandPalette } from "@/stores/command-palette";
 import { GlassDialog } from "@/components/glass/overlay";
@@ -25,7 +26,7 @@ export function CommandPalette() {
       open={open}
       onOpenChange={setOpen}
       title="命令面板"
-      description="搜索动作、跳转视图、调整外观。"
+      description="输入命令，或直接搜书名 / 作者打开一本书。"
       widthClass="w-[min(94vw,620px)]"
     >
       {/* Remount per open: the query and the selection reset without an effect. */}
@@ -55,17 +56,21 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     listRef.current?.querySelector(`[data-row="${active}"]`)?.scrollIntoView({ block: "nearest" });
   }, [active]);
 
+  const bookCommands = useBookCommands(query);
+
   const results = useMemo<Scored[]>(() => {
     const scored: Scored[] = [];
-    for (const command of commands) {
-      if (command.isEnabled && !command.isEnabled()) continue;
-      const s = scoreCommand(query, command);
-      if (s == null) continue;
-      scored.push({ command, score: s });
+    for (const list of [commands, bookCommands]) {
+      for (const command of list) {
+        if (command.isEnabled && !command.isEnabled()) continue;
+        const s = scoreCommand(query, command);
+        if (s == null) continue;
+        scored.push({ command, score: s });
+      }
     }
     scored.sort((a, b) => b.score - a.score || a.command.title.localeCompare(b.command.title));
     return scored.slice(0, 24);
-  }, [commands, query]);
+  }, [commands, bookCommands, query]);
 
   const groups = useMemo(() => {
     const buckets = new Map<string, Scored[]>();
@@ -111,13 +116,13 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
           value={query}
           onChange={(event) => updateQuery(event.target.value)}
           onKeyDown={handleKey}
-          placeholder="输入命令或搜索..."
+          placeholder="输入命令或书名..."
           className="border-0 bg-transparent shadow-none focus-visible:border-0 focus-visible:bg-transparent"
         />
       </div>
       <div ref={listRef} className="-mx-1 max-h-[60vh] overflow-y-auto px-1">
         {results.length === 0 && (
-          <div className="text-text-2 px-2 py-6 text-center text-sm">没有匹配的命令</div>
+          <div className="text-text-2 px-2 py-6 text-center text-sm">没有匹配的命令或书籍</div>
         )}
         {groups.map(({ group, items }) => (
           <section key={group} className="mb-3">
