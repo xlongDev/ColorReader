@@ -16,6 +16,7 @@ import {
   MIN_MARGIN_X,
   MIN_MARGIN_Y,
   MARGIN_X_PRESETS,
+  PAGE_NUMBER_SCOPES,
   PARA_GAPS,
   useReaderSettings,
 } from "@/stores/reader";
@@ -181,12 +182,9 @@ export function SettingsPanel() {
       <Section title="页面">
         <Group label="页码">
           <Chips
-            options={[
-              { key: false, label: "隐藏" },
-              { key: true, label: "显示 N/M 页" },
-            ]}
-            value={settings.showPageNumbers}
-            onChange={(value) => update({ showPageNumbers: value })}
+            options={PAGE_NUMBER_SCOPES}
+            value={settings.pageNumbers}
+            onChange={(value) => update({ pageNumbers: value })}
           />
         </Group>
         <Group label="翻页动画">

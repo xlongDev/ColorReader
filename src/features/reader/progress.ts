@@ -66,3 +66,41 @@ export function estimateLabel(chars: number, charsPerMinute: number): string {
   const rest = whole % 60;
   return rest === 0 ? `约 ${hours} 小时` : `约 ${hours} 小时 ${rest} 分钟`;
 }
+
+/**
+ * A whole-book page number, estimated from the page density of the unit the
+ * reader is in.
+ *
+ * `before` and `span` are that unit's start and width as fractions of the whole
+ * book; `pages` is the counter the layout actually measured inside it.
+ * Everything else follows from "a page holds this much book": the book is
+ * `pages.pages / span` pages long, and the page you are on is that many pages
+ * into it.
+ *
+ * It is an estimate, and the caller labels it as one. A page holds whatever
+ * fits the current font, margin and window, and the unit it was measured in is
+ * not the only unit in the book — a chapter of dialogue and a chapter of
+ * description do not fill a page at the same rate. Both paths run the same
+ * arithmetic on different units: chapters by character count for the prose
+ * pager, foliate's own section sizes for a Kindle book.
+ *
+ * `null` when there is nothing to estimate from — an unpaginated layout, or a
+ * book with no measurable unit — so the caller can fall back to the unit's own
+ * counter rather than print a number it made up.
+ */
+export function bookPageAt(
+  before: number,
+  span: number,
+  pages: { page: number; pages: number },
+): { page: number; pages: number } | null {
+  if (pages.pages <= 0 || span <= 0) return null;
+  const density = pages.pages / span;
+  // Both bounds below are satisfied by construction for a well-formed unit: a
+  // unit's span never exceeds the book, so the estimate can never come out
+  // shorter than the unit it was measured in, nor the page land past the end.
+  // They are here for the caller that gets that wrong, because the failure is a
+  // printed number disagreeing with itself — "13 / 12 页".
+  const total = Math.max(pages.pages, Math.round(density));
+  const page = Math.min(Math.round(before * density) + pages.page, total);
+  return { page, pages: total };
+}

@@ -44,8 +44,8 @@ interface ReaderState {
   autoScrollSpeed: number;
   /** Sustained reading speed in chars per minute, measured while scrolling. */
   readingSpeed: number;
-  /** Shows the "N / M 页" page indicator in paged layouts. */
-  showPageNumbers: boolean;
+  /** How much of the "N / M 页" page indicator to show in paged layouts. */
+  pageNumbers: PageNumberScope;
   /** PDF only: pages fill the window edge to edge, ignoring the prose margins. */
   pdfFill: boolean;
   /** PDF only: render text and vectors on the night palette, independent of
@@ -80,6 +80,26 @@ interface ReaderState {
 /** Inclusive bounds for the font size stepper. */
 export const MIN_FONT_SIZE = 15;
 export const MAX_FONT_SIZE = 26;
+
+/**
+ * What the page indicator counts.
+ *
+ * `chapter` is the unit the layout actually measured — a chapter on the prose
+ * pager, a foliate section in a Kindle book. `book` is the whole-book estimate
+ * `bookPageAt` derives from it, which is what a paper edition's page number
+ * means and what a reader quoting a passage wants to say. It is an estimate,
+ * so the indicator says 约 in front of it.
+ */
+export type PageNumberScope = "off" | "chapter" | "book";
+
+/** Chip labels for the 页码 row, in display order. */
+export const PAGE_NUMBER_SCOPES: { key: PageNumberScope; label: string }[] = [
+  { key: "off", label: "隐藏" },
+  { key: "chapter", label: "当前章" },
+  // The label does not say 约; the indicator itself does, every time, which is
+  // where a reader who forgot what they picked will see it.
+  { key: "book", label: "全书" },
+];
 
 /** Line height presets, index-selectable in reading settings. */
 export const LINE_HEIGHTS = [1.6, 1.8, 2.0, 2.2] as const;
@@ -172,7 +192,7 @@ export const useReaderSettings = create<ReaderState>()(
       layoutMode: "scroll",
       autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
       readingSpeed: DEFAULT_READING_SPEED,
-      showPageNumbers: false,
+      pageNumbers: "off",
       pdfFill: true,
       pdfNight: true,
       pdfGap: 0,
@@ -194,7 +214,7 @@ export const useReaderSettings = create<ReaderState>()(
       // Bump only when a stored value changes meaning; a newly added key needs
       // no bump — the default merge layers the persisted state over the
       // initial one.
-      version: 6,
+      version: 7,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are
       // continuous px now and the scale was rebased (old 特宽 = new 标准).
@@ -208,10 +228,15 @@ export const useReaderSettings = create<ReaderState>()(
       //   `slide` used, so a stored preference degrades to what it looked
       //   like rather than to nothing. v4's `pan → slide` coercion is gone
       //   with it: `pan` is a real option again.
+      // v7: the page indicator's boolean became a three-way scope (off /
+      //   current chapter / whole book). A stored `true` becomes "chapter" —
+      //   the display it already had — and anything unrecognised becomes
+      //   "off" rather than leaving the row with no chip selected.
       migrate: (persisted) => {
         const state = persisted as Partial<ReaderState> & {
           autoScrollIdx?: number;
           marginIdx?: number;
+          showPageNumbers?: boolean;
         };
         const next = { ...state } as ReaderState;
         if (typeof next.autoScrollSpeed !== "number") {
@@ -220,6 +245,10 @@ export const useReaderSettings = create<ReaderState>()(
         if (typeof next.marginX !== "number") {
           next.marginX = MARGIN_X_PRESETS[state.marginIdx ?? 1] ?? DEFAULT_MARGIN_X;
           next.marginY = DEFAULT_MARGIN_Y;
+        }
+        const scope = next.pageNumbers as string | undefined;
+        if (scope !== "off" && scope !== "chapter" && scope !== "book") {
+          next.pageNumbers = state.showPageNumbers === true ? "chapter" : "off";
         }
         const stored = next.pageTransition as string;
         if (

@@ -59,6 +59,8 @@ type FoliateRelocateDetail = {
   pageItem?: FoliateTocItem;
   /** Section page counter (paginated only; null in scrolled flow). */
   page?: { current: number; total: number } | null;
+  /** Which section the position is in, and how many there are. */
+  section?: { current: number; total: number };
   range?: unknown;
 };
 
@@ -87,6 +89,13 @@ declare module "foliate-js/view.js" {
     getCFI(index: number, range: Range): string;
     /** Resolves a CFI into `{ index, anchor }`; `anchor(doc)` yields a Range. */
     resolveNavigation(target: string | number): { index: number; anchor: unknown };
+    /**
+     * Where each section starts and ends, as fractions of the book, from
+     * foliate's own byte sizes — one entry more than there are sections, since
+     * it leads with a hard 0. Empty until `open()` has run, and empty for a
+     * book whose TOC does not map onto the spine.
+     */
+    getSectionFractions(): number[];
     /** Draws (or with `remove`, erases) one overlayer annotation. `value` is a
      *  CFI; the caller paints it from the `draw-annotation` event. */
     addAnnotation(
@@ -166,5 +175,41 @@ declare module "foliate-js/mobi.js" {
   export class MOBI {
     constructor(options?: { unzlib?: (buf: Uint8Array) => Uint8Array });
     open(file: File | Blob): Promise<FoliateBookDoc>;
+  }
+}
+
+/**
+ * foliate's section-progress table.
+ *
+ * Only what the whole-book page estimate reads is declared. `sectionFractions`
+ * is what `View.getSectionFractions()` hands out, and `section.current` is what
+ * a relocate carries — the two have to index the same array for the estimate to
+ * mean anything, which is the one thing `foliateSections.test.ts` pins.
+ *
+ * The declared shape is deliberately narrow: `view.js` keeps its own copy
+ * private and exposes only the fractions, so a foliate upgrade that reshapes
+ * `getProgress` shows up here rather than silently mis-indexing.
+ */
+declare module "foliate-js/progress.js" {
+  export class SectionProgress {
+    constructor(
+      sections: { linear?: string; size?: number }[],
+      sizePerLoc: number,
+      sizePerTimeUnit: number,
+    );
+    /** Start fraction of every section, plus a leading 0 — one more entry than
+     *  there are sections. */
+    sectionFractions: number[];
+    getProgress(
+      index: number,
+      fractionInSection: number,
+      pageFraction?: number,
+    ): {
+      fraction: number;
+      section: { current: number; total: number };
+      location: { current: number; next: number; total: number };
+      time: { section: number; total: number };
+    };
+    getSection(fraction: number): [number, number];
   }
 }

@@ -61,6 +61,7 @@ import { applyPosition, columnPitch, flipPage } from "@/features/reader/paging";
 import { ImageLightbox } from "@/features/reader/ImageLightbox";
 import { ReaderDrawer } from "@/features/reader/ReaderDrawer";
 import {
+  bookPageAt,
   globalProgress,
   locateChapter,
   remainingChars,
@@ -328,7 +329,7 @@ function ReaderView({
     autoScrollSpeed,
     readingSpeed,
     setReadingSpeed,
-    showPageNumbers,
+    pageNumbers,
     pdfFill,
     pdfNight: pdfNightOn,
     pdfGap,
@@ -338,6 +339,10 @@ function ReaderView({
   const speechRate = settings.speechRate;
   const speechVoiceURI = settings.speechVoiceURI;
   const speechGranularity = settings.speechGranularity;
+  // The indicator is off, or it counts the unit the layout measured, or it
+  // counts the whole book (`bookPageAt`). One flag for the two on-modes: the
+  // measurement below is what both of them need.
+  const showPages = pageNumbers !== "off";
   // Fullscreen mirrors the OS window rather than owning it: macOS can leave it
   // without us, so the real state has to be re-read on resize.
   const { fullscreen, exitHint, toggle: toggleFullscreen } = useReaderFullscreen();
@@ -513,6 +518,13 @@ function ReaderView({
   /** Section page counter from foliate; feeds the same indicator as
    *  `pageInfo` (separate state because this one is declared earlier). */
   const [foliatePage, setFoliatePage] = useState<{ page: number; pages: number } | null>(null);
+  /** How much of the book the section `foliatePage` counts lives in, 0..1.
+   *  foliate sizes its sections by byte count, so this is the weight the
+   *  whole-book page estimate needs. `null` until a section reports. */
+  const [foliateSectionSpan, setFoliateSectionSpan] = useState<{
+    start: number;
+    end: number;
+  } | null>(null);
   // Declared after the state it reports into (React Compiler forbids a
   // callback capturing a setter that is still initializing).
   const rememberFoliateLocation = useCallback(
@@ -532,6 +544,7 @@ function ReaderView({
       // The section page counter feeds the same "N / M 页" indicator the
       // prose pager drives; null in the scroll layout clears it.
       setFoliatePage(location.page && { page: location.page.current, pages: location.page.total });
+      setFoliateSectionSpan(location.sectionSpan);
       if (location.cfi === "") return;
       const cfi = location.cfi;
       if (foliateSaveRef.current !== null) window.clearTimeout(foliateSaveRef.current);
@@ -664,6 +677,51 @@ function ReaderView({
   const [flipHint, setFlipHint] = useState(false);
   /** 1-based position inside the chapter's column count, for the page indicator. */
   const [pageInfo, setPageInfo] = useState<{ page: number; pages: number } | null>(null);
+  /**
+   * The page counter to print, in whichever unit the reader asked for — or
+   * `null` to print nothing at all.
+   *
+   * `chapter` is what the layout measured; `book` is the estimate derived from
+   * it (`bookPageAt`). Both paths hand that function the same two numbers — how
+   * far into the book the unit starts, and how wide it is — measured on their
+   * own units: the prose pager weighs chapters by character count, foliate by
+   * the byte size of its sections.
+   *
+   * The `off` case is decided here rather than by a second flag at the render
+   * site: the two on-modes share every measurement below, so a separate gate
+   * would have to be kept in step with this one, and the first version of that
+   * pairing showed a chapter counter while the setting said 隐藏.
+   */
+  const shownPages = useMemo(() => {
+    if (pageNumbers === "off") return null;
+    const unit = useFoliate ? foliatePage : pageInfo;
+    if (unit === null) return null;
+    if (pageNumbers !== "book") return { ...unit, estimated: false };
+
+    let share: { before: number; span: number } | null = null;
+    if (useFoliate) {
+      if (foliateSectionSpan) {
+        share = {
+          before: foliateSectionSpan.start,
+          span: foliateSectionSpan.end - foliateSectionSpan.start,
+        };
+      }
+    } else {
+      const chars = totalChars(chapters);
+      if (chars > 0) {
+        share = {
+          before: globalProgress(chapters, chapterIdx, 0),
+          span: (chapters[chapterIdx]?.chars ?? 0) / chars,
+        };
+      }
+    }
+
+    // No share to weigh by — a book with no chapter text, or a foliate book
+    // whose TOC does not map onto the spine. The unit counter is still true, so
+    // it stands in rather than the indicator going blank.
+    const book = share ? bookPageAt(share.before, share.span, unit) : null;
+    return book ? { ...book, estimated: true } : { ...unit, estimated: false };
+  }, [useFoliate, foliatePage, foliateSectionSpan, pageInfo, pageNumbers, chapters, chapterIdx]);
   /** Book image opened in the lightbox viewer, an index into the book-wide `bookImages`. */
   const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
   const flipHintTimer = useRef<number | null>(null);
@@ -1585,7 +1643,7 @@ function ReaderView({
       const page = Math.min(chapters.length, Math.floor(el.scrollTop / slot) + 1);
       setPdfScrollPage((prev) => (prev === page ? prev : page));
     }
-    if (pagedNow && showPageNumbers) {
+    if (pagedNow && showPages) {
       const pitch = columnPitch(el, layoutModeRef.current, marginRef.current);
       if (pitch > 0) {
         const page = Math.round(el.scrollLeft / pitch) + 1;
@@ -1597,7 +1655,7 @@ function ReaderView({
     }
     if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => saveProgress(frac), SAVE_DELAY_MS);
-  }, [chapters, chapterIdx, isPdf, layoutModeRef, marginRef, saveProgress, showPageNumbers]);
+  }, [chapters, chapterIdx, isPdf, layoutModeRef, marginRef, saveProgress, showPages]);
 
   // Recompute the page indicator when the setting or layout flips without a
   // scroll event; chapter switches and resizes re-report through `onScroll`.
@@ -1606,7 +1664,7 @@ function ReaderView({
     // this host has no horizontal overflow to measure — running the formula
     // anyway reported a bogus "1 / 1", which then shadowed foliate's real
     // counter in the indicator.
-    if (!paged || !showPageNumbers || useFoliate) return;
+    if (!paged || !showPages || useFoliate) return;
     const el = scrollRef.current;
     if (!el) return;
     const pageMargin = marginX + (fullscreen ? FULLSCREEN_MARGIN_BONUS : 0);
@@ -1617,7 +1675,7 @@ function ReaderView({
       page: Math.round(el.scrollLeft / pitch) + 1,
       pages: Math.round(max / pitch) + 1,
     });
-  }, [fullscreen, useFoliate, layoutMode, marginX, paged, showPageNumbers]);
+  }, [fullscreen, useFoliate, layoutMode, marginX, paged, showPages]);
 
   // Flush a pending save on unmount.
   useEffect(() => {
@@ -2760,13 +2818,14 @@ function ReaderView({
 
         {/* Page indicator (settings-gated) and a hairline progress rail that
             surfaces on activity and fades out after 2s of stillness. */}
-        {paged && showPageNumbers && (useFoliate ? foliatePage : pageInfo) && (
+        {paged && shownPages && (
           <p
+            data-page-indicator
             className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 text-xs tabular-nums opacity-70"
             style={{ color: surface.fg }}
           >
-            {(useFoliate ? foliatePage : pageInfo)!.page} /{" "}
-            {(useFoliate ? foliatePage : pageInfo)!.pages} 页
+            {shownPages.estimated && "约 "}
+            {shownPages.page} / {shownPages.pages} 页
           </p>
         )}
         {/* Quiet progress rail in the text colour: a barely-there track that
@@ -3092,7 +3151,8 @@ function ReaderView({
       {exportingNotes && bookId && (
         <Suspense fallback={null}>
           <ExportNotesDialog
-            title={title}
+            subject={`《${title}》`}
+            name={title}
             highlights={(annotations ?? []).length}
             notes={(annotations ?? []).filter((annotation) => annotation.note !== null).length}
             busy={exportNotes.isPending}

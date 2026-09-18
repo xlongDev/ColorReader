@@ -78,6 +78,8 @@ annotation_tombstones / bookmark_tombstones（删除墓碑，供 WebDAV 同步�
 
 阅读器**一次只加载一章**，整本书既不进 React State 也不进 DOM。全局进度 `0..1` 通过 `chars` 前缀和映射到章节与章内比例（`locateChapter` / `globalProgress`），定位时不需要加载任何正文。Phase 3 之前导入的书没有 `chapters` 行，`reader_toc` 在首次读取时用 `ensure_chapters`（`with_tx` 内二次检查，防并发重复插入）惰性补建索引。
 
+页码指示器有三种范围（隐藏 / 当前章 / 全书），两种显示范围共用同一套测量：当前单元的页数是排版**实测**的，全书页数则由它推算——`bookPageAt` 拿「当前单元占全书的比例」和「单元内页数」算出「一页装多少书」，据此得到全书总页数与当前页。两条通路只是单元不同：纯文本按 `chars` 加权章节，foliate 按它自己的 section 字节大小加权（`getSectionFractions()`，随 relocate 一起带出 `sectionSpan`）。这是估算，不是测量——一页装多少取决于当时的字号、页边距和窗口，且章与章的排版密度并不相同——所以显示时带「约」字；拿不到比例时（无正文、foliate 的 TOC 未映射到 spine）退回单元页码而不是留空。
+
 ### 标注模型
 
 标注是一条指向章节正文的**不可变字符区间**：`(book_id, chapter_idx, start_char, end_char)` 加一份落库的 `text` 摘录。偏移量是 UTF-16 code unit 计数，**由前端计算、前端解释**，后端只做不透明存储（校验非空与区间有效性），`text` 作为列表里展示的摘录。因为章节正文对一本书而言不可变（重新导入得到新的 `content_hash`），偏移量永远不会因文本更新而失效，所以本阶段**不引入 re-location 引擎**；将来若出现可编辑正文，再以 `text` 为锚点补定位。
