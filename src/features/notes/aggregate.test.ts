@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import type { Annotation, BookSummary } from "@/types/ipc";
-import { filterNotes, groupByBook, inkColor, tally, unitLabel } from "@/features/notes/aggregate";
+import {
+  exportPayload,
+  filterNotes,
+  groupByBook,
+  inkColor,
+  keepEntries,
+  tally,
+  unitLabel,
+} from "@/features/notes/aggregate";
 
 function book(id: string, overrides: Partial<BookSummary> = {}): BookSummary {
   return {
@@ -215,5 +223,67 @@ describe("unitLabel", () => {
     expect(unitLabel("pdf")).toBe("章");
     expect(unitLabel("fb2")).toBe("章");
     expect(unitLabel("cbz")).toBe("章");
+  });
+});
+
+describe("keepEntries", () => {
+  const groups = groupByBook(
+    [A, B, C],
+    new Map([
+      ["a", [mark("a1", "a", 0, 0, "x"), mark("a2", "a", 1, 0, "y")]],
+      ["b", [mark("b1", "b", 0, 0, "z")]],
+      ["c", [mark("c1", "c", 0, 0, "w")]],
+    ]),
+  );
+
+  it("keeps only the named highlights, in the order they were already in", () => {
+    const kept = keepEntries(groups, new Set(["a2", "b1"]));
+    expect(kept.map((group) => group.book.id)).toEqual(["a", "b"]);
+    expect(kept[0]?.entries.map((entry) => entry.annotation.id)).toEqual(["a2"]);
+  });
+
+  it("drops a book whose every highlight was left out", () => {
+    // Otherwise the page would draw a book header over an empty list.
+    expect(keepEntries(groups, new Set(["b1"])).map((group) => group.book.id)).toEqual(["b"]);
+  });
+
+  it("keeps the book, not a copy of the entries' own book", () => {
+    const kept = keepEntries(groups, new Set(["c1"]));
+    expect(kept[0]?.book).toBe(C);
+  });
+
+  it("is empty for an empty set and leaves the input alone", () => {
+    const before = groups.map((group) => group.entries.length);
+    expect(keepEntries(groups, new Set())).toEqual([]);
+    expect(groups.map((group) => group.entries.length)).toEqual(before);
+  });
+});
+
+describe("exportPayload", () => {
+  it("pairs each book with its own highlights, in screen order", () => {
+    // The pairing is the contract: the backend groups by book, so the books
+    // have to arrive in the order the page drew them and the ids in reading
+    // order inside each. The shelf here is deliberately not alphabetical.
+    const groups = groupByBook(
+      [C, A, B],
+      new Map([
+        ["a", [mark("a2", "a", 1, 0, "y"), mark("a1", "a", 0, 0, "x")]],
+        ["c", [mark("c1", "c", 0, 0, "w")]],
+      ]),
+    );
+    expect(exportPayload(groups)).toEqual({
+      bookIds: ["c", "a"],
+      ids: ["c1", "a1", "a2"],
+    });
+  });
+
+  it("skips a group with nothing in it", () => {
+    // A book header is not a reason to write a book section.
+    const groups = groupByBook([A, B], new Map([["a", [mark("a1", "a", 0, 0, "x")]]]));
+    expect(exportPayload(groups).bookIds).toEqual(["a"]);
+  });
+
+  it("is two empty lists for nothing", () => {
+    expect(exportPayload([])).toEqual({ bookIds: [], ids: [] });
   });
 });

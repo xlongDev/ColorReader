@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowSquareOut,
   BookOpenText,
   Check,
   CopySimple,
+  Eraser,
   GlobeHemisphereWest,
   GlobeSimple,
   Highlighter,
@@ -39,7 +40,9 @@ import { SPRING } from "@/lib/motion";
  * 记笔记 opens a field under the two rows, so a thought about the passage can
  * be written where the reader is looking instead of in the side panel. It
  * commits on the way out — focus leaving the toolbar, or ⌘/Ctrl+Enter — and
- * Esc rewinds.
+ * Esc rewinds. The strip under the field finishes the job without leaving it:
+ * 保存 writes, 清空 empties the field alone, and 删除 drops a note that was
+ * already there and leaves the highlight standing.
  */
 
 type Props = {
@@ -76,10 +79,11 @@ const WIDTH = 446;
 /** Floor for the width when the reading area is narrower than `WIDTH`. Below
  *  this the icon rows wrap onto a second line rather than shrink further. */
 const MIN_WIDTH = 300;
-/** Approximate height of the action row plus the always-visible ink row (px). */
-const HEIGHT = 84;
-/** Height once the note field is open above the ink row. */
-const NOTE_HEIGHT = 144;
+/** Approximate height of the panel (px) — the action row plus the ink row.
+ *  Used for one thing only: which side the entrance eases in from. The
+ *  placement itself is measured (see the layout effect in `SelectionToolbar`),
+ *  so drift here costs a 6px offset and nothing else. */
+const ENTRANCE_HEIGHT = 96;
 /** Clearance between the panel's edge and the selection box (px). The box ends
  *  on the text's own content box, so the line's remaining leading sits below
  *  it — a hair of clearance drops the icons into the middle of the gap between
@@ -145,6 +149,8 @@ export function SelectionToolbar({
   const [draft, setDraft] = useState<string | null>(null);
   const rewound = useRef(false);
   const field = useRef<HTMLTextAreaElement>(null);
+  /** The panel itself — its measured height is what places it. */
+  const panel = useRef<HTMLDivElement>(null);
   const noting = draft !== null;
   const copiedTimer = useRef<number | null>(null);
   useEffect(
@@ -187,7 +193,6 @@ export function SelectionToolbar({
 
   // The action row and ink row are always shown together; the note field
   // expands the panel when open.
-  const height = noting ? NOTE_HEIGHT : HEIGHT;
   const page = readingViewport();
   // Clamp the whole toolbar inside the content area, treating `x` as the
   // centre point: left edge must stay >= page.left + EDGE, right edge must
@@ -196,7 +201,6 @@ export function SelectionToolbar({
   // the left bound would simply win, hanging the toolbar off the page edge.
   const frameLeft = page?.left ?? 0;
   const frameRight = page?.right ?? window.innerWidth;
-  const frameBottom = page?.bottom ?? window.innerHeight;
   const width = Math.min(WIDTH, Math.max(frameRight - frameLeft - EDGE * 2, MIN_WIDTH));
   const minLeft = frameLeft + EDGE;
   const left = Math.min(
@@ -207,29 +211,75 @@ export function SelectionToolbar({
   // selection box bottom from all three renderers; when it is missing (taps on
   // an existing highlight) we infer a small offset from the top.
   const anchorBottom = bottom ?? y + 20;
-  const fitsBelow = frameBottom - (anchorBottom + GAP + height + EDGE) >= 0;
-  const above = !fitsBelow;
-  let top = above ? y - height - GAP : anchorBottom + GAP;
-  if (page) {
-    const minTop = page.top + EDGE;
-    top = Math.min(Math.max(top, minTop), Math.max(page.bottom - height - EDGE, minTop));
-  }
+  // Which side the panel will land on, near enough to aim the entrance's 6px
+  // offset. The placement itself is measured — see the layout effect below.
+  const above = anchorBottom + GAP + ENTRANCE_HEIGHT > (page?.bottom ?? window.innerHeight) - EDGE;
+
+  // The panel's own top edge, in window coordinates.
+  //
+  // Measured after layout rather than computed from a constant. The height is
+  // content-dependent — the icon row wraps when the page is narrow, and 记笔记
+  // adds a field plus an action strip — and a constant that drifts from the
+  // truth does not merely look wrong: it is what the clamp below is measured
+  // against, so the panel hangs off the page's foot. It had already drifted
+  // twice (the constants said 84 and 144; the panel measured 91 and 186, the
+  // 42px gap arriving with the note field's action strip).
+  //
+  // Written straight to the DOM, not held in state: the value only exists
+  // after layout, and `setState` in an effect is both banned in this codebase
+  // and a round trip that would paint one frame at the wrong place. Same shape
+  // as `GlassDialog`'s `--dialog-centre`.
+  useLayoutEffect(() => {
+    const el = panel.current;
+    if (!el) return;
+    const frame = readingViewport();
+    const head = (frame?.top ?? 0) + EDGE;
+    const foot = (frame?.bottom ?? window.innerHeight) - EDGE;
+    const height = el.offsetHeight;
+    // Below the selection while the whole panel fits there, above it
+    // otherwise — anchored by whichever edge is nearer the words either way,
+    // so the panel grows away from the passage rather than across it. When the
+    // open field no longer fits below, the panel does cross to the other side;
+    // that keeps the passage visible, which is the thing being written about.
+    const wanted = anchorBottom + GAP + height <= foot ? anchorBottom + GAP : y - GAP - height;
+    el.style.top = `${Math.min(Math.max(wanted, head), Math.max(foot - height, head))}px`;
+  });
 
   const iconBtn =
     "press focus-visible:focus-ring text-text-1 hover:text-accent hover:bg-(--glass-btn) flex h-9 w-9 items-center justify-center rounded-xl";
 
   return (
     <motion.div
+      ref={panel}
       data-toolbar-rev="6"
       // Fixed like the old pill: the selection can sit inside a foliate
       // iframe's coordinate space, and the host window is the only frame both
       // rendering paths agree on.
       className="glass-solid shadow-panel fixed z-40 flex flex-col gap-1 rounded-2xl p-1.5"
-      style={{ left, top, width }}
+      // `top` is deliberately absent: it depends on the measured height and is
+      // written by the layout effect above.
+      style={{ left, width }}
       // One blur handler for the whole panel, because only the panel knows
       // whether focus left it: stepping between the toolbar's own controls
       // keeps the draft, and an Escape that closed the field itself must not
       // commit what it just rewound.
+      //
+      // A press on one of those controls must not be mistaken for leaving,
+      // and WebKit makes it look like leaving: it does not focus a button on
+      // mousedown, so focus falls to `body` and the field's focusout arrives
+      // with `relatedTarget: null` — which the guard below reads as "outside".
+      // The note then commits and the field unmounts before the click lands, so
+      // the button's own handler never runs. (Measured on the demo book:
+      // pressing 黄色 while writing left the toolbar open in Chromium and
+      // closed it in WebKit, the focusout carrying `BUTTON[黄色]` against
+      // `null`.) That is the engine this ships on — Tauri is WKWebView — and it
+      // made 清空 and 删除 dead buttons. Holding focus where it is makes the two
+      // agree, and costs nothing: `focus-visible` is for the keyboard, which
+      // arrives by Tab and never through here.
+      onMouseDown={(event) => {
+        if (event.target instanceof HTMLElement && event.target.closest("textarea")) return;
+        event.preventDefault();
+      }}
       onBlur={(event) => {
         if (event.currentTarget.contains(event.relatedTarget)) return;
         if (rewound.current) {
@@ -387,31 +437,126 @@ export function SelectionToolbar({
       </div>
 
       {/* The note row. Its own line under the ink row, so writing about the
-          passage never covers the controls that drew the highlight under it. */}
+          passage never covers the controls that drew the highlight under it.
+          The action strip under the field is what makes the note manageable
+          without leaving it: 记笔记 opened a field with no way to finish other
+          than clicking away, and nothing at all for clearing or dropping a
+          note that was already there. */}
       {draft !== null && (
-        <textarea
-          ref={field}
-          aria-label="笔记"
-          rows={2}
-          value={draft}
-          placeholder="写下你的想法"
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Escape") {
-              // Closes the field, keeps the toolbar: the reader is one step
-              // back, not out — hence the event never reaches the page's own
-              // Escape handling.
-              event.stopPropagation();
-              rewound.current = true;
-              event.currentTarget.blur();
-            } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-              event.currentTarget.blur();
-            }
-          }}
-          className="border-hairline text-text-1 placeholder:text-text-3 focus-visible:border-accent w-full resize-none rounded-lg border bg-(--glass-btn) px-2.5 py-2 text-[12.5px] leading-relaxed transition-colors focus-visible:outline-none"
-        />
+        <div className="flex flex-col gap-1">
+          <textarea
+            ref={field}
+            aria-label="笔记"
+            rows={2}
+            value={draft}
+            placeholder="写下你的想法"
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                // Closes the field, keeps the toolbar: the reader is one step
+                // back, not out — hence the event never reaches the page's own
+                // Escape handling.
+                event.stopPropagation();
+                rewound.current = true;
+                event.currentTarget.blur();
+              } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.currentTarget.blur();
+              }
+            }}
+            className="border-hairline text-text-1 placeholder:text-text-3 focus-visible:border-accent w-full resize-none rounded-lg border bg-(--glass-btn) px-2.5 py-2 text-[12.5px] leading-relaxed transition-colors focus-visible:outline-none"
+          />
+          {/* None of these closes the field by hand. A button inside the panel
+              does not trip the panel's own blur handler — that one only fires
+              when focus leaves the panel entirely — so 保存 commits through
+              the same path blur does, and the field unmounts because the
+              draft became null, not because anything tore it down. */}
+          <div className="flex items-center gap-0.5">
+            <NoteAction
+              label="保存笔记"
+              text="保存"
+              // Nothing to write when the field still says what is saved.
+              disabled={draft.trim() === (annotation?.note ?? "").trim()}
+              onClick={commitNote}
+            >
+              <Check size={14} />
+            </NoteAction>
+            <NoteAction
+              label="清空输入"
+              text="清空"
+              disabled={draft === ""}
+              // Only the field: the saved note is untouched until 保存 or
+              // leaving the panel commits the empty value.
+              onClick={() => setDraft("")}
+            >
+              <Eraser size={14} />
+            </NoteAction>
+            {annotation?.note != null && (
+              <NoteAction
+                label="删除笔记"
+                text="删除"
+                danger
+                onClick={() => {
+                  // Drops the note and keeps the highlight. The row above
+                  // carries 取消标注, which is the one that removes both.
+                  onNote(null);
+                  setDraft(null);
+                }}
+              >
+                <Trash size={14} />
+              </NoteAction>
+            )}
+            <span className="text-text-3 ml-auto pr-1 text-[11px]">⌘↵ 保存 · Esc 取消</span>
+          </div>
+        </div>
       )}
     </motion.div>
+  );
+}
+
+/**
+ * One button on the note field's action strip.
+ *
+ * `label` names the action for assistive tech and the tooltip; `text` is the
+ * short form on the button. They are separate because the names have to
+ * disambiguate — 删除笔记 against the row's 取消标注 — while the strip only has
+ * room for the verb.
+ *
+ * Module scope rather than declared in the render: a component defined inside
+ * another gets a fresh identity every render, which both oxlint and the React
+ * Compiler reject.
+ */
+function NoteAction({
+  label,
+  text,
+  disabled,
+  danger,
+  onClick,
+  children,
+}: {
+  label: string;
+  text: string;
+  disabled?: boolean;
+  danger?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={cn(
+        "press focus-visible:focus-ring flex h-7 items-center gap-1 rounded-lg px-2 text-[11.5px] transition-colors",
+        "text-text-2 hover:text-text-1 hover:bg-(--glass-btn)",
+        danger && "hover:text-red-400",
+        "disabled:pointer-events-none disabled:opacity-40",
+      )}
+    >
+      {children}
+      <span>{text}</span>
+    </button>
   );
 }
 

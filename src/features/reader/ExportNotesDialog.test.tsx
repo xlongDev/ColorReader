@@ -16,7 +16,8 @@ beforeEach(() => {
 });
 
 type Overrides = Partial<{
-  title: string;
+  subject: string;
+  name: string;
   highlights: number;
   notes: number;
   busy: boolean;
@@ -28,7 +29,8 @@ function setup(overrides: Overrides = {}) {
   const onCancel = vi.fn();
   render(
     <ExportNotesDialog
-      title="三体"
+      subject="《三体》"
+      name="三体"
       highlights={3}
       notes={1}
       onCancel={onCancel}
@@ -75,7 +77,7 @@ describe("ExportNotesDialog", () => {
   it("keeps a title that would break a filename out of the path", async () => {
     const user = userEvent.setup();
     save.mockResolvedValue(null);
-    setup({ title: "三体/黑暗森林:2" });
+    setup({ name: "三体/黑暗森林:2" });
 
     await user.click(confirm());
 

@@ -1,11 +1,25 @@
-import { useCallback, useMemo, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useNavigate } from "react-router-dom";
-import { motion, useReducedMotion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   ArrowSquareOut,
   BookOpen,
+  Check,
+  Export,
   MagnifyingGlass,
   Notebook,
+  NotePencil,
+  SquaresFour,
   Trash,
   X,
 } from "@phosphor-icons/react";
@@ -16,15 +30,21 @@ import { useBooks } from "@/hooks/useLibrary";
 import {
   useAnnotationsByBook,
   useDeleteAnnotation,
+  useDeleteAnnotations,
+  useExportNotesSelection,
   useSetAnnotationNote,
 } from "@/hooks/useAnnotations";
-import { AnnotationNote } from "@/features/reader/AnnotationNote";
+import { GlassButton } from "@/components/glass/button";
+import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
+import { NoteCell } from "@/features/reader/AnnotationNote";
 import { EmptyState } from "@/components/common/EmptyState";
 import { authorLine } from "@/features/library/format";
 import {
+  exportPayload,
   filterNotes,
   groupByBook,
   inkColor,
+  keepEntries,
   tally,
   unitLabel,
   type BookNotes,
@@ -56,6 +76,17 @@ const FILTERS = [
 
 type FilterValue = (typeof FILTERS)[number]["value"];
 
+/** Reaches for the native save dialog, so it is kept out of this route's own
+ *  chunk — the same split the reader makes for the same reason. */
+const ExportNotesDialog = lazy(() =>
+  import("@/features/reader/ExportNotesDialog").then((module) => ({
+    default: module.ExportNotesDialog,
+  })),
+);
+
+/** Which set an open export dialog is about. `null` means there is none. */
+type ExportScope = "shown" | "selection";
+
 export function NotesPage() {
   const m = useMotion();
   const navigate = useNavigate();
@@ -67,6 +98,20 @@ export function NotesPage() {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<FilterValue>("all");
 
+  /** Batch-manage mode: rows toggle selection instead of opening. */
+  const [managing, setManaging] = useState(false);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [exporting, setExporting] = useState<ExportScope | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+
+  /** The page root, so the batch bar can be centred on the pane rather than on
+   *  the window (see the placement effect below). */
+  const pageRef = useRef<HTMLDivElement>(null);
+  const batchBarRef = useRef<HTMLDivElement>(null);
+
+  const removeMany = useDeleteAnnotations();
+  const exportSelection = useExportNotesSelection();
+
   // Memoised on the query's own data rather than on `?? []`, which would be a
   // fresh array every render and re-group the whole shelf on each keystroke.
   const shelf = useMemo(() => books.data ?? [], [books.data]);
@@ -76,6 +121,18 @@ export function NotesPage() {
     [everything, query, filter],
   );
 
+  /**
+   * What the selection actually covers: the checked rows that are still on
+   * screen.
+   *
+   * Derived rather than stored, so narrowing the search narrows the selection
+   * instead of leaving the bar counting rows the reader cannot see — and
+   * widening brings them back, because `selected` still remembers them. The
+   * count, the delete and the export all read this, which is what keeps the
+   * bar from promising more than it will do.
+   */
+  const picked = useMemo(() => keepEntries(shown, selected), [shown, selected]);
+
   // Both halves count. Until the shelf answers there are no ids to ask about,
   // so the annotation queries have not started and report themselves settled —
   // reading only their flag would flash "还没有标注" over a library that has
@@ -84,7 +141,12 @@ export function NotesPage() {
 
   const total = tally(everything);
   const visible = tally(shown);
+  const pickedCount = tally(picked).highlights;
   const narrowed = query.trim() !== "" || filter !== "all";
+
+  /** The set an open dialog is about — the selection, or the whole screen. */
+  const target = exporting === "selection" ? picked : shown;
+  const targetCount = tally(target);
 
   const open = useCallback(
     (entry: NoteEntry) => {
@@ -93,8 +155,99 @@ export function NotesPage() {
     [navigate],
   );
 
+  const exitManaging = useCallback(() => {
+    setManaging(false);
+    setSelected(new Set());
+    setConfirmDelete(false);
+  }, []);
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const shownIds = useMemo(
+    () => shown.flatMap((group) => group.entries.map((entry) => entry.annotation.id)),
+    [shown],
+  );
+  const allSelected = visible.highlights > 0 && pickedCount === visible.highlights;
+  const toggleSelectAll = () => setSelected(allSelected ? new Set() : new Set(shownIds));
+
+  const confirmBatchDelete = () => {
+    removeMany.mutate([...selected], {
+      onSuccess: () => {
+        setSelected(new Set());
+        setConfirmDelete(false);
+      },
+    });
+  };
+
+  /**
+   * Escape leaves batch-manage mode.
+   *
+   * A key handler rather than a click target, for the reason the shelf learned
+   * the hard way: the rows are the mode's own selection surface, so any layer
+   * that catches a click "outside" catches clicks on the rows too — a selection
+   * mode whose selection surface is behind a dismiss layer is not a mode. There
+   * is deliberately no scrim here for the same reason.
+   *
+   * Suppressed while a dialog is up, so Escape there closes the dialog rather
+   * than the mode behind it.
+   */
+  useEffect(() => {
+    if (!managing) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || confirmDelete || exporting !== null) return;
+      exitManaging();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [managing, confirmDelete, exporting, exitManaging]);
+
+  /**
+   * Where the batch bar belongs, horizontally.
+   *
+   * The bar is `position: fixed` in the shell's overlay host, and that host is
+   * the window — so a plain `left: 50%` is the *window's* middle, while the bar
+   * acts on the pane the sidebar pushes right of it (measured on the shelf at
+   * 1440 with the rail open: bar centre 720, pane centre 850).
+   *
+   * Written as the pane's *gutters* — padding on a full-width wrapper — rather
+   * than as a `left` on the bar itself, and that is not a style preference: an
+   * absolutely positioned box with a `left` and no `right` is shrink-to-fit
+   * against the space between that `left` and the viewport edge, so a bar told
+   * to sit at the pane's centre is silently capped at (viewport − centre) wide
+   * and its labels wrap to one character per line.
+   *
+   * Straight onto the element rather than into state: the sidebar animates its
+   * own width over ~340ms, so this has to track the spring frame by frame.
+   */
+  useLayoutEffect(() => {
+    if (!managing) return;
+    const pane = pageRef.current;
+    const bar = batchBarRef.current;
+    if (!pane || !bar) return;
+    const place = () => {
+      const box = pane.getBoundingClientRect();
+      bar.style.paddingLeft = `${box.left}px`;
+      bar.style.paddingRight = `${window.innerWidth - box.right}px`;
+    };
+    place();
+    const observer = new ResizeObserver(place);
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, [managing]);
+
   return (
-    <div className="flex h-full flex-col">
+    // `data-notes-page` is what the batch bar's placement effect measures and
+    // what the e2e measures with it, so the assertion and the implementation
+    // cannot drift apart — the same contract `[data-shelf-scroller]` carries
+    // for the shelf's bar.
+    <div ref={pageRef} data-notes-page className="flex h-full flex-col">
       <header className="px-8 pt-8 pb-6">
         <h1 className="text-text-1 text-2xl font-semibold tracking-tight">笔记</h1>
         <p className="text-text-2 mt-1.5 text-sm leading-relaxed">
@@ -117,6 +270,9 @@ export function NotesPage() {
             total={total}
             visible={visible}
             narrowed={narrowed}
+            managing={managing}
+            onToggleManaging={() => (managing ? exitManaging() : setManaging(true))}
+            onExport={() => setExporting("shown")}
           />
 
           <div className="min-h-0 flex-1 overflow-y-auto">
@@ -136,13 +292,145 @@ export function NotesPage() {
             ) : (
               <div className="pb-4">
                 {shown.map((group) => (
-                  <BookSection key={group.book.id} group={group} onOpen={open} />
+                  <BookSection
+                    key={group.book.id}
+                    group={group}
+                    onOpen={open}
+                    managing={managing}
+                    selected={selected}
+                    onToggleSelect={toggleSelect}
+                  />
                 ))}
               </div>
             )}
           </div>
         </motion.div>
       </div>
+
+      <OverlayPortal>
+        {/* No scrim behind the bar — see the Escape handler above for what one
+            cost the shelf. The wrapper is always mounted, with the bar itself
+            inside `AnimatePresence`: the placement effect writes the pane's
+            gutters onto the wrapper as padding, and a `fixed inset-x-0` box has
+            no width ceiling for those gutters to run into. Empty it is
+            zero-height and `pointer-events-none`, so it costs nothing between
+            uses. */}
+        <div
+          ref={batchBarRef}
+          className="pointer-events-none fixed inset-x-0 bottom-6 z-40 flex justify-center"
+        >
+          <AnimatePresence>
+            {managing && (
+              <motion.div
+                initial={{ opacity: 0, y: m.reduce ? 0 : 16, scale: m.reduce ? 1 : 0.96 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: m.reduce ? 0 : 16, scale: m.reduce ? 1 : 0.96 }}
+                transition={m.panel}
+                // Centred by the wrapper's flex, not by a `-translate-x-1/2`:
+                // motion writes `transform` for the spring, and a half-width
+                // nudge is only safe in a property it does not touch.
+                className="glass-2 shadow-panel pointer-events-auto flex items-center gap-1.5 rounded-2xl p-2 pl-4 whitespace-nowrap"
+                data-batch-bar
+              >
+                <span className="text-text-2 mr-1 text-sm whitespace-nowrap">
+                  已选{" "}
+                  <motion.span
+                    key={pickedCount}
+                    initial={{ y: 8, opacity: 0 }}
+                    animate={{ y: 0, opacity: 1 }}
+                    transition={SPRING.tap}
+                    className="text-text-1 inline-block font-semibold tabular-nums"
+                  >
+                    {pickedCount}
+                  </motion.span>{" "}
+                  条
+                </span>
+                <GlassButton size="sm" variant="subtle" onClick={toggleSelectAll}>
+                  {allSelected ? "取消全选" : "全选"}
+                </GlassButton>
+                <GlassButton
+                  size="sm"
+                  variant="subtle"
+                  disabled={pickedCount === 0}
+                  onClick={() => setExporting("selection")}
+                >
+                  <Export size={13} /> 导出所选
+                </GlassButton>
+                <GlassButton
+                  size="sm"
+                  variant="ghost"
+                  className="text-danger"
+                  disabled={pickedCount === 0 || removeMany.isPending}
+                  onClick={() => setConfirmDelete(true)}
+                >
+                  删除
+                </GlassButton>
+                <GlassButton size="sm" variant="primary" onClick={exitManaging}>
+                  完成
+                </GlassButton>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </OverlayPortal>
+
+      <GlassDialog
+        open={confirmDelete}
+        onOpenChange={(next) => {
+          if (!next) setConfirmDelete(false);
+        }}
+        title={`删除选中的 ${pickedCount} 条标注？`}
+        description="这些标注会从它们所在的书里一并消失，写在旁边的笔记也一样。此操作无法撤销。"
+        widthClass="w-[min(92vw,420px)]"
+      >
+        <div className="flex justify-end gap-2">
+          <GlassButton
+            variant="subtle"
+            onClick={() => setConfirmDelete(false)}
+            disabled={removeMany.isPending}
+          >
+            取消
+          </GlassButton>
+          <GlassButton
+            variant="ghost"
+            className="text-danger"
+            onClick={confirmBatchDelete}
+            disabled={removeMany.isPending}
+          >
+            删除
+          </GlassButton>
+        </div>
+      </GlassDialog>
+
+      {/* Exporting happens over the page, not instead of it: the list stays
+          where it was, and closing the dialog puts the reader back on the rows
+          they were reading from. */}
+      {exporting !== null && (
+        <Suspense fallback={null}>
+          <ExportNotesDialog
+            subject={
+              target.length === 1
+                ? `《${target[0]?.book.title ?? ""}》`
+                : `这 ${target.length} 本书`
+            }
+            name={target.length === 1 ? (target[0]?.book.title ?? "") : "笔记"}
+            highlights={targetCount.highlights}
+            notes={targetCount.notes}
+            busy={exportSelection.isPending}
+            error={exportSelection.error ? String(exportSelection.error) : null}
+            onCancel={() => {
+              setExporting(null);
+              exportSelection.reset();
+            }}
+            onConfirm={(path) =>
+              exportSelection.mutate(
+                { ...exportPayload(target), path },
+                { onSuccess: () => setExporting(null) },
+              )
+            }
+          />
+        </Suspense>
+      )}
     </div>
   );
 }
@@ -155,6 +443,9 @@ function Toolbar({
   total,
   visible,
   narrowed,
+  managing,
+  onToggleManaging,
+  onExport,
 }: {
   query: string;
   onQuery: (value: string) => void;
@@ -163,6 +454,9 @@ function Toolbar({
   total: { highlights: number; notes: number };
   visible: { highlights: number; notes: number };
   narrowed: boolean;
+  managing: boolean;
+  onToggleManaging: () => void;
+  onExport: () => void;
 }) {
   const reduce = useReducedMotion();
   return (
@@ -229,6 +523,29 @@ function Toolbar({
           : `${total.highlights} 条标注 · ${total.notes} 条笔记`}
       </p>
 
+      {/* Exporting the screen is the reader's plain reading of "导出" — what is
+          on it, filtered and all. Exporting a *selection* is the batch bar's
+          job, and says so. */}
+      <GlassButton
+        size="sm"
+        variant="subtle"
+        disabled={visible.highlights === 0}
+        onClick={onExport}
+      >
+        <Export size={14} /> 导出
+      </GlassButton>
+      {/* Disabled with nothing to manage: entering a selection mode over an
+          empty list is a mode with no way to leave except the bar's 完成, which
+          reads as a dead end. */}
+      <GlassButton
+        size="sm"
+        variant={managing ? "primary" : "subtle"}
+        disabled={!managing && visible.highlights === 0}
+        onClick={onToggleManaging}
+      >
+        <SquaresFour size={14} /> {managing ? "退出管理" : "批量管理"}
+      </GlassButton>
+
       {/* A resident live region carrying one sentence, rather than a region
           inserted with its text already in it: screen readers announce changes
           to a region they already know about far more reliably than they
@@ -243,7 +560,19 @@ function Toolbar({
 }
 
 /** One book's highlights, under a header that names the book. */
-function BookSection({ group, onOpen }: { group: BookNotes; onOpen: (entry: NoteEntry) => void }) {
+function BookSection({
+  group,
+  onOpen,
+  managing,
+  selected,
+  onToggleSelect,
+}: {
+  group: BookNotes;
+  onOpen: (entry: NoteEntry) => void;
+  managing: boolean;
+  selected: ReadonlySet<string>;
+  onToggleSelect: (id: string) => void;
+}) {
   const { book, entries } = group;
   return (
     <section className="px-4 pt-4 first:pt-3">
@@ -268,7 +597,14 @@ function BookSection({ group, onOpen }: { group: BookNotes; onOpen: (entry: Note
 
       <ul className="space-y-0.5">
         {entries.map((entry) => (
-          <NoteRow key={entry.annotation.id} entry={entry} onOpen={onOpen} />
+          <NoteRow
+            key={entry.annotation.id}
+            entry={entry}
+            onOpen={onOpen}
+            managing={managing}
+            selected={selected.has(entry.annotation.id)}
+            onToggleSelect={onToggleSelect}
+          />
         ))}
       </ul>
     </section>
@@ -281,66 +617,167 @@ function BookSection({ group, onOpen }: { group: BookNotes; onOpen: (entry: Note
  * The row owns its own mutations rather than taking them as props, because the
  * cache patch a note write performs is keyed by book — a single shared mutation
  * would have to be re-pointed at a different book for every row.
+ *
+ * In manage mode the row becomes one big target: an overlay button carries the
+ * gesture and takes its name from the passage, and the content underneath drops
+ * pointer events so a click anywhere on the row — passage, meta line or note —
+ * lands on it. The passage stops being a button in that mode rather than
+ * becoming a second one, because a focusable control buried under an overlay is
+ * reachable by Tab and clickable by nobody.
  */
-function NoteRow({ entry, onOpen }: { entry: NoteEntry; onOpen: (entry: NoteEntry) => void }) {
+function NoteRow({
+  entry,
+  onOpen,
+  managing,
+  selected,
+  onToggleSelect,
+}: {
+  entry: NoteEntry;
+  onOpen: (entry: NoteEntry) => void;
+  managing: boolean;
+  selected: boolean;
+  onToggleSelect: (id: string) => void;
+}) {
   const { annotation, book } = entry;
   const setNote = useSetAnnotationNote(book.id);
   const remove = useDeleteAnnotation(book.id);
   const busy = setNote.isPending || remove.isPending;
+  const [editing, setEditing] = useState(false);
+  /** Names the overlay button after the passage it stands for: an empty overlay
+   *  has no accessible name of its own, and the passage is the one thing that
+   *  tells this row apart from its neighbours. */
+  const passageId = useId();
 
   return (
-    <li className="hover:bg-surface-1 flex gap-2.5 rounded-lg px-2 py-2.5 transition-colors">
+    <li
+      className={cn(
+        "relative flex gap-2.5 rounded-lg px-2 py-2.5 transition-colors",
+        selected ? "bg-surface-2" : "hover:bg-surface-1",
+      )}
+    >
+      {managing && (
+        <button
+          type="button"
+          aria-pressed={selected}
+          aria-labelledby={passageId}
+          onClick={() => onToggleSelect(annotation.id)}
+          className="focus-visible:focus-ring absolute inset-0 z-10 rounded-lg"
+        />
+      )}
+
       {/* The ink the passage carries in the book, so a row is recognisable as
           the highlight it is rather than as a generic quotation. */}
       <span
         aria-hidden
-        className="w-[3px] shrink-0 self-stretch rounded-full"
+        className="pointer-events-none w-[3px] shrink-0 self-stretch rounded-full"
         style={{ background: inkColor(annotation) }}
       />
-      <div className="min-w-0 flex-1">
-        <button
-          type="button"
-          onClick={() => onOpen(entry)}
-          title="在书中打开"
-          className="focus-visible:focus-ring text-text-1 block w-full rounded-md text-left text-[13px] leading-relaxed"
-        >
-          {annotation.text}
-        </button>
+      <div className={cn("min-w-0 flex-1", managing && "pointer-events-none")}>
+        {managing ? (
+          <p id={passageId} className="text-text-1 text-[13px] leading-relaxed">
+            {annotation.text}
+          </p>
+        ) : (
+          <button
+            type="button"
+            onClick={() => onOpen(entry)}
+            title="在书中打开"
+            className="focus-visible:focus-ring text-text-1 block w-full rounded-md text-left text-[13px] leading-relaxed"
+          >
+            {annotation.text}
+          </button>
+        )}
 
         <div className="mt-1 flex items-center gap-1">
           <p className="text-text-3 flex-1 text-[11px]">
             第 {annotation.chapterIdx + 1} {unitLabel(book.format)}
           </p>
-          <button
-            type="button"
-            aria-label="在书中打开"
-            title="在书中打开"
-            onClick={() => onOpen(entry)}
-            className="focus-visible:focus-ring text-text-3 hover:text-text-1 rounded p-1 transition-colors"
-          >
-            <ArrowSquareOut size={13} />
-          </button>
-          <button
-            type="button"
-            aria-label="删除标注"
-            title="删除标注"
-            disabled={busy}
-            onClick={() => remove.mutate(annotation.id)}
-            className="focus-visible:focus-ring text-text-3 hover:text-danger rounded p-1 transition-colors disabled:opacity-50"
-          >
-            <Trash size={13} />
-          </button>
+          {managing ? (
+            <CheckMark selected={selected} />
+          ) : (
+            <>
+              {/* An explicit way into the note. Clicking the note's own text has
+                  always opened the editor, but nothing said so — a pencil next
+                  to the other two row actions is the affordance the text could
+                  not be. Disabled while the field is open, so it does not read
+                  as a second, competing action. */}
+              <button
+                type="button"
+                aria-label="编辑笔记"
+                title="编辑笔记"
+                disabled={busy || editing}
+                onClick={() => setEditing(true)}
+                className="focus-visible:focus-ring text-text-3 hover:text-text-1 rounded p-1 transition-colors disabled:opacity-40"
+              >
+                <NotePencil size={13} />
+              </button>
+              <button
+                type="button"
+                aria-label="在书中打开"
+                title="在书中打开"
+                onClick={() => onOpen(entry)}
+                className="focus-visible:focus-ring text-text-3 hover:text-text-1 rounded p-1 transition-colors"
+              >
+                <ArrowSquareOut size={13} />
+              </button>
+              <button
+                type="button"
+                aria-label="删除标注"
+                title="删除标注"
+                disabled={busy}
+                onClick={() => remove.mutate(annotation.id)}
+                className="focus-visible:focus-ring text-text-3 hover:text-danger rounded p-1 transition-colors disabled:opacity-50"
+              >
+                <Trash size={13} />
+              </button>
+            </>
+          )}
         </div>
 
-        <div className="mt-1.5">
-          <AnnotationNote
-            note={annotation.note}
-            disabled={busy}
-            onSave={(note) => setNote.mutate({ id: annotation.id, note })}
-          />
-        </div>
+        {/* In manage mode the note is read-only prose rather than a cell: the
+            reader still needs it to judge the row, but there is nothing to edit
+            on the way to a delete. */}
+        {managing ? (
+          annotation.note !== null && (
+            <p className="border-hairline text-text-2 mt-1.5 border-l pl-2.5 text-[12.5px] leading-relaxed whitespace-pre-wrap">
+              {annotation.note}
+            </p>
+          )
+        ) : (
+          <div className="mt-1.5">
+            <NoteCell
+              note={annotation.note}
+              disabled={busy}
+              editing={editing}
+              onEditingChange={setEditing}
+              onSave={(note) => setNote.mutate({ id: annotation.id, note })}
+            />
+          </div>
+        )}
       </div>
     </li>
+  );
+}
+
+/** The selected state of a row in manage mode — the same mark the shelf's tiles
+ *  wear, so the two selection modes read as one gesture. */
+function CheckMark({ selected }: { selected: boolean }) {
+  return (
+    <span
+      className={cn(
+        "flex h-5 w-5 shrink-0 items-center justify-center rounded-full border transition-colors",
+        selected ? "border-accent bg-accent text-on-accent" : "border-hairline",
+      )}
+    >
+      <motion.span
+        initial={false}
+        animate={{ scale: selected ? 1 : 0.4, opacity: selected ? 1 : 0 }}
+        transition={SPRING.tap}
+        className="flex"
+      >
+        <Check size={12} weight="bold" />
+      </motion.span>
+    </span>
   );
 }
 

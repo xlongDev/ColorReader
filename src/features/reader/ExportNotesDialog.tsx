@@ -26,8 +26,12 @@ const FORMATS = [
 type Format = (typeof FORMATS)[number]["key"];
 
 interface ExportNotesDialogProps {
-  /** Title of the book; also seeds the suggested filename. */
-  title: string;
+  /** What the dialog talks about: `《三体》` for one book, `这 3 本书` for a
+   *  cross-book export. Kept as the caller's phrase rather than derived from a
+   *  count, because only the caller knows what the set is. */
+  subject: string;
+  /** Stem for the suggested filename, before the extension. */
+  name: string;
   /** How much there is to write, so the reader knows before choosing a path. */
   highlights: number;
   /** Of those, how many carry a note. */
@@ -40,14 +44,19 @@ interface ExportNotesDialogProps {
 }
 
 /**
- * Exports one book's highlights and notes as a file anyone can read.
+ * Exports highlights and notes as a file anyone can read.
  *
  * The shape is picked here rather than by the save dialog's filter: switching
  * a native panel's format dropdown is not something a reader should have to
  * discover, and the extension the file lands with is the one they picked here.
+ *
+ * One book or several is the caller's business — it changes the sentence and
+ * the suggested filename, not the dialog. The backend writes both through the
+ * same per-highlight blocks.
  */
 export function ExportNotesDialog({
-  title,
+  subject,
+  name,
   highlights,
   notes,
   busy,
@@ -65,7 +74,7 @@ export function ExportNotesDialog({
   const choose = async () => {
     const path = await choosePath({
       title: "导出标注与笔记",
-      defaultPath: `${filename(title, "标注与笔记")}.${format}`,
+      defaultPath: `${filename(name, "标注与笔记")}.${format}`,
       filters: [{ name: format === "md" ? "Markdown" : "CSV 表格", extensions: [format] }],
     });
     if (path === null) return;
@@ -86,8 +95,8 @@ export function ExportNotesDialog({
       }
       description={
         empty
-          ? `《${title}》还没有标注，先划一句再回来。`
-          : `《${title}》有 ${highlights} 条标注${notes > 0 ? `，其中 ${notes} 条写了笔记` : ""}。导出的文件不依赖这个应用，随时可以打开。`
+          ? `${subject}还没有标注，先划一句再回来。`
+          : `${subject}有 ${highlights} 条标注${notes > 0 ? `，其中 ${notes} 条写了笔记` : ""}。导出的文件不依赖这个应用，随时可以打开。`
       }
       widthClass="w-[min(92vw,440px)]"
     >

@@ -1,6 +1,7 @@
+import { useState } from "react";
 import { DownloadSimple, Trash } from "@phosphor-icons/react";
 
-import { AnnotationNote } from "@/features/reader/AnnotationNote";
+import { NoteCell } from "@/features/reader/AnnotationNote";
 import type { Annotation } from "@/types/ipc";
 
 export function AnnotationList({
@@ -51,50 +52,81 @@ export function AnnotationList({
         ) : (
           <ul className="space-y-3">
             {annotations.map((annotation) => (
-              <li
+              <AnnotationRow
                 key={annotation.id}
-                className="border-hairline border-b pb-3 last:border-0 last:pb-0"
-              >
-                <div className="flex items-start justify-between gap-2">
-                  {/* foliate sections are the container's own, so the index this
-                      list groups by is a section, not an imported chapter. */}
-                  <p className="text-text-3 text-xs">
-                    第 {annotation.chapterIdx + 1}
-                    {onJump ? " 节" : " 章"}
-                  </p>
-                  <button
-                    type="button"
-                    aria-label="删除标注"
-                    disabled={busy}
-                    onClick={() => onDelete(annotation.id)}
-                    className="focus-visible:focus-ring text-text-3 hover:text-danger transition-colors disabled:opacity-50"
-                  >
-                    <Trash size={14} />
-                  </button>
-                </div>
-                {onJump ? (
-                  <button
-                    type="button"
-                    onClick={() => onJump(annotation)}
-                    className="focus-visible:focus-ring hover:bg-surface-1 -mx-1 mt-1 block w-full rounded-md px-1 py-0.5 text-left transition-colors"
-                  >
-                    <p className="text-text-1 text-[13px] leading-relaxed">{annotation.text}</p>
-                  </button>
-                ) : (
-                  <p className="text-text-1 mt-1 text-[13px] leading-relaxed">{annotation.text}</p>
-                )}
-                <div className="mt-1.5">
-                  <AnnotationNote
-                    note={annotation.note}
-                    disabled={busy}
-                    onSave={(note) => onNote(annotation.id, note)}
-                  />
-                </div>
-              </li>
+                annotation={annotation}
+                busy={busy}
+                onDelete={onDelete}
+                onNote={onNote}
+                onJump={onJump}
+              />
             ))}
           </ul>
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * One highlight. Its own component so it can hold the one piece of state the
+ * note needs: whether the field is open. `NoteCell` is controlled, so the flag
+ * has to live somewhere, and a row is the smallest thing that can own it.
+ */
+function AnnotationRow({
+  annotation,
+  busy,
+  onDelete,
+  onNote,
+  onJump,
+}: {
+  annotation: Annotation;
+  busy: boolean;
+  onDelete: (id: string) => void;
+  onNote: (id: string, note: string | null) => void;
+  onJump?: (annotation: Annotation) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+
+  return (
+    <li className="border-hairline border-b pb-3 last:border-0 last:pb-0">
+      <div className="flex items-start justify-between gap-2">
+        {/* foliate sections are the container's own, so the index this
+            list groups by is a section, not an imported chapter. */}
+        <p className="text-text-3 text-xs">
+          第 {annotation.chapterIdx + 1}
+          {onJump ? " 节" : " 章"}
+        </p>
+        <button
+          type="button"
+          aria-label="删除标注"
+          disabled={busy}
+          onClick={() => onDelete(annotation.id)}
+          className="focus-visible:focus-ring text-text-3 hover:text-danger transition-colors disabled:opacity-50"
+        >
+          <Trash size={14} />
+        </button>
+      </div>
+      {onJump ? (
+        <button
+          type="button"
+          onClick={() => onJump(annotation)}
+          className="focus-visible:focus-ring hover:bg-surface-1 -mx-1 mt-1 block w-full rounded-md px-1 py-0.5 text-left transition-colors"
+        >
+          <p className="text-text-1 text-[13px] leading-relaxed">{annotation.text}</p>
+        </button>
+      ) : (
+        <p className="text-text-1 mt-1 text-[13px] leading-relaxed">{annotation.text}</p>
+      )}
+      <div className="mt-1.5">
+        <NoteCell
+          note={annotation.note}
+          disabled={busy}
+          editing={editing}
+          onEditingChange={setEditing}
+          onSave={(note) => onNote(annotation.id, note)}
+        />
+      </div>
+    </li>
   );
 }

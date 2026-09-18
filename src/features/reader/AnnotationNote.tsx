@@ -4,70 +4,96 @@ import { NotePencil } from "@phosphor-icons/react";
 /**
  * The reader's own note hanging off a highlight.
  *
- * Two states and no mode flag to keep in sync: no draft means "showing", a
- * draft means "editing". Committing compares against the saved note, so
- * opening one and closing it again costs no round trip, and emptying the field
- * clears the note instead of storing an empty string (the backend folds blanks
- * to `NULL`, so "has a note" stays a single test).
+ * Display only. The field is `NoteEditor`, mounted by whoever decided that a
+ * note is being written — which is what lets a row carry its own 编辑 button.
+ * While the open/closed state lived in here, nothing outside could open it and
+ * the only way in was clicking the note text itself, which is not something a
+ * reader can be expected to discover.
  */
 export function AnnotationNote({
   note,
   disabled,
-  onSave,
+  onEdit,
 }: {
   /** The saved note, or `null` when there is none. */
   note: string | null;
   /** True while an edit is already in flight for this list. */
   disabled?: boolean;
-  /** Receives the trimmed note, or `null` to clear it. */
-  onSave: (note: string | null) => void;
+  /** Opens the editor. */
+  onEdit: () => void;
 }) {
-  const [draft, setDraft] = useState<string | null>(null);
-  // Escape rewinds and closes; this keeps the blur that closing triggers from
-  // committing the draft it just threw away.
-  const rewound = useRef(false);
-  const field = useRef<HTMLTextAreaElement>(null);
-  const editing = draft !== null;
-
-  // Focus the field as it appears. The reader asked for it by clicking, so the
-  // caret should already be in it — but not through `autoFocus`, which the a11y
-  // rule bans for the page-load case it cannot tell this apart from.
-  useEffect(() => {
-    if (editing) field.current?.focus();
-  }, [editing]);
-
-  if (draft === null) {
-    return note === null ? (
+  if (note === null) {
+    return (
       <button
         type="button"
         disabled={disabled}
-        onClick={() => setDraft("")}
+        onClick={onEdit}
         className="focus-visible:focus-ring text-text-3 hover:text-text-1 inline-flex items-center gap-1.5 text-[12px] transition-colors disabled:opacity-50"
       >
         <NotePencil size={12} />
         添加笔记
       </button>
-    ) : (
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setDraft(note)}
-        title="点击编辑笔记"
-        className="focus-visible:focus-ring border-hairline text-text-2 hover:text-text-1 block w-full border-l pl-2.5 text-left text-[12.5px] leading-relaxed whitespace-pre-wrap transition-colors disabled:opacity-50"
-      >
-        {note}
-      </button>
     );
   }
 
-  /**
-   * The one commit path: losing focus and ⌘/Ctrl+Enter both end up here. Esc
-   * deliberately does not — it closes through `rewound` above.
-   */
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onEdit}
+      title="点击编辑笔记"
+      className="focus-visible:focus-ring border-hairline text-text-2 hover:text-text-1 block w-full border-l pl-2.5 text-left text-[12.5px] leading-relaxed whitespace-pre-wrap transition-colors disabled:opacity-50"
+    >
+      {note}
+    </button>
+  );
+}
+
+/**
+ * The note field, mounted only while a note is being written.
+ *
+ * The draft is owned here and starts from `value`, which is why the parent
+ * mounts this instead of flipping a prop on something already on screen: a
+ * mount is the one moment a component may read a prop into state, and a fresh
+ * mount is exactly what "start writing" means. Nothing has to be kept in sync
+ * afterwards, because nothing else can change the draft.
+ *
+ * Committing compares against the saved note, so opening one and closing it
+ * again costs no round trip, and emptying the field clears the note instead of
+ * storing an empty string (the backend folds blanks to `NULL`, so "has a note"
+ * stays a single test).
+ */
+export function NoteEditor({
+  value,
+  disabled,
+  onSave,
+  onCancel,
+}: {
+  /** The saved note, or `null` when there is none. */
+  value: string | null;
+  disabled?: boolean;
+  /** Receives the trimmed note — `null` to clear — and only when it changed. */
+  onSave: (note: string | null) => void;
+  /** Closes without writing: Escape, or a draft that still says what is saved. */
+  onCancel: () => void;
+}) {
+  const [draft, setDraft] = useState(value ?? "");
+  // Escape rewinds and closes; this keeps the blur that closing triggers from
+  // committing the draft it just threw away.
+  const rewound = useRef(false);
+  const field = useRef<HTMLTextAreaElement>(null);
+
+  // Focus the field as it appears. The reader asked for it by clicking, so the
+  // caret should already be in it — but not through `autoFocus`, which the a11y
+  // rule bans for the page-load case it cannot tell this apart from.
+  useEffect(() => {
+    field.current?.focus();
+  }, []);
+
   const commit = () => {
     const next = draft.trim();
-    setDraft(null);
-    if (next !== (note ?? "").trim()) onSave(next === "" ? null : next);
+    if (next === (value ?? "").trim()) onCancel();
+    else onSave(next === "" ? null : next);
   };
 
   return (
@@ -82,7 +108,7 @@ export function AnnotationNote({
       onBlur={() => {
         if (rewound.current) {
           rewound.current = false;
-          setDraft(null);
+          onCancel();
           return;
         }
         commit();
@@ -96,6 +122,44 @@ export function AnnotationNote({
         }
       }}
       className="border-hairline bg-surface-1 text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 w-full resize-none rounded-md border px-2.5 py-2 text-[12.5px] leading-relaxed transition-colors focus-visible:outline-none"
+    />
+  );
+}
+
+/**
+ * The two halves, wired together: one row's note, in whichever state it is in.
+ *
+ * Controlled rather than holding the flag itself, because a row's 编辑 button
+ * is the second way into the editor and a component's own state has no second
+ * entrance — pushing it in from outside would mean syncing a prop into state,
+ * which this codebase does not do. The caller keeps one boolean; the draft
+ * still lives in `NoteEditor`, which unmounts when the flag goes false.
+ */
+export function NoteCell({
+  note,
+  disabled,
+  editing,
+  onEditingChange,
+  onSave,
+}: {
+  note: string | null;
+  disabled?: boolean;
+  editing: boolean;
+  onEditingChange: (editing: boolean) => void;
+  onSave: (note: string | null) => void;
+}) {
+  if (!editing) {
+    return <AnnotationNote note={note} disabled={disabled} onEdit={() => onEditingChange(true)} />;
+  }
+  return (
+    <NoteEditor
+      value={note}
+      disabled={disabled}
+      onSave={(next) => {
+        onEditingChange(false);
+        onSave(next);
+      }}
+      onCancel={() => onEditingChange(false)}
     />
   );
 }

@@ -143,6 +143,80 @@ describe("SelectionToolbar note field", () => {
   });
 });
 
+/**
+ * The three buttons under the field. Each one exists because the field
+ * previously had no way to finish: a note was only written by clicking away,
+ * and there was nothing for emptying or dropping one.
+ */
+describe("SelectionToolbar note actions", () => {
+  it("keeps the action strip with the field it belongs to", async () => {
+    const user = userEvent.setup();
+    setup(highlight("已有的笔记"));
+    expect(screen.queryByRole("button", { name: "保存笔记" })).not.toBeInTheDocument();
+    await openField(user);
+    expect(screen.getByRole("button", { name: "保存笔记" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "清空输入" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "删除笔记" })).toBeInTheDocument();
+  });
+
+  it("writes the draft on 保存 without waiting for focus to leave", async () => {
+    const user = userEvent.setup();
+    const { onNote } = setup();
+    await openField(user);
+    await user.type(field(), "先记下来");
+    await user.click(screen.getByRole("button", { name: "保存笔记" }));
+    expect(onNote).toHaveBeenCalledTimes(1);
+    expect(onNote).toHaveBeenCalledWith("先记下来");
+    // The field closes because the draft went back to `null`, which is the
+    // same state blur leaves behind — not because a button tore it down.
+    expect(screen.queryByRole("textbox", { name: "笔记" })).not.toBeInTheDocument();
+  });
+
+  it("refuses 保存 while the field still says what is saved", async () => {
+    const user = userEvent.setup();
+    const { onNote } = setup(highlight("第三章埋了伏笔"));
+    await openField(user);
+    expect(screen.getByRole("button", { name: "保存笔记" })).toBeDisabled();
+    await user.type(field(), "，补一句");
+    expect(screen.getByRole("button", { name: "保存笔记" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "保存笔记" }));
+    expect(onNote).toHaveBeenCalledTimes(1);
+    // Whatever the caret did, the write carries both the pre-filled note and
+    // what was typed onto it — 保存 is not a "replace with the field" button.
+    const written = onNote.mock.calls[0]?.[0] as string;
+    expect(written).toContain("第三章埋了伏笔");
+    expect(written).toContain("补一句");
+  });
+
+  it("empties the field on 清空 and writes nothing yet", async () => {
+    const user = userEvent.setup();
+    const { onNote } = setup(highlight("第三章埋了伏笔"));
+    await openField(user);
+    await user.click(screen.getByRole("button", { name: "清空输入" }));
+    expect(field()).toHaveValue("");
+    // Only the field: the saved note is still there until 保存 or leaving.
+    expect(onNote).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "清空输入" })).toBeDisabled();
+  });
+
+  it("drops the saved note on 删除 and leaves the highlight standing", async () => {
+    const user = userEvent.setup();
+    const { onNote } = setup(highlight("第三章埋了伏笔"));
+    await openField(user);
+    await user.click(screen.getByRole("button", { name: "删除笔记" }));
+    expect(onNote).toHaveBeenCalledTimes(1);
+    expect(onNote).toHaveBeenCalledWith(null);
+    expect(screen.queryByRole("textbox", { name: "笔记" })).not.toBeInTheDocument();
+  });
+
+  it("hides 删除 when there is no note to drop", async () => {
+    const user = userEvent.setup();
+    setup(highlight(null));
+    await openField(user);
+    expect(screen.queryByRole("button", { name: "删除笔记" })).not.toBeInTheDocument();
+  });
+});
+
 describe("SelectionOverlay", () => {
   it("portals the toolbar into the shell's overlay host", () => {
     // The reading pane carries a `backdrop-filter` for the glass, which makes

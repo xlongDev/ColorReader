@@ -9,12 +9,17 @@ import { useClippings } from "@/hooks/useClippings";
 import type { ClippingsOutcome } from "@/types/ipc";
 
 /**
- * Kindle highlights, in.
+ * Highlights in — from Kindle, and from this app's own exports.
  *
  * The file has to be found on disk, so the first step is a picker; the second
  * is the preview, which is the same run with the writes skipped. The reader
  * confirms against real numbers rather than a guess, and the third state is the
  * receipt for the run they just confirmed.
+ *
+ * Which of the three shapes the file is (Kindle's `My Clippings.txt`, this app's
+ * Markdown, this app's CSV) is decided by the backend from the file's contents,
+ * not its name — the picker offers all of them in one filter and the reader is
+ * never asked to classify their own file.
  *
  * Copy is deliberately blunt about the two ways an import comes up short —
  * books the shelf never got, and highlights whose text the book no longer
@@ -50,7 +55,7 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
     const picked = await open({
       multiple: false,
       directory: false,
-      filters: [{ name: "Kindle 摘录", extensions: ["txt"] }],
+      filters: [{ name: "摘录文件", extensions: ["txt", "md", "markdown", "csv"] }],
     });
     if (typeof picked !== "string") return;
     setDone(null);
@@ -87,8 +92,8 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
       onOpenChange={(next) => {
         if (!next) close();
       }}
-      title="导入 Kindle 摘录"
-      description="把 My Clippings.txt 里的高亮读完，落到书架里对应的书上。笔记和书签不会被导入。"
+      title="导入摘录"
+      description="读 Kindle 的 My Clippings.txt，或本应用导出的 .md / .csv，把里面的高亮落到书架上对应的书里。"
       widthClass="w-[min(92vw,560px)]"
     >
       {/* `<output>` rather than a `role="status"` div: it is the element the
@@ -98,10 +103,12 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
       {!path ? (
         <div className="flex flex-col items-start gap-3">
           <GlassButton variant="primary" size="md" onClick={() => void pick()}>
-            <FileText size={15} /> 选择 My Clippings.txt
+            <FileText size={15} /> 选择摘录文件
           </GlassButton>
           <p className="text-text-3 text-xs leading-relaxed">
-            文件在 Kindle 磁盘的 documents 目录里。导入只按书名匹配书架，不会改动原来的书籍文件。
+            Kindle 的文件在磁盘的 documents
+            目录里；本应用自己的导出在书籍页和「笔记」页的导出按钮里。
+            文件按内容识别，改过名字也认。导入只把高亮落到书架上对应的书里，不会改动原来的书籍文件。
           </p>
         </div>
       ) : (

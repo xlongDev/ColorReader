@@ -99,6 +99,49 @@ export function tally(groups: readonly BookNotes[]): { highlights: number; notes
 }
 
 /**
+ * Narrows the groups to a set of highlight ids — selection mode's own view.
+ *
+ * A copy rather than a filter in place: `shown` is memoised and shared, and the
+ * batch bar's count, the delete and the export all read it.
+ */
+export function keepEntries(groups: readonly BookNotes[], ids: ReadonlySet<string>): BookNotes[] {
+  const out: BookNotes[] = [];
+  for (const group of groups) {
+    const entries = group.entries.filter((entry) => ids.has(entry.annotation.id));
+    if (entries.length > 0) out.push({ book: group.book, entries });
+  }
+  return out;
+}
+
+/**
+ * The two arguments the export command wants, derived from what the page shows.
+ *
+ * `bookIds` is the order the screen put the books in and `ids` is every
+ * highlight in reading order. The backend groups by book and keeps reading
+ * order inside each, so handing it the books is what makes the file read the
+ * way the screen does — and handing it the ids is what keeps a search or the
+ * 有笔记 filter from being silently ignored.
+ *
+ * A function rather than something inlined at the two call sites (the toolbar's
+ * export and the selection's), because the pairing *is* the contract: a caller
+ * that passed the ids alone would lose the order, and one that passed the books
+ * alone would lose the narrowing.
+ */
+export function exportPayload(groups: readonly BookNotes[]): {
+  bookIds: string[];
+  ids: string[];
+} {
+  const bookIds: string[] = [];
+  const ids: string[] = [];
+  for (const group of groups) {
+    if (group.entries.length === 0) continue;
+    bookIds.push(group.book.id);
+    for (const { annotation } of group.entries) ids.push(annotation.id);
+  }
+  return { bookIds, ids };
+}
+
+/**
  * The ink a highlight paints with.
  *
  * `null` reads as yellow, which is what the backend means by it: the column
