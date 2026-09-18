@@ -19,6 +19,8 @@ export const sortOptions: { value: LibrarySort; label: string }[] = [
   { value: "recentlyRead", label: "最近阅读" },
   { value: "titleAsc", label: "书名" },
   { value: "authorAsc", label: "作者" },
+  { value: "formatAsc", label: "文件格式" },
+  { value: "sizeDesc", label: "文件大小" },
 ];
 
 export function formatFileSize(bytes: number): string {

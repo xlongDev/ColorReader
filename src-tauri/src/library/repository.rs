@@ -92,6 +92,8 @@ pub enum LibrarySort {
     TitleAsc,
     AuthorAsc,
     OldestAdded,
+    FormatAsc,
+    SizeDesc,
 }
 
 impl LibrarySort {
@@ -109,6 +111,13 @@ impl LibrarySort {
                    ORDER BY ba.position LIMIT 1) COLLATE NOCASE ASC, b.sort_title ASC"
             }
             LibrarySort::OldestAdded => "b.added_at ASC, b.sort_title ASC",
+            // `format` is stored lowercase ('epub', 'pdf', …), so the plain
+            // column collation already groups each format together; the title
+            // breaks ties so the group is readable rather than arbitrary.
+            LibrarySort::FormatAsc => "b.format ASC, b.sort_title COLLATE NOCASE ASC",
+            // Largest first: the question this order answers is which books are
+            // taking up the space, and that is asked from the top.
+            LibrarySort::SizeDesc => "b.file_size DESC, b.sort_title COLLATE NOCASE ASC",
         }
     }
 }
@@ -516,6 +525,20 @@ mod tests {
     }
 
     fn add(conn: &Connection, id: &str, title: &str, authors: &[&str], hash: &str) {
+        add_as(conn, id, title, authors, hash, BookFormat::Epub, 1024);
+    }
+
+    /// The same insert with the two columns the shelf's newer orders read —
+    /// the format and the size on disk — under the test's own control.
+    fn add_as(
+        conn: &Connection,
+        id: &str,
+        title: &str,
+        authors: &[&str],
+        hash: &str,
+        format: BookFormat,
+        file_size: i64,
+    ) {
         let owned: Vec<String> = authors.iter().map(|a| a.to_string()).collect();
         let tx = conn.unchecked_transaction().expect("tx");
         insert(
@@ -528,10 +551,10 @@ mod tests {
                 language: Some("zh"),
                 publisher: None,
                 identifier: None,
-                format: BookFormat::Epub,
+                format,
                 content_hash: hash,
-                file_path: &format!("/books/{id}.epub"),
-                file_size: 1024,
+                file_path: &format!("/books/{id}.{}", format.extension()),
+                file_size,
                 cover_path: None,
                 authors: &owned,
             },
@@ -598,6 +621,46 @@ mod tests {
         let books = list(&conn, &BookQuery { sort: LibrarySort::AuthorAsc, ..Default::default() })
             .expect("list");
         assert_eq!(books[0].id, "b2");
+    }
+
+    /// The two orders the shelf gained: by format and by size on disk.
+    ///
+    /// The fixture is built so the two disagree — the largest file is also the
+    /// last format alphabetically — because a fixture where both orders produce
+    /// the same sequence would pass with one of the two `ORDER BY` clauses
+    /// wrong, or with both pointing at the same column.
+    #[test]
+    fn format_and_size_sorts_order_by_the_column_they_name() {
+        let conn = seed();
+        add_as(&conn, "b1", "最大的 txt", &[], "h1", BookFormat::Text, 9_000_000);
+        add_as(&conn, "b2", "最小的 epub", &[], "h2", BookFormat::Epub, 900);
+        add_as(&conn, "b3", "中间的 pdf", &[], "h3", BookFormat::Pdf, 50_000);
+
+        let by_format =
+            list(&conn, &BookQuery { sort: LibrarySort::FormatAsc, ..Default::default() })
+                .expect("list");
+        let ids: Vec<&str> = by_format.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["b2", "b3", "b1"], "epub < pdf < txt");
+
+        let by_size = list(&conn, &BookQuery { sort: LibrarySort::SizeDesc, ..Default::default() })
+            .expect("list");
+        let ids: Vec<&str> = by_size.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["b1", "b3", "b2"], "从大到小");
+    }
+
+    /// Ties fall back to the title, so a group of same-format or same-size
+    /// books comes back in a readable order rather than SQLite's own.
+    #[test]
+    fn the_new_sorts_break_ties_by_title() {
+        let conn = seed();
+        add_as(&conn, "b1", "Zebra", &[], "h1", BookFormat::Epub, 4096);
+        add_as(&conn, "b2", "apple", &[], "h2", BookFormat::Epub, 4096);
+
+        for sort in [LibrarySort::FormatAsc, LibrarySort::SizeDesc] {
+            let books = list(&conn, &BookQuery { sort, ..Default::default() }).expect("list");
+            let ids: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+            assert_eq!(ids, ["b2", "b1"], "{sort:?} 同键时按书名");
+        }
     }
 
     #[test]

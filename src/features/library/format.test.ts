@@ -62,6 +62,24 @@ describe("sortOptions", () => {
       expect(option.label.length).toBeGreaterThan(0);
     }
   });
+
+  /**
+   * The list is hand-kept against the Rust enum: `LibrarySort` is a generated
+   * type, so a value that no longer exists would still type-check here if the
+   * bindings were regenerated without it — and a label whose order the backend
+   * does not implement would silently do nothing when picked. Pinning the whole
+   * set makes adding one to the enum a two-file change, which is the point.
+   */
+  it("names every order the backend implements", () => {
+    expect(sortOptions.map((option) => option.value)).toEqual([
+      "recentlyAdded",
+      "recentlyRead",
+      "titleAsc",
+      "authorAsc",
+      "formatAsc",
+      "sizeDesc",
+    ]);
+  });
 });
 
 describe("pickContinueReading", () => {
