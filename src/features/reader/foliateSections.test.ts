@@ -20,8 +20,11 @@ import { bookPageAt } from "@/features/reader/progress";
  * wrong page number in the reader.
  *
  * What it cannot cover: whether foliate ever *calls* `getProgress` with the
- * index we assume. That is `View`'s business and needs a real book to exercise
- * (see the note in `ReaderPage`'s `shownPages`).
+ * index we assume. That is `View`'s business and is best pinned with a real
+ * book (a reader ran the foliate path on an EPUB and the 全书 page count
+ * tracked the section weights it reported back, on 2026-09-18 — so the
+ * link from `onRelocate` to `SectionProgress` is now exercised in the
+ * running app, just not by this test).
  */
 
 /** `size` is foliate's byte count for a section; `linear: "no"` is skipped. */
