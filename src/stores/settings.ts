@@ -20,14 +20,23 @@ interface SettingsState {
   setShelfLayout: (layout: ShelfLayout) => void;
 }
 
+/**
+ * Every app preference at its shipping value, for the same reason the reader
+ * store has one — `resetAllSettings` writes this back rather than keeping a
+ * parallel list of defaults.
+ */
+export const DEFAULT_SETTINGS = {
+  theme: "system",
+  transparency: "full",
+  sidebarCollapsed: false,
+  sidebarHidden: false,
+  shelfLayout: "grid",
+} satisfies Partial<SettingsState>;
+
 export const useSettings = create<SettingsState>()(
   persist(
     (set) => ({
-      theme: "system",
-      transparency: "full",
-      sidebarCollapsed: false,
-      sidebarHidden: false,
-      shelfLayout: "grid",
+      ...DEFAULT_SETTINGS,
       setTheme: (theme) => set({ theme }),
       setTransparency: (transparency) => set({ transparency }),
       toggleSidebar: () => set((state) => ({ sidebarCollapsed: !state.sidebarCollapsed })),

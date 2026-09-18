@@ -18,8 +18,12 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassCard } from "@/components/glass/panel";
+import { GlassDialog } from "@/components/glass/overlay";
 import { GlassInput, GlassSwitch } from "@/components/glass/input";
 import { useSettings, type ThemeMode } from "@/stores/settings";
+import { resetAllSettings } from "@/stores/reset";
+import { showToast } from "@/stores/toasts";
+import { useResolvedTheme } from "@/hooks/useTheme";
 import { useSystemInfo } from "@/hooks/useSystemInfo";
 import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
 import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from "@/hooks/useSync";
@@ -42,10 +46,26 @@ const SECTIONS = [
   { id: "dictionary", label: "词典", icon: BookOpenText },
   { id: "fonts", label: "字体", icon: TextAa },
   { id: "sync", label: "同步", icon: CloudArrowUp },
+  { id: "reset", label: "重置", icon: ArrowsClockwise },
   { id: "about", label: "关于", icon: Info },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
+
+/**
+ * Whether the pane has nowhere left to scroll.
+ *
+ * Its own function because the scroll handler and a rail jump both need it and
+ * have to mean the same thing by it — including that a pane taller than its
+ * content is *not* at the end, or the last group would be highlighted from the
+ * first frame. The last two groups cannot be scrolled to the top at all: the
+ * pane stops at the bottom, and that is the case a jump has to recognise as
+ * having arrived.
+ */
+function scrolledToEnd(root: HTMLElement): boolean {
+  const scrollable = root.scrollHeight > root.clientHeight + 8;
+  return scrollable && root.scrollTop + root.clientHeight >= root.scrollHeight - 8;
+}
 
 const THEMES: readonly { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "浅色", icon: Sun },
@@ -75,6 +95,9 @@ export function SettingsPage() {
     }));
   }, []);
 
+  /** The jump the rail asked for, held until the pane finishes travelling. */
+  const jumping = useRef<{ id: SectionId; top: number } | null>(null);
+
   /**
    * Which section the rail highlights: the last one whose top has passed a
    * sight-line 15% down the pane. An observer band was the first attempt, but
@@ -91,21 +114,49 @@ export function SettingsPage() {
     resize.observe(root);
     for (const section of root.querySelectorAll("[data-section]")) resize.observe(section);
 
+    // Released a beat after the pane stops moving, not the moment it arrives:
+    // a smooth scroll that asks for more than the pane has keeps emitting
+    // events at the same position, and releasing on the first of them would
+    // let the next one fall through to the sight-line rules.
+    let settle: number | undefined;
+
     const onScroll = () => {
+      // A jump owns the highlight while it is claimed. Two things go wrong
+      // otherwise, and both read as the rail ignoring the click: the smooth
+      // scroll passes through every group on the way, ticking the highlight
+      // through each of them; and the last two groups cannot reach the top at
+      // all — the pane runs out of scroll and stops at the bottom, where the
+      // rule below hands the highlight to the final group. Measured on a
+      // 1280×900 pane: 重置 asks for 2020 against a maximum of 1835.
+      const jump = jumping.current;
+      if (jump) {
+        // "Arrived" includes running out of scroll — that is as far as this
+        // group is ever going to get.
+        const arrived = scrolledToEnd(root) || Math.abs(root.scrollTop - jump.top) < 2;
+        if (arrived) {
+          clearTimeout(settle);
+          settle = window.setTimeout(() => {
+            jumping.current = null;
+          }, 120);
+        }
+        return;
+      }
+
+      // At the end of the scroll the sight-line can still sit inside the group
+      // above a short final one, so the bottom wins outright — but only when
+      // there is something to scroll: a pane taller than its content is always
+      // "at the end" and would otherwise highlight the last group from the
+      // start.
+      const atEnd = scrolledToEnd(root);
       const line = root.scrollTop + root.clientHeight * 0.15;
       const last = offsets.current.at(-1)?.id ?? "appearance";
-      // At the end of the scroll the line can still sit inside the group above
-      // a short final one, so the bottom wins outright — but only when there is
-      // something to scroll: a pane taller than its content is always "at the
-      // end" and would otherwise highlight the last group from the start.
-      const scrollable = root.scrollHeight > root.clientHeight + 8;
-      const atEnd = scrollable && root.scrollTop + root.clientHeight >= root.scrollHeight - 8;
       let current: SectionId = offsets.current[0]?.id ?? "appearance";
       for (const entry of offsets.current) if (entry.top <= line) current = entry.id;
       setActive(atEnd ? last : current);
     };
     root.addEventListener("scroll", onScroll, { passive: true });
     return () => {
+      clearTimeout(settle);
       resize.disconnect();
       root.removeEventListener("scroll", onScroll);
     };
@@ -115,17 +166,21 @@ export function SettingsPage() {
     const root = scrollRef.current;
     const target = root?.querySelector<HTMLElement>(`[data-section="${id}"]`);
     if (!root || !target) return;
+    const top = Math.max(target.offsetTop - 16, 0);
     // Set it now rather than waiting for the scroll: the smooth scroll would
     // otherwise leave the rail ticking through the groups it passes.
+    jumping.current = { id, top };
     setActive(id);
-    root.scrollTo({
-      top: Math.max(target.offsetTop - 16, 0),
-      behavior: reduce ? "auto" : "smooth",
-    });
+    root.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
+    // A jump to where the pane already is fires no scroll event at all, and a
+    // claim nobody releases would then swallow the reader's next scroll.
+    if (Math.abs(root.scrollTop - top) < 2 || scrolledToEnd(root)) {
+      jumping.current = null;
+    }
   };
 
   return (
-    <div ref={scrollRef} className="relative h-full overflow-y-auto">
+    <div ref={scrollRef} data-settings-scroll className="relative h-full overflow-y-auto">
       <div className="mx-auto max-w-5xl px-6 pt-8 pb-16 lg:px-8">
         <header className="pb-8">
           <h1 className="text-text-1 text-2xl font-semibold tracking-tight">设置</h1>
@@ -176,6 +231,7 @@ export function SettingsPage() {
             <DictionarySection />
             <FontSection />
             <SyncSection />
+            <ResetSection />
             <AboutSection />
           </div>
         </div>
@@ -373,6 +429,63 @@ function updateStatus(state: UpdateState): { text: string; bad: boolean } {
     case "failed":
       return { text: state.message, bad: true };
   }
+}
+
+/**
+ * The one control on this page that throws away more than one setting at a
+ * time, and the only one the reader cannot preview — so it sits behind a
+ * confirmation, and the row says what is out of scope as plainly as what is
+ * in. "Restore" promises a state, not a list, and a reader who has spent an
+ * evening tuning typography needs to know whether their books survive it.
+ */
+function ResetSection() {
+  const appTheme = useResolvedTheme();
+  const [asking, setAsking] = useState(false);
+
+  const restore = () => {
+    resetAllSettings(appTheme === "dark");
+    showToast("success", "已还原所有设置");
+    setAsking(false);
+  };
+
+  return (
+    <SettingsGroup
+      id="reset"
+      icon={ArrowsClockwise}
+      title="还原所有设置"
+      description="把外观、书架与阅读排版恢复为默认值。"
+    >
+      <Row
+        label="还原所有设置"
+        hint="主题、侧边栏、书架布局、字号与行距、页边距、纸张、书页配色等都会回到默认值。书籍、批注、笔记、词典、字体以及 AI 与同步配置不受影响。"
+      >
+        <GlassButton
+          size="sm"
+          leading={<ArrowsClockwise size={13} weight="bold" />}
+          onClick={() => setAsking(true)}
+        >
+          还原
+        </GlassButton>
+      </Row>
+
+      <GlassDialog
+        open={asking}
+        onOpenChange={setAsking}
+        title="还原所有设置？"
+        description="所有设置会回到默认值，这一步无法撤销。"
+        widthClass="w-[min(92vw,440px)]"
+      >
+        <div className="flex justify-end gap-2">
+          <GlassButton size="sm" variant="subtle" onClick={() => setAsking(false)}>
+            取消
+          </GlassButton>
+          <GlassButton size="sm" variant="primary" onClick={restore}>
+            还原
+          </GlassButton>
+        </div>
+      </GlassDialog>
+    </SettingsGroup>
+  );
 }
 
 function AboutSection() {
