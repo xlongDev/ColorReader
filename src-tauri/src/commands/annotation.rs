@@ -89,3 +89,17 @@ pub fn annotation_list(state: State<'_, AppState>, book_id: String) -> AppResult
 pub fn annotation_delete(state: State<'_, AppState>, id: String) -> AppResult<()> {
     state.library.with(|conn| annotations::delete(conn, &id))
 }
+
+/// `annotation.delete_many` — removes a set of highlights, answering how many
+/// actually went.
+///
+/// The notes page selects across books, so the single-row command above would
+/// cost one request and one transaction per highlight. The count comes back
+/// rather than being taken on trust from the request: a selection is a snapshot
+/// of what was on screen, and a highlight deleted in the reader between the
+/// click and this call is not there to delete.
+#[tauri::command]
+#[specta::specta]
+pub fn annotation_delete_many(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<usize> {
+    state.library.with(|conn| annotations::delete_many(conn, &ids))
+}

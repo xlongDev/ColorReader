@@ -230,6 +230,39 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Deletes a set of highlights in one transaction, returning how many rows went.
+///
+/// The notes page works across books, so a selection deleted through the
+/// single-row path above would be one request — and one transaction — per
+/// highlight. One transaction also means a failure leaves the shelf as it was
+/// rather than half-deleted.
+///
+/// Ids that are no longer there are skipped rather than refused. A selection is
+/// a snapshot of what a screen was showing, and a highlight deleted in another
+/// window between the click and the write is not something the reader can act
+/// on; failing the whole batch for it would be worse than the no-op.
+pub fn delete_many(conn: &Connection, ids: &[String]) -> AppResult<usize> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let tx = conn.unchecked_transaction()?;
+    let now = super::now_seconds();
+    let mut removed = 0;
+    for id in ids {
+        if tx.execute("DELETE FROM annotations WHERE id = ?1", params![id])? == 0 {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO annotation_tombstones (id, updated_at) VALUES (?1, ?2) \
+             ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at",
+            params![id, now],
+        )?;
+        removed += 1;
+    }
+    tx.commit()?;
+    Ok(removed)
+}
+
 /// One highlight as the sync layer moves it between devices.
 ///
 /// `book` is the owning book's `content_hash` — the only book identity two
@@ -407,6 +440,41 @@ mod tests {
         assert_eq!(all.len(), 2);
         assert_eq!(all[0].chapter_idx, 0);
         assert_eq!(all[1].chapter_idx, 1, "按章节与位置排序");
+    }
+
+    /// The batch the notes page's selection mode needs: one transaction, one
+    /// tombstone per row, and no complaint about what is already gone.
+    #[test]
+    fn a_batch_delete_removes_what_is_there_and_ignores_what_is_not() {
+        let conn = seed();
+        let first = create(&conn, "b", 0, 0, 4, "one", None, None, None).expect("create");
+        let second = create(&conn, "b", 0, 5, 9, "two", None, None, None).expect("create");
+        let kept = create(&conn, "b", 1, 0, 3, "three", None, None, None).expect("create");
+
+        let ids = vec![first.id.clone(), "already-gone".to_string(), second.id.clone()];
+        assert_eq!(delete_many(&conn, &ids).expect("delete"), 2, "只算真正删掉的");
+
+        let left = list(&conn, "b").expect("list");
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].id, kept.id);
+
+        // Both rows left a tombstone, or the next sync would pull them back
+        // from a device that still has them.
+        let stones: Vec<String> = conn
+            .prepare("SELECT id FROM annotation_tombstones ORDER BY id")
+            .expect("prepare")
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .expect("collect");
+        assert_eq!(stones.len(), 2, "墓碑要留下");
+        assert!(!stones.contains(&"already-gone".to_string()), "没删掉的不用立碑");
+    }
+
+    #[test]
+    fn an_empty_batch_delete_is_a_no_op() {
+        let conn = seed();
+        assert_eq!(delete_many(&conn, &[]).expect("delete"), 0);
     }
 
     #[test]

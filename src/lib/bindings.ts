@@ -77,6 +77,18 @@ export const commands = {
   annotationList: (bookId: string) => __TAURI_INVOKE<Annotation[]>("annotation_list", { bookId }),
   /**  `annotation.delete` — removes one highlight. */
   annotationDelete: (id: string) => __TAURI_INVOKE<null>("annotation_delete", { id }),
+  /**
+   *  `annotation.delete_many` — removes a set of highlights, answering how many
+   *  actually went.
+   *
+   *  The notes page selects across books, so the single-row command above would
+   *  cost one request and one transaction per highlight. The count comes back
+   *  rather than being taken on trust from the request: a selection is a snapshot
+   *  of what was on screen, and a highlight deleted in the reader between the
+   *  click and this call is not there to delete.
+   */
+  annotationDeleteMany: (ids: string[]) =>
+    __TAURI_INVOKE<number>("annotation_delete_many", { ids }),
   /**  `book.list` */
   bookList: (query: BookQuery) => __TAURI_INVOKE<BookSummary[]>("book_list", { query }),
   /**  `book.get` */
@@ -162,8 +174,13 @@ export const commands = {
   /**  `bookmark.delete` — removes one bookmark. */
   bookmarkDelete: (id: string) => __TAURI_INVOKE<null>("bookmark_delete", { id }),
   /**
-   *  `clippings.import` — turns a Kindle clippings file into highlights on the
-   *  books it can match.
+   *  `clippings.import` — turns a file of highlights into highlights on the books
+   *  it can match.
+   *
+   *  Three shapes go in and one report comes out: Kindle's `My Clippings.txt`, and
+   *  the Markdown and CSV files this app exports. Which one it is is decided by
+   *  [`clippings::detect`] from the file's own content, so a renamed file still
+   *  reads.
    *
    *  `dry_run` walks the same path and writes nothing, which is what the dialog
    *  shows before the reader commits: the same report either way, so the numbers
@@ -202,6 +219,17 @@ export const commands = {
    *  on a button.
    */
   notesExport: (id: string, path: string) => __TAURI_INVOKE<null>("notes_export", { id, path }),
+  /**
+   *  `notes.export_selection` — writes the highlights a screen is showing,
+   *  across as many books as they come from.
+   *
+   *  Two arguments rather than one because the two answer different questions:
+   *  `ids` is the set the reader narrowed to (a search, or 有笔记), and `book_ids`
+   *  is the order the screen put them in, which is the shelf's. Sending only the
+   *  ids would lose the order; sending only the books would lose the narrowing.
+   */
+  notesExportSelection: (bookIds: string[], ids: string[], path: string) =>
+    __TAURI_INVOKE<null>("notes_export_selection", { bookIds, ids, path }),
   /**  `font.list` — every imported font, in the order they were added. */
   fontList: () => __TAURI_INVOKE<Font_Serialize[]>("font_list"),
   /**  `font.import` — `path` is the font file the reader picked. */
@@ -726,7 +754,13 @@ export type LibraryFilter = "all" | "recent" | "favorites";
 
 /**  Sort orders exposed by the UI. */
 export type LibrarySort =
-  "recentlyAdded" | "recentlyRead" | "titleAsc" | "authorAsc" | "oldestAdded";
+  | "recentlyAdded"
+  | "recentlyRead"
+  | "titleAsc"
+  | "authorAsc"
+  | "oldestAdded"
+  | "formatAsc"
+  | "sizeDesc";
 
 /**  Aggregate counts shown above the shelf. */
 export type LibraryStats = {
