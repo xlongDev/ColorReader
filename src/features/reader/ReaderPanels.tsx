@@ -1,0 +1,165 @@
+import { AnimatePresence } from "motion/react";
+
+import { Reveal } from "@/components/motion/Reveal";
+import { AnnotationList } from "@/features/reader/AnnotationList";
+import { AskAiPanel } from "@/features/reader/AskAiPanel";
+import { FoliateSearchPanel } from "@/features/reader/FoliateSearchPanel";
+import type { FoliateSearchHit } from "@/features/reader/FoliateBookView";
+import { GuidePanel } from "@/features/reader/GuidePanel";
+import { ReaderDrawer } from "@/features/reader/ReaderDrawer";
+import { SettingsPanel } from "@/features/reader/SettingsPanel";
+import { TocPanel } from "@/features/reader/TocPanel";
+import type { Panel } from "@/features/reader/ReaderChrome";
+import { GraphPanel } from "@/features/graph/GraphPanel";
+import { SearchPanel } from "@/features/search/SearchPanel";
+import type { PdfOutlineItem } from "@/lib/pdf";
+import type { Annotation, Bookmark, ChapterMeta, RagHit, SearchHit } from "@/types/ipc";
+
+/** The drawer's title for a panel, kept next to the switch so the two never
+    drift — the header buttons name the same things. */
+export function panelTitle(panel: Exclude<Panel, "none">): string {
+  switch (panel) {
+    case "toc":
+      return "目录与书签";
+    case "settings":
+      return "阅读设置";
+    case "annotations":
+      return "标注";
+    case "search":
+      return "搜索正文";
+    case "graph":
+      return "知识图谱";
+    case "guide":
+      return "AI 导读";
+    default:
+      return "AI 助手";
+  }
+}
+
+/**
+ * The one side panel the reader has open, if any.
+ *
+ * Everything here is a switch the parent feeds: the panels own their own
+ * queries and state, and this file only decides which one is in the drawer and
+ * hands each the callbacks it needs to move the reader. Keeping the switch out
+ * of the page is what lets the page's own render stay about the page.
+ */
+export function ReaderPanels({
+  panel,
+  bookId,
+  onClose,
+  toc,
+  graph,
+  search,
+  annotations,
+  ai,
+}: {
+  panel: Panel;
+  bookId: string;
+  onClose: () => void;
+  toc: {
+    chapters: ChapterMeta[];
+    outline: PdfOutlineItem[];
+    currentIdx: number;
+    bookmarks: Bookmark[];
+    busy: boolean;
+    onJump: (idx: number) => void;
+    onJumpBookmark: (bookmark: Bookmark) => void;
+    onDeleteBookmark: (id: string) => void;
+    onAddBookmark: () => void;
+  };
+  graph: {
+    onOpenChapter: (idx: number) => void;
+  };
+  search: {
+    /** foliate books search inside their own renderer; the rest hit the index. */
+    useFoliate: boolean;
+    seed: string;
+    onFoliateSearch: (query: string) => Promise<FoliateSearchHit[]>;
+    onFoliatePick: (cfi: string) => void;
+    onPick: (hit: SearchHit, needle: string) => void;
+  };
+  annotations: {
+    items: Annotation[];
+    busy: boolean;
+    onDelete: (id: string) => void;
+    onNote: (id: string, note: string | null) => void;
+    onExport: () => void;
+    /** `undefined` for a book the reader cannot navigate by anchor. */
+    onJump: ((annotation: Annotation) => void) | undefined;
+  };
+  ai: {
+    context: string | null;
+    onClearContext: () => void;
+    chapterTitle: string;
+    paragraphs: string[];
+    onJumpCitation: (hit: RagHit) => void;
+  };
+}) {
+  return (
+    // One drawer at a time; AnimatePresence keeps it mounted while it
+    // slides out, and clicking the dimmed backdrop dismisses it.
+    <AnimatePresence>
+      {panel !== "none" && (
+        <ReaderDrawer key="reader-drawer" title={panelTitle(panel)} onClose={onClose}>
+          {/* Keyed so a swap rises in. The drawer stays put while its
+              content changes, and cutting between panels as different as a
+              chapter list and a settings sheet reads as a jump rather than
+              a step sideways. `flex min-h-0 flex-1 flex-col` preserves
+              every panel's own fill-the-drawer layout — they all root
+              the same way. */}
+          <Reveal key={panel} className="flex min-h-0 flex-1 flex-col">
+            {panel === "toc" && (
+              <TocPanel
+                chapters={toc.chapters}
+                outline={toc.outline}
+                currentIdx={toc.currentIdx}
+                bookmarks={toc.bookmarks}
+                busy={toc.busy}
+                onJump={toc.onJump}
+                onJumpBookmark={toc.onJumpBookmark}
+                onDeleteBookmark={toc.onDeleteBookmark}
+                onAddBookmark={toc.onAddBookmark}
+              />
+            )}
+            {panel === "settings" && <SettingsPanel />}
+            {panel === "annotations" && (
+              <AnnotationList
+                annotations={annotations.items}
+                busy={annotations.busy}
+                onDelete={annotations.onDelete}
+                onNote={annotations.onNote}
+                onExport={annotations.onExport}
+                onJump={annotations.onJump}
+              />
+            )}
+            {panel === "search" &&
+              (search.useFoliate ? (
+                <FoliateSearchPanel
+                  initialQuery={search.seed}
+                  onSearch={search.onFoliateSearch}
+                  onPick={search.onFoliatePick}
+                />
+              ) : (
+                <SearchPanel bookId={bookId} initialQuery={search.seed} onPick={search.onPick} />
+              ))}
+            {panel === "graph" && (
+              <GraphPanel bookId={bookId} onOpenChapter={graph.onOpenChapter} />
+            )}
+            {panel === "ai" && (
+              <AskAiPanel
+                bookId={bookId}
+                selection={ai.context}
+                onClearSelection={ai.onClearContext}
+                chapterTitle={ai.chapterTitle}
+                paragraphs={ai.paragraphs}
+                onJump={ai.onJumpCitation}
+              />
+            )}
+            {panel === "guide" && <GuidePanel bookId={bookId} />}
+          </Reveal>
+        </ReaderDrawer>
+      )}
+    </AnimatePresence>
+  );
+}

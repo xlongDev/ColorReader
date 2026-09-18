@@ -15,61 +15,37 @@ import type {
   FoliateSelection,
   FoliateTocEntry,
 } from "./FoliateBookView";
-import {
-  ArrowsOut,
-  ArrowsIn,
-  ArrowLeft,
-  ArrowDown,
-  BookOpen,
-  CaretLeft,
-  CaretRight,
-  Faders,
-  Graph,
-  HighlighterCircle,
-  BookmarkSimple,
-  ListBullets,
-  MagnifyingGlass,
-  Minus,
-  Pause,
-  Plus,
-  SpeakerHigh,
-  Sparkle,
-} from "@phosphor-icons/react";
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { BookOpen, CaretLeft, CaretRight } from "@phosphor-icons/react";
+import { AnimatePresence, useReducedMotion } from "motion/react";
 
 import { EmptyState } from "@/components/common/EmptyState";
-import { GlassButton, GlassIconButton } from "@/components/glass/button";
+import { GlassButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
-import { IconSwap } from "@/components/motion/IconSwap";
-import { Reveal } from "@/components/motion/Reveal";
-import { GraphPanel } from "@/features/graph/GraphPanel";
-import { AnnotationList } from "@/features/reader/AnnotationList";
-import { AskAiPanel } from "@/features/reader/AskAiPanel";
 import { useAssetUrl } from "@/features/reader/assets";
-import { ChapterImage } from "@/features/reader/ChapterImage";
-import { GuidePanel } from "@/features/reader/GuidePanel";
 import {
-  usePdfZoom,
-  MAX_PDF_ZOOM,
-  MIN_PDF_ZOOM,
-  PDF_ZOOM_STEP,
-} from "@/features/reader/usePdfZoom";
+  IMAGE_PARAGRAPH_PREFIX,
+  LINK_PARAGRAPH_PREFIX,
+  WALLPAPER_PARAGRAPH_PREFIX,
+  isProseParagraph,
+  parseLinkParagraph,
+  speechSources,
+  unitAtOffset,
+} from "@/features/reader/chapterText";
+import { usePdfZoom } from "@/features/reader/usePdfZoom";
 import { useReaderFullscreen } from "@/features/reader/useReaderFullscreen";
 import { FULLSCREEN_MARGIN_BONUS, useReaderLayout } from "@/features/reader/useReaderLayout";
-import { HeaderCover, HeaderRule } from "@/features/reader/ReaderHeader";
 import { applyPosition, columnPitch, flipPage } from "@/features/reader/paging";
 import { ImageLightbox } from "@/features/reader/ImageLightbox";
-import { ReaderDrawer } from "@/features/reader/ReaderDrawer";
+import { ReaderFooterControls, ReaderHeaderBar } from "@/features/reader/ReaderChrome";
+import { ReaderPanels } from "@/features/reader/ReaderPanels";
+import { ReaderChapterView } from "@/features/reader/ReaderChapterView";
 import {
   bookPageAt,
   globalProgress,
   locateChapter,
   remainingChars,
-  estimateLabel,
   totalChars,
 } from "@/features/reader/progress";
-import { SettingsPanel } from "@/features/reader/SettingsPanel";
-import { TocPanel } from "@/features/reader/TocPanel";
 import {
   highlightSegments,
   inkWash,
@@ -85,14 +61,7 @@ import type { AnnotationStyle } from "@/types/ipc";
 import { useSpeechVoices, useTts } from "@/features/reader/tts";
 import { TtsPlayer, type SleepChoice, type SleepTimer } from "@/features/reader/TtsPlayer";
 import { defaultVoice, engineOf } from "@/features/reader/voice";
-import {
-  cursorAt,
-  speechUnits,
-  washSpan,
-  type SpeechSource,
-  type SpeechUnit,
-} from "@/features/reader/speech";
-import { FoliateSearchPanel } from "./FoliateSearchPanel";
+import { cursorAt, speechUnits, washSpan, type SpeechUnit } from "@/features/reader/speech";
 import {
   bundledFacesFor,
   fontFaceCss,
@@ -100,7 +69,6 @@ import {
   resolveSurface,
   readerGlassVars,
 } from "@/features/reader/theme";
-import { SearchPanel } from "@/features/search/SearchPanel";
 import {
   useAnnotations,
   useAnchorAnnotation,
@@ -124,8 +92,6 @@ import {
 import { useReadingClock } from "@/hooks/useReading";
 import {
   LINE_HEIGHTS,
-  MAX_FONT_SIZE,
-  MIN_FONT_SIZE,
   PARA_GAPS,
   foldScrollDelta,
   updateReadingSpeed,
@@ -147,17 +113,6 @@ import type {
   SearchHit,
 } from "@/types/ipc";
 
-/** pdf.js is ~1 MB; it only ever ships inside its own lazy chunk, loaded the
-    first time a PDF book is opened. */
-const PdfPageView = lazy(() =>
-  import("@/features/reader/PdfPageView").then((module) => ({ default: module.PdfPageView })),
-);
-const PdfScrollView = lazy(() =>
-  import("@/features/reader/PdfScrollView").then((module) => ({ default: module.PdfScrollView })),
-);
-/** The original-layout renderer; fetched for the two container formats it
- *  serves — Kindle (KF6/7/8) and EPUB (reflowable and fixed-layout). */
-const FoliateBookView = lazy(() => import("@/features/reader/FoliateBookView"));
 /** Notes export reaches for the native save dialog; kept out of the reader's
  *  own chunk so the reader still loads without it. */
 const ExportNotesDialog = lazy(() =>
@@ -174,19 +129,6 @@ const SAVE_DELAY_MS = 600;
 
 /** Wheel silence (ms) that ends one trackpad gesture and re-arms paging. */
 const GESTURE_GAP = 200;
-
-/** A paragraph starting with this marker renders as an in-book image. */
-const IMAGE_PARAGRAPH_PREFIX = "￼";
-
-/** A paragraph starting with this marker is an in-book link (EPUB table of
-    contents entry): `<target chapter idx>\u{1F}<text>`, resolved at import
-    time by the document parser. */
-const LINK_PARAGRAPH_PREFIX = "￻";
-const LINK_FIELD_SEPARATOR = "\u{1F}";
-
-/** A paragraph starting with this marker is the chapter's wallpaper (a Kindle
-    CSS page background): painted behind the text, never flowed inline. */
-const WALLPAPER_PARAGRAPH_PREFIX = "\u{FFFA}";
 
 /**
  * Stand-in for the book's image list while the query is in flight. A fresh
@@ -206,58 +148,6 @@ const NO_FONTS: LocalFont[] = [];
  * collapsing whatever the reader had opened.
  */
 const EMPTY_OUTLINE: PdfOutlineItem[] = [];
-
-/** Parses a link-marker paragraph (`<marker><idx><sep><text>`) into its
-    target chapter and visible text; `null` when malformed. */
-function parseLinkParagraph(paragraph: string): { idx: number; text: string } | null {
-  const payload = paragraph.slice(LINK_PARAGRAPH_PREFIX.length);
-  const separator = payload.indexOf(LINK_FIELD_SEPARATOR);
-  if (separator < 0) return null;
-  const idx = Number.parseInt(payload.slice(0, separator), 10);
-  const text = payload.slice(separator + LINK_FIELD_SEPARATOR.length);
-  return Number.isFinite(idx) && text ? { idx, text } : null;
-}
-
-/** Read-aloud sources for a chapter: image placeholders say nothing at all,
-    link entries speak their visible text. */
-function speechSources(paragraphs: string[]): SpeechSource[] {
-  const out: SpeechSource[] = [];
-  paragraphs.forEach((paragraph, index) => {
-    if (paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX)) return;
-    if (paragraph.startsWith(LINK_PARAGRAPH_PREFIX)) {
-      const text = paragraph.split(LINK_FIELD_SEPARATOR)[1] ?? "";
-      if (text.trim() !== "") out.push({ index, text });
-      return;
-    }
-    if (paragraph.trim() !== "") out.push({ index, text: paragraph });
-  });
-  return out;
-}
-
-/** True for a paragraph that renders as running text — the only kind the
-    read-aloud wash can be drawn on. */
-function isProseParagraph(paragraph: string | undefined): paragraph is string {
-  return (
-    paragraph !== undefined &&
-    paragraph.trim() !== "" &&
-    !paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX) &&
-    !paragraph.startsWith(LINK_PARAGRAPH_PREFIX)
-  );
-}
-
-/**
- * Index of the first utterance at or after `offset` in the chapter's joined
- * text — the sentence "read from here" lands on. Falls back to the top when
- * the offset is past the last unit, so the voice always starts somewhere.
- */
-function unitAtOffset(queue: readonly SpeechUnit[], paragraphs: string[], offset: number): number {
-  const paragraph = paragraphAt(paragraphs, offset);
-  const local = offset - paragraphStart(paragraphs, paragraph);
-  const at = queue.findIndex(
-    (unit) => unit.source > paragraph || (unit.source === paragraph && unit.end > local),
-  );
-  return at < 0 ? 0 : at;
-}
 
 /** Which side panel is open. Only one at a time, so they never stack. */
 type Panel = "none" | "annotations" | "search" | "ai" | "guide" | "graph" | "toc" | "settings";
@@ -2181,12 +2071,6 @@ function ReaderView({
   // extracted wallpaper would only layer underneath it.
   const wallpaperUrl = useAssetUrl(bookId, plate || useFoliate ? null : wallpaperPath);
 
-  // Reader chrome button: same anatomy as the sidebar's glass buttons, but
-  // fill and hairline come from the re-rooted reading-surface tokens — the
-  // fill is a wash of the paper colour (--glass-btn), so the circles read as
-  // liquid glass over the page without darkening it like an ink fill would.
-  const chromeBtn = "bg-(--glass-btn) border-hairline-strong shadow-glass";
-
   // Leaving the reader hands the cover back to the shelf — the same object
   // that flew in, in the other direction. The header thumbnail is the origin;
   // the shelf tile the book came from registers itself as the landing while it
@@ -2210,244 +2094,6 @@ function ReaderView({
       : chapterIdx + 1;
   const headerTotal = useFoliateToc ? foliateToc.length : total;
   const headerChapter = useFoliateToc ? foliateSectionLabel : chapterTitle;
-
-  // Shared header bar: rendered in flow normally, and dropped from the top
-  // edge on hover while in fullscreen — where it also gets a surface-tinted
-  // glass backdrop, since it then floats over pages of any colour.
-  const headerBar = (
-    <header
-      className={cn(
-        "border-hairline flex items-center gap-3 border-b px-6 py-3",
-        fullscreen && "bg-(--glass-btn) backdrop-blur-xl",
-      )}
-    >
-      <GlassIconButton label="返回书库" size="sm" onClick={leaveReader} className={chromeBtn}>
-        <ArrowLeft size={16} />
-      </GlassIconButton>
-      <HeaderCover bookId={bookId} coverUrl={coverUrl} boxRef={coverBoxRef} />
-      <div className="min-w-0 flex-1">
-        <p className="text-text-1 truncate text-sm font-medium">{title}</p>
-        <p className="text-text-3 truncate text-xs">
-          第 {headerIndex} / {headerTotal} {isPdf ? "页" : "章"}
-          {!isPdf && headerChapter && ` · ${headerChapter}`}
-        </p>
-      </div>
-      <div className="flex items-center gap-1">
-        <GlassIconButton
-          label="目录与书签"
-          size="sm"
-          className={chromeBtn}
-          onClick={() => setPanel((open) => (open === "toc" ? "none" : "toc"))}
-        >
-          <ListBullets size={16} />
-        </GlassIconButton>
-        <GlassIconButton
-          label="搜索"
-          size="sm"
-          className={chromeBtn}
-          onClick={() => setPanel((open) => (open === "search" ? "none" : "search"))}
-        >
-          <MagnifyingGlass size={16} />
-        </GlassIconButton>
-        <GlassIconButton
-          label="标注"
-          size="sm"
-          className={chromeBtn}
-          onClick={() => setPanel((open) => (open === "annotations" ? "none" : "annotations"))}
-        >
-          <HighlighterCircle size={16} />
-        </GlassIconButton>
-        <HeaderRule />
-        <GlassIconButton
-          label="知识图谱"
-          size="sm"
-          className={chromeBtn}
-          onClick={() => setPanel((open) => (open === "graph" ? "none" : "graph"))}
-        >
-          <Graph size={16} />
-        </GlassIconButton>
-        <GlassIconButton
-          label="AI 导读"
-          size="sm"
-          className={chromeBtn}
-          onClick={() => setPanel((open) => (open === "guide" ? "none" : "guide"))}
-        >
-          <Sparkle size={16} />
-        </GlassIconButton>
-        <HeaderRule />
-        <GlassIconButton
-          label="阅读设置"
-          size="sm"
-          className={chromeBtn}
-          onClick={() => setPanel((open) => (open === "settings" ? "none" : "settings"))}
-        >
-          <Faders size={16} />
-        </GlassIconButton>
-        {isPdf ? (
-          // PDF pages are fixed bitmaps; the header steppers zoom the page.
-          <>
-            <GlassIconButton
-              label="缩小页面"
-              size="sm"
-              className={chromeBtn}
-              onClick={() => stepPdfZoom(1 / PDF_ZOOM_STEP)}
-              disabled={pdfZoom <= MIN_PDF_ZOOM}
-            >
-              <Minus size={16} />
-            </GlassIconButton>
-            <GlassIconButton
-              label="重置缩放"
-              size="sm"
-              className={chromeBtn}
-              onClick={() => stepPdfZoom(1 / pdfZoom)}
-            >
-              <span className="text-[11px] font-semibold tabular-nums">
-                {Math.round(pdfZoom * 100)}%
-              </span>
-            </GlassIconButton>
-            <GlassIconButton
-              label="放大页面"
-              size="sm"
-              className={chromeBtn}
-              onClick={() => stepPdfZoom(PDF_ZOOM_STEP)}
-              disabled={pdfZoom >= MAX_PDF_ZOOM}
-            >
-              <Plus size={16} />
-            </GlassIconButton>
-          </>
-        ) : (
-          <>
-            <GlassIconButton
-              label="缩小字号"
-              size="sm"
-              className={chromeBtn}
-              onClick={() => setFontSize(fontSize - 1)}
-              disabled={fontSize <= MIN_FONT_SIZE}
-            >
-              <span className="text-[11px] font-semibold">A</span>
-            </GlassIconButton>
-            <GlassIconButton
-              label="放大字号"
-              size="sm"
-              className={chromeBtn}
-              onClick={() => setFontSize(fontSize + 1)}
-              disabled={fontSize >= MAX_FONT_SIZE}
-            >
-              <span className="text-sm font-semibold">A</span>
-            </GlassIconButton>
-          </>
-        )}
-        <HeaderRule />
-        <GlassIconButton
-          label={atBookmark ? "取消本书签" : "添加书签"}
-          size="sm"
-          className={chromeBtn}
-          onClick={addBookmark}
-          disabled={createBookmark.isPending || deleteBookmark.isPending}
-        >
-          {/* Remounting on state flip restarts the pop; the icon eases between
-              outline and filled + accent instead of snapping. */}
-          <span
-            key={atBookmark ? "saved" : "idle"}
-            className={cn(
-              "inline-flex transition-colors duration-300",
-              atBookmark && "text-accent animate-[bookmark-pop_0.45s_ease-out]",
-            )}
-          >
-            <BookmarkSimple size={16} weight={atBookmark ? "fill" : "regular"} />
-          </span>
-        </GlassIconButton>
-        <GlassIconButton
-          label={fullscreen ? "退出全屏" : "全屏阅读"}
-          size="sm"
-          className={chromeBtn}
-          onClick={() => void toggleFullscreen()}
-        >
-          {fullscreen ? <ArrowsIn size={16} /> : <ArrowsOut size={16} />}
-        </GlassIconButton>
-      </div>
-    </header>
-  );
-
-  // Footer controls, shared by the in-flow bar and the fullscreen bottom hud.
-  const footerInner = (
-    <>
-      <GlassIconButton
-        label={
-          speechStatus === "paused"
-            ? "继续朗读"
-            : speechStatus === "playing"
-              ? "暂停朗读"
-              : "从当前位置朗读"
-        }
-        size="sm"
-        className={chromeBtn}
-        onClick={toggleSpeech}
-      >
-        <IconSwap state={speechStatus}>
-          {speechStatus === "playing" ? <Pause size={16} /> : <SpeakerHigh size={16} />}
-        </IconSwap>
-      </GlassIconButton>
-      <GlassIconButton
-        label="朗读播放器"
-        size="sm"
-        className={chromeBtn}
-        onClick={() => setPlayerOpen((open) => !open)}
-      >
-        <span className="text-[11px] font-semibold tabular-nums">{speechRate}×</span>
-      </GlassIconButton>
-      <GlassIconButton
-        label={
-          paged
-            ? autoScrolling
-              ? "暂停自动翻页"
-              : "开始自动翻页"
-            : autoScrolling
-              ? "暂停自动滚动"
-              : "开始自动滚动"
-        }
-        size="sm"
-        className={chromeBtn}
-        onClick={() => setAutoScrolling((on) => !on)}
-      >
-        <IconSwap state={autoScrolling ? "on" : "off"}>
-          {autoScrolling ? <Pause size={16} /> : <ArrowDown size={16} />}
-        </IconSwap>
-      </GlassIconButton>
-      <GlassButton
-        variant="subtle"
-        size="sm"
-        onClick={() => stepChapter(-1)}
-        disabled={chapterIdx === 0}
-      >
-        <CaretLeft size={14} /> 上一章
-      </GlassButton>
-      <span className="text-text-3 text-xs">
-        本章 {estimateLabel(chapterRemaining, readingSpeed)} · 全书{" "}
-        {estimateLabel(bookRemaining, readingSpeed)}
-      </span>
-      {/* The readout pops as it changes: progress arriving silently next to
-          buttons that all respond reads as frozen, not as steady. */}
-      <motion.span
-        key={Math.round(displayProgress * 100)}
-        initial={{ opacity: 0.35 }}
-        animate={{ opacity: 1 }}
-        transition={{ duration: 0.3 }}
-        className="text-text-3 text-xs tabular-nums"
-      >
-        {Math.round(displayProgress * 100)}%
-      </motion.span>
-      <GlassButton
-        variant="subtle"
-        size="sm"
-        onClick={() => stepChapter(1)}
-        disabled={chapterIdx >= total - 1}
-      >
-        下一章 <CaretRight size={14} />
-      </GlassButton>
-      <span className="text-text-3 text-xs">{paged ? "← → 翻页" : "← → 翻章"}</span>
-    </>
-  );
 
   // The toolbar's edit mode: when the reader tapped a painted highlight,
   // `pending` carries its id — resolve it to the whole annotation so the ink
@@ -2482,6 +2128,49 @@ function ReaderView({
       setAnnotationNote.mutate({ id: created.id, note }),
     );
   };
+
+  const headerBar = (
+    <ReaderHeaderBar
+      fullscreen={fullscreen}
+      onBack={leaveReader}
+      bookId={bookId}
+      coverUrl={coverUrl}
+      coverBoxRef={coverBoxRef}
+      title={title}
+      index={headerIndex}
+      total={headerTotal}
+      isPdf={isPdf}
+      chapterLabel={headerChapter}
+      onTogglePanel={(id) => setPanel((open) => (open === id ? "none" : id))}
+      pdfZoom={pdfZoom}
+      onZoom={(next) => stepPdfZoom(next / pdfZoom)}
+      fontSize={fontSize}
+      onFontSize={setFontSize}
+      atBookmark={atBookmark}
+      onToggleBookmark={addBookmark}
+      bookmarkPending={createBookmark.isPending || deleteBookmark.isPending}
+      onToggleFullscreen={() => void toggleFullscreen()}
+    />
+  );
+
+  const footerInner = (
+    <ReaderFooterControls
+      speechStatus={speechStatus}
+      onToggleSpeech={toggleSpeech}
+      onTogglePlayer={() => setPlayerOpen((open) => !open)}
+      speechRate={speechRate}
+      paged={paged}
+      autoScrolling={autoScrolling}
+      onToggleAutoScroll={() => setAutoScrolling((on) => !on)}
+      onStepChapter={stepChapter}
+      chapterIdx={chapterIdx}
+      total={total}
+      chapterRemaining={chapterRemaining}
+      bookRemaining={bookRemaining}
+      readingSpeed={readingSpeed}
+      progress={displayProgress}
+    />
+  );
 
   return (
     <div className="flex h-full flex-col" style={readerVars}>
@@ -2553,278 +2242,77 @@ function ReaderView({
               : {}),
           }}
         >
-          {isPdf ? (
-            // One page per chapter, drawn by pdf.js: fixed layout, real fonts
-            // and illustrations. Deliberately outside the multicol prose
-            // article: a page-sized canvas inside a column layout always
-            // spills one column, which reads as a blank page after every page.
-            paged ? (
-              <div
-                key={chapterIdx}
-                className={cn(
-                  "mx-auto flex h-full w-full items-stretch justify-center",
-                  transitionClass,
-                )}
-                style={{ paddingInline: margin, paddingBlock: blockMargin, gap: pdfGap }}
-              >
-                <div className="h-full min-w-0 flex-1">
-                  <Suspense fallback={<p className="text-sm opacity-60">正在准备 PDF 渲染…</p>}>
-                    <PdfPageView
-                      bookId={bookId}
-                      pageNumber={chapterIdx + 1}
-                      fit="box"
-                      zoom={pdfZoom}
-                      animated={pdfZoomAnimated}
-                      nightFg={pdfNight?.fg ?? null}
-                      nightBg={pdfNight?.bg ?? null}
-                      invertImages={pdfInvertImages}
-                      annotations={annotationsByPage.get(chapterIdx)}
-                      ttsWash={pdfWash}
-                      onSelection={(range, rect, bottom) =>
-                        onPdfSelection(range, rect, chapterIdx + 1, bottom)
-                      }
-                      onAnnotationClick={(annotation, x, y) =>
-                        onPdfAnnotationClick(annotation, x, y, chapterIdx + 1)
-                      }
-                    />
-                  </Suspense>
-                </div>
-                {layoutMode === "double" && chapterIdx + 1 < total && (
-                  <div className="h-full min-w-0 flex-1">
-                    <Suspense fallback={null}>
-                      <PdfPageView
-                        bookId={bookId}
-                        pageNumber={chapterIdx + 2}
-                        fit="box"
-                        zoom={pdfZoom}
-                        animated={pdfZoomAnimated}
-                        nightFg={pdfNight?.fg ?? null}
-                        nightBg={pdfNight?.bg ?? null}
-                        invertImages={pdfInvertImages}
-                        annotations={annotationsByPage.get(chapterIdx + 1)}
-                        onSelection={(range, rect, bottom) =>
-                          onPdfSelection(range, rect, chapterIdx + 2, bottom)
-                        }
-                        onAnnotationClick={(annotation, x, y) =>
-                          onPdfAnnotationClick(annotation, x, y, chapterIdx + 2)
-                        }
-                      />
-                    </Suspense>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <Suspense fallback={<p className="text-sm opacity-60">正在准备 PDF 渲染…</p>}>
-                <PdfScrollView
-                  bookId={bookId}
-                  numPages={total}
-                  margin={margin}
-                  blockMargin={blockMargin}
-                  zoom={pdfZoom}
-                  animated={pdfZoomAnimated}
-                  nightFg={pdfNight?.fg ?? null}
-                  nightBg={pdfNight?.bg ?? null}
-                  invertImages={pdfInvertImages}
-                  annotationsByPage={annotationsByPage}
-                  ttsPage={chapterIdx}
-                  ttsWash={pdfWash}
-                  onSelection={onPdfSelection}
-                  onAnnotationClick={onPdfAnnotationClick}
-                  onLayout={handlePdfLayout}
-                />
-              </Suspense>
-            )
-          ) : useFoliate ? (
-            <Suspense fallback={<p className="text-text-3 p-6 text-sm">正在打开原书排版…</p>}>
-              <FoliateBookView
-                ref={foliateRef}
-                bookId={bookId}
-                format={format}
-                startCfi={startCfi}
-                startFraction={startCfi ? null : initialProgress}
-                layout={layoutMode}
-                transition={pageTransition}
-                marginX={margin}
-                marginY={blockMargin}
-                style={foliateStyle}
-                annotations={annotations}
-                onSelect={onFoliateSelection}
-                onAnnotationClick={onFoliateAnnotationClick}
-                onAnchor={onFoliateAnchor}
-                onImageOpen={openBookImage}
-                onLocationChange={(relocate) => {
-                  rememberFoliateLocation(relocate);
-                  // A page turn moves the words, not the toolbar: re-anchor it.
-                  // Only worth measuring while there is one to move.
-                  if (toolbarOpen) remeasureSelection();
-                }}
-                onTocLoaded={setFoliateToc}
-              />
-            </Suspense>
-          ) : paged && plate ? (
-            // Part-title page: full-bleed wallpaper with the heading in a
-            // centred plate, the way the book's own stylesheet paints it.
-            // Outside the multicol article — a page-sized image inside a
-            // column layout spills columns and reads as blank pages.
-            <div
-              key={chapterIdx}
-              className={cn("mx-auto h-full w-full", transitionClass)}
-              style={{ paddingInline: margin, paddingBlock: blockMargin }}
-            >
-              <div className="border-hairline relative h-full w-full overflow-hidden rounded-2xl">
-                <ChapterImage
-                  bookId={bookId}
-                  path={plate.imagePath}
-                  plate
-                  onOpen={() => {
-                    const imageNo = bookImages.findIndex(
-                      (image) => image.chapterIdx === chapterIdx,
-                    );
-                    if (imageNo >= 0) setLightboxIdx(imageNo);
-                  }}
-                />
-                {plate.title !== "" && (
-                  // The book paints its part titles straight onto the art
-                  // (ink on paper, no box); a light halo keeps the glyphs
-                  // readable where the watercolour runs pale.
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <p
-                      className="text-center text-lg font-medium tracking-[0.3em] whitespace-pre-line"
-                      style={{ color: "#5a4632", textShadow: "0 1px 10px rgba(255,255,255,0.65)" }}
-                    >
-                      {plate.title}
-                    </p>
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <article
-              key={chapterIdx}
-              className={cn(
-                "prose-reader mx-auto",
-                !paged && "max-w-3xl",
-                paged && "paged-prose",
-                surface.mode === "dark" && invertBookImages && "invert-book-images",
-                transitionClass,
-              )}
-              style={articleStyle}
-            >
-              {chapter.isPending ? (
-                <p className="text-sm opacity-60">正在加载章节…</p>
-              ) : (
-                renderedParagraphs.map(({ idx, key, imagePath, link, segments }) =>
-                  link !== null ? (
-                    <p key={key} data-para-idx={idx} className="my-6">
-                      <button
-                        type="button"
-                        onClick={() => goTo(link.idx)}
-                        className="focus-visible:focus-ring cursor-pointer underline decoration-dotted underline-offset-4 transition-opacity hover:opacity-70"
-                        style={{ color: "var(--accent)" }}
-                      >
-                        {link.text}
-                      </button>
-                    </p>
-                  ) : imagePath !== null ? (
-                    <p key={key} data-para-idx={idx} className="image-para my-6 text-center">
-                      <ChapterImage
-                        bookId={bookId}
-                        path={imagePath}
-                        onOpen={() => {
-                          const imageNo = bookImages.findIndex(
-                            (image) => image.chapterIdx === chapterIdx && image.path === imagePath,
-                          );
-                          if (imageNo >= 0) setLightboxIdx(imageNo);
-                        }}
-                      />
-                    </p>
-                  ) : (
-                    <p
-                      key={key}
-                      data-para-idx={idx}
-                      className="text-justify text-pretty"
-                      style={{
-                        marginBottom: `${PARA_GAPS[paraGapIdx]}em`,
-                        textIndent: indent ? "2em" : undefined,
-                        // Column layouts measure against real heights; dropping
-                        // off-screen content corrupts the page boundaries.
-                        ...(paged
-                          ? {}
-                          : { contentVisibility: "auto", containIntrinsicSize: "auto 3em" }),
-                      }}
-                    >
-                      {segments.map((segment) =>
-                        segment.tts ? (
-                          // The reading voice's own run. Same ink as a saved
-                          // mark — one wash, both reading paths.
-                          <mark
-                            key={segment.key}
-                            className="bg-accent-soft rounded-[2px] text-inherit"
-                          >
-                            {segment.text}
-                          </mark>
-                        ) : segment.highlighted ? (
-                          segment.annotationId ? (
-                            // An annotation-backed run opens the same toolbar
-                            // a fresh selection gets, in edit mode. The
-                            // wrapper is an anchor, not a `<button>`: buttons
-                            // render as inline-block even with
-                            // `display: inline`, and one atomic box breaks
-                            // the paragraph's justified line breaking. A
-                            // native anchor is focusable and Enter-clickable
-                            // for free; the inner `<mark>` keeps the
-                            // highlight semantics. The ink comes from the
-                            // annotation's own colour and style.
-                            <a
-                              key={segment.key}
-                              href={`#note-${segment.annotationId}`}
-                              className="cursor-pointer"
-                              onClick={(event) => {
-                                event.preventDefault();
-                                const annotation = annotations?.find(
-                                  (a) => a.id === segment.annotationId,
-                                );
-                                if (!annotation) return;
-                                setPending({
-                                  range: {
-                                    start: annotation.startChar,
-                                    end: annotation.endChar,
-                                    text: annotation.text,
-                                  },
-                                  x: event.clientX,
-                                  y: event.clientY,
-                                  annotationId: annotation.id,
-                                });
-                              }}
-                            >
-                              <mark
-                                className="text-inherit"
-                                style={markInk(
-                                  segment.color,
-                                  segment.style as AnnotationStyle | null,
-                                )}
-                              >
-                                {segment.text}
-                              </mark>
-                            </a>
-                          ) : (
-                            <mark
-                              key={segment.key}
-                              className="bg-accent-soft rounded-[2px] text-inherit"
-                            >
-                              {segment.text}
-                            </mark>
-                          )
-                        ) : (
-                          segment.text
-                        ),
-                      )}
-                    </p>
-                  ),
-                )
-              )}
-            </article>
-          )}
+          <ReaderChapterView
+            bookId={bookId}
+            isPdf={isPdf}
+            useFoliate={useFoliate}
+            paged={paged}
+            doublePage={layoutMode === "double"}
+            chapterIdx={chapterIdx}
+            total={total}
+            transitionClass={transitionClass}
+            margin={margin}
+            blockMargin={blockMargin}
+            images={bookImages}
+            onOpenImage={setLightboxIdx}
+            foliateRef={foliateRef}
+            pdf={{
+              gap: pdfGap,
+              zoom: pdfZoom,
+              animated: pdfZoomAnimated,
+              night: pdfNight,
+              invertImages: pdfInvertImages,
+              annotationsByPage,
+              wash: pdfWash,
+              onSelection: onPdfSelection,
+              onAnnotationClick: onPdfAnnotationClick,
+              onLayout: handlePdfLayout,
+            }}
+            foliate={{
+              format,
+              startCfi,
+              startFraction: startCfi ? null : initialProgress,
+              layout: layoutMode,
+              transition: pageTransition,
+              style: foliateStyle,
+              annotations,
+              onSelect: onFoliateSelection,
+              onAnnotationClick: onFoliateAnnotationClick,
+              onAnchor: onFoliateAnchor,
+              onImageOpen: openBookImage,
+              onLocationChange: (relocate) => {
+                rememberFoliateLocation(relocate);
+                // A page turn moves the words, not the toolbar: re-anchor it.
+                // Only worth measuring while there is one to move.
+                if (toolbarOpen) remeasureSelection();
+              },
+              onTocLoaded: setFoliateToc,
+            }}
+            plate={{ image: plate }}
+            prose={{
+              pending: chapter.isPending,
+              paragraphs: renderedParagraphs,
+              gap: PARA_GAPS[paraGapIdx],
+              indent,
+              invertImages: invertBookImages,
+              darkSurface: surface.mode === "dark",
+              style: articleStyle,
+              annotations,
+              onGoTo: goTo,
+              onEditAnnotation: (annotation, x, y) =>
+                setPending({
+                  range: {
+                    start: annotation.startChar,
+                    end: annotation.endChar,
+                    text: annotation.text,
+                  },
+                  x,
+                  y,
+                  annotationId: annotation.id,
+                }),
+              ink: markInk,
+            }}
+          />
           {paged && tail && (
             <div
               aria-hidden
@@ -3009,139 +2497,89 @@ function ReaderView({
         onLookupClose={() => setLookup(null)}
       />
 
-      {/* One drawer at a time; AnimatePresence keeps it mounted while it
-          slides out, and clicking the dimmed backdrop dismisses it. */}
-      <AnimatePresence>
-        {panel !== "none" && (
-          <ReaderDrawer
-            key="reader-drawer"
-            title={
-              panel === "toc"
-                ? "目录与书签"
-                : panel === "settings"
-                  ? "阅读设置"
-                  : panel === "annotations"
-                    ? "标注"
-                    : panel === "search"
-                      ? "搜索正文"
-                      : panel === "graph"
-                        ? "知识图谱"
-                        : panel === "guide"
-                          ? "AI 导读"
-                          : "AI 助手"
+      <ReaderPanels
+        panel={panel}
+        bookId={bookId}
+        onClose={() => {
+          if (panel === "search") {
+            setSearch("");
+            // Drop the match highlights foliate painted into the pages.
+            if (useFoliate) foliateRef.current?.clearSearch();
+          }
+          setPanel("none");
+        }}
+        toc={{
+          chapters: useFoliateToc ? foliateChapters : chapters,
+          outline,
+          currentIdx: useFoliateToc ? foliateTocIdx : chapterIdx,
+          bookmarks: bookmarks ?? [],
+          busy: createBookmark.isPending || deleteBookmark.isPending,
+          onJump: (idx) => {
+            setPanel("none");
+            if (useFoliateToc) {
+              foliateRef.current?.goToEntry(idx);
+              return;
             }
-            onClose={() => {
-              if (panel === "search") {
-                setSearch("");
-                // Drop the match highlights foliate painted into the pages.
-                if (useFoliate) foliateRef.current?.clearSearch();
+            goTo(idx);
+          },
+          onJumpBookmark: (bookmark: Bookmark) => {
+            setPanel("none");
+            jumpTo(bookmark.chapterIdx, bookmark.fraction ?? 0);
+          },
+          onDeleteBookmark: (id) => deleteBookmark.mutate(id),
+          onAddBookmark: addBookmark,
+        }}
+        graph={{
+          onOpenChapter: (idx) => {
+            setPanel("none");
+            goTo(idx);
+          },
+        }}
+        search={{
+          useFoliate,
+          seed: searchSeed,
+          onFoliateSearch: (query) => foliateRef.current?.search(query) ?? Promise.resolve([]),
+          onFoliatePick: (cfi) => {
+            setPanel("none");
+            foliateRef.current?.goToCfi(cfi);
+          },
+          onPick: (hit, needle) => {
+            setSearch(needle);
+            pickHit(hit);
+          },
+        }}
+        annotations={{
+          items: annotations ?? [],
+          busy: deleteAnnotation.isPending || setAnnotationNote.isPending,
+          onDelete: (id) => deleteAnnotation.mutate(id),
+          onNote: (id, note) => setAnnotationNote.mutate({ id, note }),
+          onExport: () => setExportingNotes(true),
+          onJump: useFoliate
+            ? (annotation) => {
+                setPanel("none");
+                // A highlight with no anchor still has its text and the
+                // chapter it was recorded in, and those are enough: the
+                // chapter's own start is the landmark foliate can use,
+                // and the view mints the anchor from the text once it
+                // is there. The fraction is how the two numbering
+                // schemes meet (see `rememberFoliateLocation`).
+                foliateRef.current?.goToHighlight({
+                  id: annotation.id,
+                  cfi: annotation.cfi,
+                  text: annotation.text,
+                  fraction: globalProgress(chapters, annotation.chapterIdx, 0),
+                });
               }
-              setPanel("none");
-            }}
-          >
-            {/* Keyed so a swap rises in. The drawer stays put while its
-                content changes, and cutting between panels as different as a
-                chapter list and a settings sheet reads as a jump rather than
-                a step sideways. `flex min-h-0 flex-1 flex-col` preserves
-                every panel's own fill-the-drawer layout — they all root
-                the same way. */}
-            <Reveal key={panel} className="flex min-h-0 flex-1 flex-col">
-              {panel === "toc" && (
-                <TocPanel
-                  chapters={useFoliateToc ? foliateChapters : chapters}
-                  outline={outline}
-                  currentIdx={useFoliateToc ? foliateTocIdx : chapterIdx}
-                  bookmarks={bookmarks ?? []}
-                  busy={createBookmark.isPending || deleteBookmark.isPending}
-                  onJump={(idx) => {
-                    setPanel("none");
-                    if (useFoliateToc) {
-                      foliateRef.current?.goToEntry(idx);
-                      return;
-                    }
-                    goTo(idx);
-                  }}
-                  onJumpBookmark={(bookmark: Bookmark) => {
-                    setPanel("none");
-                    jumpTo(bookmark.chapterIdx, bookmark.fraction ?? 0);
-                  }}
-                  onDeleteBookmark={(id) => deleteBookmark.mutate(id)}
-                  onAddBookmark={addBookmark}
-                />
-              )}
-              {panel === "settings" && <SettingsPanel />}
-              {panel === "annotations" && (
-                <AnnotationList
-                  annotations={annotations ?? []}
-                  busy={deleteAnnotation.isPending || setAnnotationNote.isPending}
-                  onDelete={(id) => deleteAnnotation.mutate(id)}
-                  onNote={(id, note) => setAnnotationNote.mutate({ id, note })}
-                  onExport={() => setExportingNotes(true)}
-                  onJump={
-                    useFoliate
-                      ? (annotation) => {
-                          setPanel("none");
-                          // A highlight with no anchor still has its text and the
-                          // chapter it was recorded in, and those are enough: the
-                          // chapter's own start is the landmark foliate can use,
-                          // and the view mints the anchor from the text once it
-                          // is there. The fraction is how the two numbering
-                          // schemes meet (see `rememberFoliateLocation`).
-                          foliateRef.current?.goToHighlight({
-                            id: annotation.id,
-                            cfi: annotation.cfi,
-                            text: annotation.text,
-                            fraction: globalProgress(chapters, annotation.chapterIdx, 0),
-                          });
-                        }
-                      : undefined
-                  }
-                />
-              )}
-              {panel === "search" &&
-                (useFoliate ? (
-                  <FoliateSearchPanel
-                    initialQuery={searchSeed}
-                    onSearch={(query) => foliateRef.current?.search(query) ?? Promise.resolve([])}
-                    onPick={(cfi) => {
-                      setPanel("none");
-                      foliateRef.current?.goToCfi(cfi);
-                    }}
-                  />
-                ) : (
-                  <SearchPanel
-                    bookId={bookId}
-                    initialQuery={searchSeed}
-                    onPick={(hit, needle) => {
-                      setSearch(needle);
-                      pickHit(hit);
-                    }}
-                  />
-                ))}
-              {panel === "graph" && (
-                <GraphPanel
-                  bookId={bookId}
-                  onOpenChapter={(idx) => {
-                    setPanel("none");
-                    goTo(idx);
-                  }}
-                />
-              )}
-              {panel === "ai" && (
-                <AskAiPanel
-                  bookId={bookId}
-                  selection={aiContext}
-                  onClearSelection={() => setAiContext(null)}
-                  chapterTitle={chapterTitle || `第 ${chapterIdx + 1} 章`}
-                  paragraphs={chapterData?.paragraphs ?? []}
-                  onJump={jumpToCitation}
-                />
-              )}
-              {panel === "guide" && <GuidePanel bookId={bookId} />}
-            </Reveal>
-          </ReaderDrawer>
-        )}
-      </AnimatePresence>
+            : undefined,
+        }}
+        ai={{
+          context: aiContext,
+          onClearContext: () => setAiContext(null),
+          chapterTitle: chapterTitle || `第 ${chapterIdx + 1} 章`,
+          paragraphs: chapterData?.paragraphs ?? [],
+          onJumpCitation: jumpToCitation,
+        }}
+      />
 
       {/* Lightbox viewer: blank areas close, Esc closes, arrows flip the book's images. */}
       <OverlayPortal>
