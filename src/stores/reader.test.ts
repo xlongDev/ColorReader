@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  DEFAULT_READER_SETTINGS,
   foldScrollDelta,
   pageIsNight,
   updateReadingSpeed,
@@ -96,5 +97,65 @@ describe("pageIsNight", () => {
     expect(pageIsNight("day", true)).toBe(false);
     expect(pageIsNight("night", false)).toBe(true);
     expect(pageIsNight("night", true)).toBe(true);
+  });
+
+  it("reads an undecided page as following — what the snapshot then replaces", () => {
+    // `null` is the state a first launch starts in. It has to resolve the same
+    // way `follow` does, or the frame before the snapshot lands would paint a
+    // different paper from the frame after it.
+    expect(pageIsNight(null, false)).toBe(false);
+    expect(pageIsNight(null, true)).toBe(true);
+  });
+});
+
+describe("snapPageTheme", () => {
+  afterEach(() => {
+    useReaderSettings.setState(DEFAULT_READER_SETTINGS);
+  });
+
+  it("pins an undecided page to the theme of the day", () => {
+    useReaderSettings.setState({ pageTheme: null });
+    useReaderSettings.getState().snapPageTheme(true);
+    expect(useReaderSettings.getState().pageTheme).toBe("night");
+
+    useReaderSettings.setState({ pageTheme: null });
+    useReaderSettings.getState().snapPageTheme(false);
+    expect(useReaderSettings.getState().pageTheme).toBe("day");
+  });
+
+  it("leaves a choice alone, including one made back into follow", () => {
+    // This is what makes it safe to call from an effect that re-runs whenever
+    // the app theme changes: a page the reader pinned stays pinned, and a
+    // reader who asked the page to follow gets to keep asking.
+    useReaderSettings.setState({ pageTheme: "day" });
+    useReaderSettings.getState().snapPageTheme(true);
+    expect(useReaderSettings.getState().pageTheme).toBe("day");
+
+    useReaderSettings.setState({ pageTheme: "follow" });
+    useReaderSettings.getState().snapPageTheme(true);
+    expect(useReaderSettings.getState().pageTheme).toBe("follow");
+  });
+});
+
+/**
+ * v8 has to tell "never chose" from "chose follow": the first launch now
+ * snapshots the page palette from the app theme, and a stored `follow` is the
+ * old default rather than a decision to keep following.
+ */
+function pageThemeOf(persisted: Record<string, unknown>): unknown {
+  const options = useReaderSettings.persist.getOptions();
+  if (!options.migrate) throw new Error("the store lost its migrate function");
+  return (options.migrate(persisted, 7) as { pageTheme: unknown }).pageTheme;
+}
+
+describe("v8 page-theme migration", () => {
+  it("reads a stored `follow` as never having chosen, so the snapshot runs", () => {
+    expect(pageThemeOf({ pageTheme: "follow" })).toBeNull();
+    expect(pageThemeOf({})).toBeNull();
+  });
+
+  it("keeps a page the reader pinned themselves", () => {
+    expect(pageThemeOf({ pageTheme: "night" })).toBe("night");
+    expect(pageThemeOf({ pageTheme: "day" })).toBe("day");
   });
 });

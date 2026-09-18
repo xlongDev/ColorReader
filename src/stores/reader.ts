@@ -48,14 +48,25 @@ interface ReaderState {
   pageNumbers: PageNumberScope;
   /**
    * Where the page's palette comes from — the app theme, or a fixed choice.
+   * `null` means the reader has never decided, which is the state a fresh
+   * install (and an upgraded one) starts in; `snapPageTheme` resolves it once
+   * against the app theme of the day, and from then on it is a real choice the
+   * UI shows and can set back to `follow`.
    *
    * The page used to follow the app theme unconditionally. On a foliate book
    * that is not free: foliate's `setStyles` re-injects the stylesheet into
    * every loaded section and `expand()`s each one, so a theme switch
    * re-paginates the whole book. Pinning it here leaves the app theme
-   * affecting only the chrome.
+   * affecting only the chrome — and since the snapshot happens on first run,
+   * the cheap path is the one everybody gets without opting in.
    */
-  pageTheme: PageTheme;
+  pageTheme: PageTheme | null;
+  /**
+   * Resolve an undecided `pageTheme` against the app theme, once. Idempotent:
+   * a page theme that is already a choice — including one the reader made back
+   * into `follow` — is left alone, so this never overrides a decision.
+   */
+  snapPageTheme: (appIsDark: boolean) => void;
   /** PDF only: pages fill the window edge to edge, ignoring the prose margins. */
   pdfFill: boolean;
   /** PDF only: render text and vectors on the night palette, independent of
@@ -136,9 +147,12 @@ export const PAGE_THEMES: { key: PageTheme; label: string }[] = [
  *
  * `follow` is the only branch that reads the app theme, so it is the only one
  * that can change under a foliate book when the reader switches the app theme.
+ * An undecided `null` reads as `follow`, which is what it was before the
+ * snapshot lands — the snapshot therefore never changes the palette it
+ * resolves to, only what happens on the *next* theme switch.
  */
-export function pageIsNight(pageTheme: PageTheme, appIsDark: boolean): boolean {
-  return pageTheme === "follow" ? appIsDark : pageTheme === "night";
+export function pageIsNight(pageTheme: PageTheme | null, appIsDark: boolean): boolean {
+  return pageTheme === "night" || (pageTheme !== "day" && appIsDark);
 }
 
 /** Line height presets, index-selectable in reading settings. */
@@ -210,37 +224,53 @@ export function updateReadingSpeed(prev: number, chars: number, elapsedMs: numbe
   return Math.round(prev * 0.7 + clamped * 0.3);
 }
 
+/**
+ * Every reading preference at its shipping value.
+ *
+ * Split out from the store body so that "restore everything" is one write
+ * rather than a second list of defaults that can drift from the first — see
+ * `resetAllSettings`. The actions are deliberately not in here: a reset
+ * replaces what the reader chose, not what the store can do.
+ */
+export const DEFAULT_READER_SETTINGS = {
+  fontSize: 18,
+  speechRate: 1,
+  speechVoiceURI: null,
+  speechGranularity: "sentence",
+  fontFamily: "system",
+  lineHeightIdx: 1,
+  paraGapIdx: 1,
+  marginX: DEFAULT_MARGIN_X,
+  marginY: DEFAULT_MARGIN_Y,
+  indent: false,
+  surface: "standard",
+  nightSurface: "night",
+  customSurface: null,
+  pageTransition: "pan",
+  layoutMode: "scroll",
+  autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
+  readingSpeed: DEFAULT_READING_SPEED,
+  pageNumbers: "off",
+  pageTheme: null,
+  pdfFill: true,
+  pdfNight: true,
+  pdfGap: 0,
+  pdfInvertImages: false,
+  invertBookImages: false,
+  highlightColor: HIGHLIGHT_COLORS[0]!.hex,
+  highlightStyle: "highlight",
+} satisfies Partial<ReaderState>;
+
 export const useReaderSettings = create<ReaderState>()(
   persist(
     (set) => ({
-      fontSize: 18,
+      ...DEFAULT_READER_SETTINGS,
       setFontSize: (size) =>
         set({ fontSize: Math.min(Math.max(size, MIN_FONT_SIZE), MAX_FONT_SIZE) }),
-      speechRate: 1,
-      speechVoiceURI: null,
-      speechGranularity: "sentence",
-      fontFamily: "system",
-      lineHeightIdx: 1,
-      paraGapIdx: 1,
-      marginX: DEFAULT_MARGIN_X,
-      marginY: DEFAULT_MARGIN_Y,
-      indent: false,
-      surface: "standard",
-      nightSurface: "night",
-      customSurface: null,
-      pageTransition: "pan",
-      layoutMode: "scroll",
-      autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
-      readingSpeed: DEFAULT_READING_SPEED,
-      pageNumbers: "off",
-      pageTheme: "follow",
-      pdfFill: true,
-      pdfNight: true,
-      pdfGap: 0,
-      pdfInvertImages: false,
-      invertBookImages: false,
-      highlightColor: HIGHLIGHT_COLORS[0]!.hex,
-      highlightStyle: "highlight",
+      snapPageTheme: (appIsDark) =>
+        set((state) =>
+          state.pageTheme === null ? { pageTheme: appIsDark ? "night" : "day" } : {},
+        ),
       update: (patch) => set(patch),
       setReadingSpeed: (charsPerMinute) =>
         set({
@@ -255,7 +285,7 @@ export const useReaderSettings = create<ReaderState>()(
       // Bump only when a stored value changes meaning; a newly added key needs
       // no bump — the default merge layers the persisted state over the
       // initial one.
-      version: 7,
+      version: 8,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are
       // continuous px now and the scale was rebased (old 特宽 = new 标准).
@@ -273,6 +303,12 @@ export const useReaderSettings = create<ReaderState>()(
       //   current chapter / whole book). A stored `true` becomes "chapter" —
       //   the display it already had — and anything unrecognised becomes
       //   "off" rather than leaving the row with no chip selected.
+      // v8: the page palette is snapshotted from the app theme on first run
+      //   now, so "never chose" and "chose follow" have to be told apart. A
+      //   stored `follow` is the old default and means the former — drop it to
+      //   `null` so the snapshot happens on this launch. A stored `day` or
+      //   `night` is a real choice and stays: pinning a page for someone who
+      //   pinned it themselves is not a migration, it is a regression.
       migrate: (persisted) => {
         const state = persisted as Partial<ReaderState> & {
           autoScrollIdx?: number;
@@ -299,6 +335,9 @@ export const useReaderSettings = create<ReaderState>()(
           stored === "peel-tr"
         ) {
           next.pageTransition = "pan";
+        }
+        if (next.pageTheme !== "day" && next.pageTheme !== "night") {
+          next.pageTheme = null;
         }
         return next;
       },

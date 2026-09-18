@@ -144,9 +144,11 @@ export function AppShell() {
   const nightSurface = useReaderSettings((s) => s.nightSurface);
   const pageTheme = useReaderSettings((s) => s.pageTheme);
   const surface = resolveSurface(
-    // `follow` is the historical behaviour and the only one that still ties
-    // the page to the app theme; a pinned page keeps its palette, so an app
-    // theme switch moves the chrome without re-paginating a foliate book.
+    // `follow` — and the `null` a first launch starts in, which resolves the
+    // same way for the frame before the snapshot lands — is the only state
+    // that ties the page to the app theme. A pinned page keeps its palette, so
+    // an app theme switch moves the chrome without re-paginating a foliate
+    // book.
     pageIsNight(pageTheme, appTheme === "dark") ? nightSurface : daySurface,
     customSurface,
   );
@@ -157,6 +159,20 @@ export function AppShell() {
   useEffect(() => {
     return registerCoreCommands({ openPalette: () => setOpen(true) });
   }, [setOpen]);
+
+  /**
+   * Decide the page palette once, from the app theme of the day.
+   *
+   * Nobody has to opt in: a foliate book re-paginates on every app-theme
+   * switch while the page follows it, and the fix — pinning the page — is not
+   * something a reader would think to look for. So the first launch pins it to
+   * whatever the theme is then. Idempotent, and it never overrides a page
+   * theme that is already a choice, including one set back to `follow`.
+   */
+  const snapPageTheme = useReaderSettings((s) => s.snapPageTheme);
+  useEffect(() => {
+    snapPageTheme(appTheme === "dark");
+  }, [appTheme, snapPageTheme]);
 
   const sidebarGone = sidebarHidden || readerFullscreen;
 

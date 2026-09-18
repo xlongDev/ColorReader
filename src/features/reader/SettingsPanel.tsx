@@ -255,15 +255,21 @@ export function SettingsPanel() {
         <Group label="书页配色">
           <Chips
             options={PAGE_THEMES}
-            value={settings.pageTheme}
+            // `null` is a launch that has not been snapshotted yet — resolved
+            // within a frame, and it reads as `follow` meanwhile.
+            value={settings.pageTheme ?? "follow"}
             onChange={(value) => update({ pageTheme: value })}
           />
           {/* A pinned page is also the fast one: switching the app theme then
               leaves the book alone, instead of making foliate re-inject its
               stylesheet into every loaded section and re-paginate them all. */}
-          {settings.pageTheme === "follow" && (
+          {(settings.pageTheme ?? "follow") === "follow" ? (
             <p className="text-text-3 mt-2 text-[11px] leading-relaxed">
               跟随主题时，切换主题会重排整本书；固定为日间或夜间则不会。
+            </p>
+          ) : (
+            <p className="text-text-3 mt-2 text-[11px] leading-relaxed">
+              书页已固定，切换主题只改界面，不再重排这本书。
             </p>
           )}
         </Group>
