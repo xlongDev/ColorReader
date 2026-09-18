@@ -17,6 +17,8 @@ import {
   MIN_MARGIN_Y,
   MARGIN_X_PRESETS,
   PAGE_NUMBER_SCOPES,
+  PAGE_THEMES,
+  pageIsNight,
   PARA_GAPS,
   useReaderSettings,
 } from "@/stores/reader";
@@ -42,9 +44,13 @@ export function SettingsPanel() {
   const { update } = settings;
   const fonts = useFonts().data ?? [];
   const appTheme = useResolvedTheme();
-  // The picker edits the surface of the appearance currently active.
-  const surfaceField = appTheme === "dark" ? "nightSurface" : "surface";
-  const activeSurface = appTheme === "dark" ? settings.nightSurface : settings.surface;
+  // The picker edits the surface of the appearance currently active — and
+  // "active" now means what the page is wearing, which is the reader's own
+  // choice rather than the app theme. Pinning the page to 夜间 therefore
+  // edits the night paper, even in a light shell.
+  const pageNight = pageIsNight(settings.pageTheme, appTheme === "dark");
+  const surfaceField = pageNight ? "nightSurface" : "surface";
+  const activeSurface = pageNight ? settings.nightSurface : settings.surface;
   // Inverting a book's pictures is a night-page decision, and a surface is
   // absolute: the switch is offered on the dark ones, whichever appearance
   // the shell is in.
@@ -246,6 +252,21 @@ export function SettingsPanel() {
       </Section>
 
       <Section title="外观">
+        <Group label="书页配色">
+          <Chips
+            options={PAGE_THEMES}
+            value={settings.pageTheme}
+            onChange={(value) => update({ pageTheme: value })}
+          />
+          {/* A pinned page is also the fast one: switching the app theme then
+              leaves the book alone, instead of making foliate re-inject its
+              stylesheet into every loaded section and re-paginate them all. */}
+          {settings.pageTheme === "follow" && (
+            <p className="text-text-3 mt-2 text-[11px] leading-relaxed">
+              跟随主题时，切换主题会重排整本书；固定为日间或夜间则不会。
+            </p>
+          )}
+        </Group>
         <Group label="阅读背景">
           <div className="grid w-full grid-cols-4 gap-1.5">
             {READING_SURFACES.map((surface) => {

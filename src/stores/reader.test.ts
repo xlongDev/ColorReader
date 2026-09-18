@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { foldScrollDelta, updateReadingSpeed, useReaderSettings } from "@/stores/reader";
+import {
+  foldScrollDelta,
+  pageIsNight,
+  updateReadingSpeed,
+  useReaderSettings,
+} from "@/stores/reader";
 
 describe("foldScrollDelta", () => {
   it("keeps slow speeds moving by carrying sub-pixel steps across frames", () => {
@@ -73,5 +78,23 @@ describe("v7 page-number scope migration", () => {
     // Not a value this version knows: the row would otherwise render with no
     // chip selected, which is worse than losing the preference.
     expect(scopeOf({ pageNumbers: "spread" })).toBe("off");
+  });
+});
+
+describe("pageIsNight", () => {
+  it("follows the app theme only when the reader asked it to", () => {
+    // This is the whole point of the setting: `follow` is the only branch
+    // that reads the app theme, so it is the only one that can change the
+    // page under a foliate book — and changing the page there costs a
+    // re-pagination of every loaded section.
+    expect(pageIsNight("follow", false)).toBe(false);
+    expect(pageIsNight("follow", true)).toBe(true);
+  });
+
+  it("holds the page where the reader pinned it, whatever the app does", () => {
+    expect(pageIsNight("day", false)).toBe(false);
+    expect(pageIsNight("day", true)).toBe(false);
+    expect(pageIsNight("night", false)).toBe(true);
+    expect(pageIsNight("night", true)).toBe(true);
   });
 });

@@ -15,7 +15,7 @@ import { BookCoverFlight } from "@/components/motion/BookCoverFlight";
 import { fontFaceCss, readerGlassVars, resolveSurface } from "@/features/reader/theme";
 import { useCommandPalette } from "@/stores/command-palette";
 import { useSettings } from "@/stores/settings";
-import { useReaderSettings } from "@/stores/reader";
+import { pageIsNight, useReaderSettings } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import { useDeepLink } from "@/hooks/useDeepLink";
@@ -142,7 +142,14 @@ export function AppShell() {
   const daySurface = useReaderSettings((s) => s.surface);
   const customSurface = useReaderSettings((s) => s.customSurface);
   const nightSurface = useReaderSettings((s) => s.nightSurface);
-  const surface = resolveSurface(appTheme === "dark" ? nightSurface : daySurface, customSurface);
+  const pageTheme = useReaderSettings((s) => s.pageTheme);
+  const surface = resolveSurface(
+    // `follow` is the historical behaviour and the only one that still ties
+    // the page to the app theme; a pinned page keeps its palette, so an app
+    // theme switch moves the chrome without re-paginating a foliate book.
+    pageIsNight(pageTheme, appTheme === "dark") ? nightSurface : daySurface,
+    customSurface,
+  );
   const shellStyle = reading
     ? ({ ...readerGlassVars(surface), "--app-bg": surface.tint } as CSSProperties)
     : undefined;

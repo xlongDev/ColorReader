@@ -46,6 +46,16 @@ interface ReaderState {
   readingSpeed: number;
   /** How much of the "N / M 页" page indicator to show in paged layouts. */
   pageNumbers: PageNumberScope;
+  /**
+   * Where the page's palette comes from — the app theme, or a fixed choice.
+   *
+   * The page used to follow the app theme unconditionally. On a foliate book
+   * that is not free: foliate's `setStyles` re-injects the stylesheet into
+   * every loaded section and `expand()`s each one, so a theme switch
+   * re-paginates the whole book. Pinning it here leaves the app theme
+   * affecting only the chrome.
+   */
+  pageTheme: PageTheme;
   /** PDF only: pages fill the window edge to edge, ignoring the prose margins. */
   pdfFill: boolean;
   /** PDF only: render text and vectors on the night palette, independent of
@@ -100,6 +110,36 @@ export const PAGE_NUMBER_SCOPES: { key: PageNumberScope; label: string }[] = [
   // where a reader who forgot what they picked will see it.
   { key: "book", label: "全书" },
 ];
+
+/**
+ * Where the page's own palette comes from.
+ *
+ * `follow` ties the page to the app theme, which is how it used to work
+ * always — and on a foliate book it is also the expensive choice: foliate's
+ * `setStyles` re-injects the whole stylesheet into every loaded section and
+ * then calls `expand()` on each one, so switching the app theme re-paginates
+ * the book. Pinning the page to `day` or `night` means an app-theme switch
+ * touches only the chrome, and the book never re-paginates.
+ */
+export type PageTheme = "follow" | "day" | "night";
+
+/** Chip labels for the 书页配色 row, in display order. */
+export const PAGE_THEMES: { key: PageTheme; label: string }[] = [
+  { key: "follow", label: "跟随主题" },
+  { key: "day", label: "日间" },
+  { key: "night", label: "夜间" },
+];
+
+/**
+ * Whether the page wears its night palette, given the app theme and the
+ * reader's own choice.
+ *
+ * `follow` is the only branch that reads the app theme, so it is the only one
+ * that can change under a foliate book when the reader switches the app theme.
+ */
+export function pageIsNight(pageTheme: PageTheme, appIsDark: boolean): boolean {
+  return pageTheme === "follow" ? appIsDark : pageTheme === "night";
+}
 
 /** Line height presets, index-selectable in reading settings. */
 export const LINE_HEIGHTS = [1.6, 1.8, 2.0, 2.2] as const;
@@ -193,6 +233,7 @@ export const useReaderSettings = create<ReaderState>()(
       autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
       readingSpeed: DEFAULT_READING_SPEED,
       pageNumbers: "off",
+      pageTheme: "follow",
       pdfFill: true,
       pdfNight: true,
       pdfGap: 0,
