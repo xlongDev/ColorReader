@@ -230,6 +230,11 @@ export function AppShell() {
           </GlassIconButton>
         )}
         <GlassPanel
+          // The pane everything is read in, and the reference a modal centres
+          // itself against. The sidebar pushes it ~130px right of the window's
+          // centre, so a window-centred dialog reads as off-centre. See
+          // `GlassDialog`.
+          data-content-pane
           className={
             readerFullscreen
               ? "min-w-0 flex-1 overflow-hidden rounded-none"

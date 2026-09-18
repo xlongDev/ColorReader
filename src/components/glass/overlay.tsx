@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useLayoutEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AnimatePresence, motion } from "motion/react";
@@ -56,6 +56,54 @@ export function GlassDialog({
   widthClass = "w-[min(92vw,640px)]",
 }: GlassDialogProps) {
   const m = useMotion();
+
+  /**
+   * Centre on the content pane, not on the window.
+   *
+   * The sidebar pushes the pane right of the window's centre — measured on a
+   * 1280px window: pane centre 770 against the window's 640, so a
+   * window-centred dialog sat 130px left of the thing it was covering and read
+   * as off-centre to anyone looking at the shelf. The batch-manage bar was
+   * re-anchored for the same reason; this is that fix generalised, so every
+   * dialog agrees with the bar instead of only the import one.
+   *
+   * Only the horizontal is written. Vertical centring is already the pane's,
+   * because the pane is the full height of the window.
+   *
+   * **A custom property on the root rather than an inline style on the
+   * element.** The obvious version held a `ref` to the dialog and wrote
+   * `style.left` — but `Dialog.Content asChild` composes the child's ref, and
+   * with React 19's `ref`-as-a-prop that composition comes back null: the
+   * effect ran, the pane was found, and the element was `null`, so nothing was
+   * ever written. A property on `documentElement` needs no ref at all.
+   *
+   * **The property is deliberately not cleared on close.** This cleanup runs
+   * when `open` flips false, which is when the exit animation *starts* — and
+   * `left` falling back to `50%` mid-exit would slide the dialog across the
+   * window as it faded. It is cleared only when a dialog finds no pane, which
+   * is what makes it self-correcting rather than sticky.
+   *
+   * The listener is for a window resize, a real gesture while a dialog is open.
+   * The sidebar needs no watching: the scrim is modal, so it cannot be toggled
+   * out from under an open dialog.
+   */
+  useLayoutEffect(() => {
+    if (!open) return;
+    const root = document.documentElement;
+    const place = () => {
+      const pane = document.querySelector<HTMLElement>("[data-content-pane]");
+      if (!pane) {
+        root.style.removeProperty("--dialog-centre");
+        return;
+      }
+      const box = pane.getBoundingClientRect();
+      root.style.setProperty("--dialog-centre", `${box.left + box.width / 2}px`);
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open]);
+
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <AnimatePresence>
@@ -73,7 +121,9 @@ export function GlassDialog({
             <Dialog.Content asChild forceMount>
               <motion.div
                 className={cn(
-                  "fixed top-1/2 left-1/2 z-50 -translate-x-1/2 -translate-y-1/2",
+                  // `left` reads the pane's centre, falling back to the
+                  // window's for a dialog opened where there is no pane.
+                  "fixed top-1/2 left-[var(--dialog-centre,50%)] z-50 -translate-x-1/2 -translate-y-1/2",
                   widthClass,
                   "glass-2 shadow-panel rounded-2xl p-5 outline-none",
                 )}
