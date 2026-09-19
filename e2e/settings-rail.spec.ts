@@ -32,6 +32,18 @@ async function openSettings(page: Page): Promise<void> {
   await page.getByRole("button", { name: "设置", exact: true }).first().click();
   await expect(page.getByRole("heading", { name: "设置", level: 1 })).toBeVisible();
   await page.waitForTimeout(600);
+  // Nothing below is meaningful until the pane stops growing: `AI 助手` and
+  // `同步` render nothing at all until their configs resolve, and they sit above
+  // most of the page, so every offset below them is a different number on each
+  // pass until the last one arrives. Asked of the page rather than written down,
+  // because how tall a group is is a font metric.
+  await expect
+    .poll(async () => {
+      const before = await page.locator(SCROLLER).evaluate((el) => el.scrollHeight);
+      await page.waitForTimeout(150);
+      return (await page.locator(SCROLLER).evaluate((el) => el.scrollHeight)) === before;
+    })
+    .toBe(true);
 }
 
 test("each rail entry shows the group it names, and stays lit on it", async ({ page }) => {
@@ -63,4 +75,71 @@ test("each rail entry shows the group it names, and stays lit on it", async ({ p
     // to the sight-line rules, and they handed the highlight on.
     await expect(rail.locator('[aria-current="true"]'), `after ${label}`).toHaveText(label);
   }
+});
+
+/**
+ * And a jump that runs out of scroll still owns the highlight.
+ *
+ * The rule at the bottom of the pane is that the *last* group is the one being
+ * read — but a jump to a group the pane has no scroll left for ends at that same
+ * bottom, and its own smooth scroll goes on emitting events from there. Read as
+ * "the reader scrolled to the end", those events handed the highlight to 关于
+ * while the pane was showing 同步: the rail lit an entry nobody clicked.
+ *
+ * The trigger is layout, not timing — the runner's CJK font measures wide enough
+ * that 同步 is the first entry whose jump bottoms the pane out — so it is staged
+ * here instead of waited for, and the same jump is then asked for from a pane
+ * that is already at its bottom, which is the state that made it visible.
+ */
+test("a jump that runs out of scroll keeps the highlight on the group it named", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openSettings(page);
+
+  const rail = page.locator('nav[aria-label="设置分类"]');
+  // Park the pane at its bottom first, so the rule's own answer (关于) is on
+  // screen before the jump — otherwise a passing test could not say whether the
+  // highlight came from the rule or from the click.
+  await page.locator(SCROLLER).evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(rail.locator('[aria-current="true"]'), "the pane starts at its end").toHaveText(
+    "关于",
+  );
+
+  await page.getByRole("button", { name: "同步", exact: true }).click();
+  await page.waitForTimeout(900);
+  await expect(rail.locator('[aria-current="true"]'), "after 同步").toHaveText("同步");
+});
+
+/**
+ * And the sight-line names the group the pane is actually showing.
+ *
+ * The rule is "the last group whose top has passed a line 15% down the pane",
+ * and it reads the groups' offsets from a cache — for good reason, since reading
+ * them per scroll frame would force a layout per frame. The cache was built
+ * once, when `AI 助手` and `同步` had not rendered yet, and nothing ever rebuilt
+ * it: those two groups arriving *moved* every offset below them without resizing
+ * anything, and a `ResizeObserver` reports sizes, not positions. 关于 was cached
+ * at 1414 against a real 2562 — the whole lower half of the page was held higher
+ * than it is — so from 词典 down, every group answered as having passed the line
+ * and the rail read 关于 wherever the reader scrolled to.
+ */
+test("the highlight follows a scroll the reader made", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openSettings(page);
+
+  const rail = page.locator('nav[aria-label="设置分类"]');
+  // Aimed by the group's own offset rather than at a remembered `scrollTop`: the
+  // line is 15% down the pane and a group's height is a font metric, so a fixed
+  // number would be a different question in each engine.
+  const top = await page
+    .locator('[data-section="fonts"]')
+    .evaluate((el) => (el as HTMLElement).offsetTop);
+  await page.locator(SCROLLER).evaluate((el, y) => {
+    el.scrollTop = y;
+  }, top - 10);
+
+  await expect(rail.locator('[aria-current="true"]'), "the pane is over 字体").toHaveText("字体");
 });

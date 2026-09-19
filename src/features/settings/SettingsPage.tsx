@@ -74,6 +74,21 @@ function scrolledToEnd(root: HTMLElement): boolean {
   return scrollable && root.scrollTop + root.clientHeight >= root.scrollHeight - 8;
 }
 
+/**
+ * Where in the pane a jump can actually put a group.
+ *
+ * Asking for more than the pane can scroll clamps to the bottom, so a group past
+ * the end is as far up as the bottom and nowhere further. This is the question a
+ * jump's arrival is about — "is the pane where it can get to?" — and asking
+ * `scrolledToEnd` instead answers it wrongly in the case that matters: a pane
+ * parked at its bottom, asked for a group further *up*, is at the end and has
+ * not moved at all, so the claim was dropped on the spot and the sight-line rule
+ * below lit the last group while the pane went on to show 同步.
+ */
+function reachableTop(root: HTMLElement, top: number): number {
+  return Math.min(top, root.scrollHeight - root.clientHeight);
+}
+
 const THEMES: readonly { value: ThemeMode; label: string; icon: typeof Sun }[] = [
   { value: "light", label: "浅色", icon: Sun },
   { value: "dark", label: "深色", icon: Moon },
@@ -92,10 +107,29 @@ export function SettingsPage() {
   /** Each group's offset in the scroll container, cached — reading `offsetTop`
    *  per scroll frame would force a layout on every one of them. */
   const offsets = useRef<{ id: SectionId; top: number }[]>([]);
+  /**
+   * How many groups the cache was built from.
+   *
+   * A group that is not in the DOM yet when the cache is built is not watched by
+   * the `ResizeObserver` either, and when it arrives every group below it *moves
+   * without changing size* — a change no observer reports. Both `AI 助手` and
+   * `同步` return `null` until their configs resolve, so this is the normal case
+   * and not a corner: measured on the demo shelf, 关于 was cached at 1414 against
+   * a real 2562, the AI form's height missing from everything below it. The
+   * sight-line rule takes the last group whose top has passed the line, so with
+   * that cache *every* group answered as passed and the rail read 关于 from the
+   * first screen down — and a jump was told the pane had nowhere left to scroll,
+   * which is how a click on 同步 ended up lighting 关于.
+   */
+  const counted = useRef(-1);
 
   const measure = useCallback(() => {
     const root = scrollRef.current;
     if (!root) return;
+    // One query for both the count and the offsets: the count is what says the
+    // cache is still about the same set of groups.
+    const found = root.querySelectorAll("[data-section]");
+    counted.current = found.length;
     offsets.current = SECTIONS.map((section) => ({
       id: section.id,
       top: root.querySelector<HTMLElement>(`[data-section="${section.id}"]`)?.offsetTop ?? 0,
@@ -106,6 +140,25 @@ export function SettingsPage() {
   const jumping = useRef<{ id: SectionId; top: number } | null>(null);
 
   /**
+   * Where a finished jump left the pane.
+   *
+   * A smooth scroll that asked for more than the pane has keeps emitting events
+   * at the position it stopped at — and the rule below reads that position as
+   * "nowhere left to scroll", which is its signal to hand the highlight to the
+   * *last* group. So the tail of the jump's own scroll arrives looking exactly
+   * like the reader having scrolled to the bottom, and the rail lights the wrong
+   * entry the moment a jump lands on a group that cannot reach the top.
+   *
+   * Held as a position rather than released on a deadline: the difference
+   * between the two is *where* the pane is, not *when* the event arrived, and a
+   * runner handing out scroll events five times a second is slower than any
+   * settle timer that would be reasonable here. An event at this position is the
+   * jump's own tail and is ignored; the first one at a different position is the
+   * reader, and the rule resumes.
+   */
+  const settled = useRef<number | null>(null);
+
+  /**
    * Which section the rail highlights: the last one whose top has passed a
    * sight-line 15% down the pane. An observer band was the first attempt, but
    * it reports the first section touching the band, which is the *previous*
@@ -114,12 +167,16 @@ export function SettingsPage() {
   useEffect(() => {
     const root = scrollRef.current;
     if (!root) return;
-    measure();
     // A form mounts once its config resolves and changes every offset below
     // it, so re-measure on layout changes rather than on a timer.
     const resize = new ResizeObserver(measure);
     resize.observe(root);
-    for (const section of root.querySelectorAll("[data-section]")) resize.observe(section);
+    /** Measure, and start watching every group the response contains. */
+    const sync = () => {
+      for (const section of root.querySelectorAll("[data-section]")) resize.observe(section);
+      measure();
+    };
+    sync();
 
     // Released a beat after the pane stops moving, not the moment it arrives:
     // a smooth scroll that asks for more than the pane has keeps emitting
@@ -128,6 +185,11 @@ export function SettingsPage() {
     let settle: number | undefined;
 
     const onScroll = () => {
+      // A group can arrive after this effect ran — see `counted` — and re-reading
+      // the offsets costs a query and no layout, where reading them per frame
+      // would not.
+      if (root.querySelectorAll("[data-section]").length !== counted.current) sync();
+
       // A jump owns the highlight while it is claimed. Two things go wrong
       // otherwise, and both read as the rail ignoring the click: the smooth
       // scroll passes through every group on the way, ticking the highlight
@@ -137,16 +199,23 @@ export function SettingsPage() {
       // 1280×900 pane: 重置 asks for 2020 against a maximum of 1835.
       const jump = jumping.current;
       if (jump) {
-        // "Arrived" includes running out of scroll — that is as far as this
-        // group is ever going to get.
-        const arrived = scrolledToEnd(root) || Math.abs(root.scrollTop - jump.top) < 2;
-        if (arrived) {
+        // "Arrived" is where the pane can put this group, so running out of
+        // scroll is an arrival too — that is as far as it is ever going to get.
+        if (Math.abs(root.scrollTop - reachableTop(root, jump.top)) < 2) {
           clearTimeout(settle);
           settle = window.setTimeout(() => {
             jumping.current = null;
+            settled.current = root.scrollTop;
           }, 120);
         }
         return;
+      }
+
+      // The tail of a jump that has already let go: same position, so not the
+      // reader. See `settled`.
+      if (settled.current !== null) {
+        if (Math.abs(root.scrollTop - settled.current) < 2) return;
+        settled.current = null;
       }
 
       // At the end of the scroll the sight-line can still sit inside the group
@@ -162,10 +231,23 @@ export function SettingsPage() {
       setActive(atEnd ? last : current);
     };
     root.addEventListener("scroll", onScroll, { passive: true });
+    // Real input ends a jump that is still travelling, so a claim cannot outlive
+    // the reader taking the pane for themselves. Driven by input rather than by
+    // `scroll` because a jump's own smooth scroll fires that too — the same
+    // reason the shelf does it, and the same events.
+    const drop = () => {
+      if (jumping.current === null) return;
+      jumping.current = null;
+      settled.current = root.scrollTop;
+    };
+    root.addEventListener("wheel", drop, { passive: true });
+    root.addEventListener("pointerdown", drop);
     return () => {
       clearTimeout(settle);
       resize.disconnect();
       root.removeEventListener("scroll", onScroll);
+      root.removeEventListener("wheel", drop);
+      root.removeEventListener("pointerdown", drop);
     };
   }, [measure]);
 
@@ -179,10 +261,15 @@ export function SettingsPage() {
     jumping.current = { id, top };
     setActive(id);
     root.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
-    // A jump to where the pane already is fires no scroll event at all, and a
-    // claim nobody releases would then swallow the reader's next scroll.
-    if (Math.abs(root.scrollTop - top) < 2 || scrolledToEnd(root)) {
+    // A jump to where the pane can already reach fires no scroll event at all,
+    // and a claim nobody releases would then swallow the reader's next scroll.
+    // Compared against where the pane *can* go rather than where it was asked to
+    // go: a pane parked at its bottom, asked for a group further up, is not there
+    // yet — and releasing it here is what let the rule below light 关于 for a
+    // click on 同步.
+    if (Math.abs(root.scrollTop - reachableTop(root, top)) < 2) {
       jumping.current = null;
+      settled.current = root.scrollTop;
     }
   };
 
