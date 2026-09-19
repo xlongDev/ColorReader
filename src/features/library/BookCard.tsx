@@ -1,6 +1,6 @@
 import { useRef, useState } from "react";
 import { motion } from "motion/react";
-import { BookOpen, Check, Export, Star, Tag, Trash } from "@phosphor-icons/react";
+import { BookOpen, Check, Export, PencilSimple, Star, Tag, Trash } from "@phosphor-icons/react";
 
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
@@ -34,6 +34,7 @@ interface BookCardProps {
   onAskDelete: (book: BookSummary) => void;
   onAskExport: (book: BookSummary) => void;
   onEditTags: (book: BookSummary) => void;
+  onEditMeta: (book: BookSummary) => void;
   /** Batch-manage mode: clicks toggle selection instead of opening. */
   selecting?: boolean;
   selected?: boolean;
@@ -71,6 +72,7 @@ export function BookCard({
   onAskDelete,
   onAskExport,
   onEditTags,
+  onEditMeta,
   selecting = false,
   selected = false,
   onToggleSelect,
@@ -266,8 +268,8 @@ export function BookCard({
       ) : (
         <div
           className={cn(
-            // grid-cols-4 across the cover's own width: the cells shrink with
-            // the cover, so four actions fit a tile at any breakpoint instead
+            // grid-cols-5 across the cover's own width: the cells shrink with
+            // the cover, so five actions fit a tile at any breakpoint instead
             // of riding out past the cover's edge (what a fixed-width pill
             // did on the 6-column shelf).
             //
@@ -275,7 +277,7 @@ export function BookCard({
             // shallow for that — its own centering uses `translate-y`, which
             // would fight the slide — so it fades in place instead.
             variant === "grid"
-              ? "absolute inset-x-1.5 top-1.5 grid grid-cols-4 place-items-center gap-0.5"
+              ? "absolute inset-x-1.5 top-1.5 grid grid-cols-5 place-items-center gap-0.5"
               : "absolute top-1/2 right-3 flex -translate-y-1/2 items-center gap-1",
             variant === "grid" ? "translate-y-2 group-hover:translate-y-0" : "",
             // The row follows the lift rather than racing it: it waits well
@@ -317,6 +319,16 @@ export function BookCard({
             className={coverAction}
           >
             <Tag size={13} weight={book.tags.length > 0 ? "fill" : "regular"} />
+          </GlassIconButton>
+          <GlassIconButton
+            label="编辑信息"
+            onClick={(event) => {
+              event.stopPropagation();
+              onEditMeta(book);
+            }}
+            className={coverAction}
+          >
+            <PencilSimple size={13} />
           </GlassIconButton>
           <GlassIconButton
             label="导出书档"

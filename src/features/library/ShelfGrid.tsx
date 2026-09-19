@@ -33,6 +33,7 @@ export function ShelfGrid({
   onAskDelete,
   onAskExport,
   onEditTags,
+  onEditMeta,
   onImport,
 }: {
   pending: boolean;
@@ -52,6 +53,7 @@ export function ShelfGrid({
   onAskDelete: (book: BookSummary) => void;
   onAskExport: (book: BookSummary) => void;
   onEditTags: (book: BookSummary) => void;
+  onEditMeta: (book: BookSummary) => void;
   onImport: () => void;
 }) {
   const m = useMotion();
@@ -165,6 +167,7 @@ export function ShelfGrid({
             onAskDelete={onAskDelete}
             onAskExport={onAskExport}
             onEditTags={onEditTags}
+            onEditMeta={onEditMeta}
           />
         ))}
       </div>

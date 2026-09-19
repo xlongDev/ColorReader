@@ -222,6 +222,21 @@ pub fn book_set_favorite(state: State<'_, AppState>, id: String, favorite: bool)
     state.library.with(|conn| crate::library::repository::set_favorite(conn, &id, favorite))
 }
 
+/// `book.update` — rewrites title, authors and the descriptive fields.
+///
+/// Synchronous: it is a handful of row updates on an indexed table, far
+/// cheaper than the round trip that asked for it. The reader keeps whatever
+/// position it had — none of these columns are a reading anchor.
+#[tauri::command]
+#[specta::specta]
+pub fn book_update(
+    state: State<'_, AppState>,
+    id: String,
+    patch: crate::library::repository::BookMetadataPatch,
+) -> AppResult<()> {
+    state.library.with_tx(|tx| crate::library::repository::update_metadata(tx, &id, &patch))
+}
+
 /// Progress payload for [`IMPORT_PROGRESS_EVENT`].
 #[derive(specta::Type, Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

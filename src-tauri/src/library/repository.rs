@@ -449,6 +449,76 @@ pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> AppResult<()
     Ok(())
 }
 
+/// The editable half of a book's metadata, as the edit sheet sends it.
+///
+/// The whole form travels, not a diff: the sheet opens pre-filled from the book
+/// and saves what is on screen. `authors` replaces the list outright.
+#[derive(specta::Type, Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BookMetadataPatch {
+    pub title: String,
+    pub subtitle: Option<String>,
+    pub description: Option<String>,
+    pub language: Option<String>,
+    pub publisher: Option<String>,
+    pub authors: Vec<String>,
+}
+
+/// An empty or whitespace-only field is stored as "no value" rather than as an
+/// empty string, so clearing a field in the sheet reads back as absent instead
+/// of as a blank line the card would still have to draw.
+fn blank_to_none(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|text| !text.is_empty())
+}
+
+/// Rewrites the metadata the edit sheet exposes.
+///
+/// Three tables are involved — `books`, `authors`, `book_authors` — so this
+/// takes a transaction: a failure partway would otherwise leave a book whose
+/// author links no longer match its title.
+///
+/// Author rows are shared between books, so the links are dropped and rebuilt
+/// (reusing the row whenever a name still matches). A rebuild can strand the
+/// author a book no longer names; those rows go with it, rather than stay
+/// behind for the sort index to keep carrying.
+pub fn update_metadata(tx: &Transaction<'_>, id: &str, patch: &BookMetadataPatch) -> AppResult<()> {
+    let title = patch.title.trim();
+    if title.is_empty() {
+        return Err(AppError::InvalidArgument("书名不能为空".into()));
+    }
+    let authors: Vec<&str> =
+        patch.authors.iter().map(|name| name.trim()).filter(|name| !name.is_empty()).collect();
+
+    let changed = tx.execute(
+        "UPDATE books SET title = ?1, sort_title = ?2, subtitle = ?3, description = ?4, \
+         language = ?5, publisher = ?6, updated_at = ?7 WHERE id = ?8",
+        params![
+            title,
+            sort_key(title),
+            blank_to_none(patch.subtitle.as_deref()),
+            blank_to_none(patch.description.as_deref()),
+            blank_to_none(patch.language.as_deref()),
+            blank_to_none(patch.publisher.as_deref()),
+            super::now_seconds(),
+            id,
+        ],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(id.to_string()));
+    }
+
+    tx.execute("DELETE FROM book_authors WHERE book_id = ?1", params![id])?;
+    for (position, name) in authors.iter().enumerate() {
+        let author_id = upsert_author(tx, name)?;
+        tx.execute(
+            "INSERT INTO book_authors (book_id, author_id, position) VALUES (?1, ?2, ?3)",
+            params![id, author_id, position as i64],
+        )?;
+    }
+    tx.execute("DELETE FROM authors WHERE id NOT IN (SELECT author_id FROM book_authors)", [])?;
+    Ok(())
+}
+
 /// Points a book at an already-written cover file, after import.
 pub fn set_cover(conn: &Connection, id: &str, cover_path: &str) -> AppResult<()> {
     let changed = conn.execute(
@@ -804,5 +874,101 @@ mod tests {
         )?;
         tx.commit()?;
         Ok(())
+    }
+
+    /// A patch carrying only what the test under it cares about; every other
+    /// field starts empty, which is also how the sheet's untouched fields look.
+    fn draft(title: &str, authors: &[&str]) -> BookMetadataPatch {
+        BookMetadataPatch {
+            title: title.into(),
+            subtitle: None,
+            description: None,
+            language: None,
+            publisher: None,
+            authors: authors.iter().map(|name| name.to_string()).collect(),
+        }
+    }
+
+    fn edit(conn: &Connection, id: &str, patch: &BookMetadataPatch) {
+        let tx = conn.unchecked_transaction().expect("tx");
+        update_metadata(&tx, id, patch).expect("update");
+        tx.commit().expect("commit");
+    }
+
+    fn author_names(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn.prepare("SELECT name FROM authors").expect("prepare");
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0)).expect("query");
+        rows.map(|row| row.expect("row")).collect()
+    }
+
+    #[test]
+    fn metadata_edits_rewrite_title_sort_key_and_authors() {
+        let conn = seed();
+        add(&conn, "b1", "未命名", &["佚名"], "h1");
+
+        edit(
+            &conn,
+            "b1",
+            &BookMetadataPatch {
+                // Whitespace is not a value: the column goes back to NULL so the
+                // card has nothing to draw rather than a blank line.
+                subtitle: Some("   ".into()),
+                description: Some("  一场战争  ".into()),
+                ..draft("The Three-Body Problem", &["Liu Cixin", "  ", " Translator "])
+            },
+        );
+
+        let book = get(&conn, "b1").expect("get").expect("b1");
+        assert_eq!(book.title, "The Three-Body Problem");
+        assert_eq!(book.subtitle, None);
+        assert_eq!(book.description.as_deref(), Some("一场战争"), "首尾空白要去掉");
+        assert_eq!(book.authors, ["Liu Cixin", "Translator"], "作者整列替换，空白项丢弃");
+
+        // The shelf's title order reads `sort_title`, so an edit that left it
+        // alone would keep sorting the book under its old name.
+        let sort_title: String = conn
+            .query_row("SELECT sort_title FROM books WHERE id = 'b1'", [], |row| row.get(0))
+            .expect("sort_title");
+        assert_eq!(sort_title, "three-body problem");
+    }
+
+    #[test]
+    fn editing_authors_keeps_shared_rows_and_drops_the_orphans() {
+        let conn = seed();
+        add(&conn, "b1", "书一", &["共同作者", "被移除"], "h1");
+        add(&conn, "b2", "书二", &["共同作者"], "h2");
+
+        edit(&conn, "b1", &draft("书一", &["共同作者", "新作者"]));
+
+        let names = author_names(&conn);
+        assert!(names.contains(&"共同作者".to_string()), "另一本书仍在用的作者不能删");
+        assert!(names.contains(&"新作者".to_string()));
+        assert!(!names.contains(&"被移除".to_string()), "没人再引用的作者行要一并清理");
+
+        let other = get(&conn, "b2").expect("get").expect("b2");
+        assert_eq!(other.authors, ["共同作者"], "另一本书的作者链不受影响");
+    }
+
+    #[test]
+    fn an_empty_title_is_rejected_and_nothing_is_written() {
+        let conn = seed();
+        add(&conn, "b1", "原名", &["原作者"], "h1");
+
+        let tx = conn.unchecked_transaction().expect("tx");
+        let error = update_metadata(&tx, "b1", &draft("   ", &["新作者"]));
+        drop(tx);
+        assert!(error.is_err(), "空白标题必须被拒绝");
+
+        let book = get(&conn, "b1").expect("get").expect("b1");
+        assert_eq!(book.title, "原名");
+        assert_eq!(book.authors, ["原作者"], "被拒绝的编辑不能留下半写入的作者链");
+    }
+
+    #[test]
+    fn editing_a_missing_book_reports_not_found() {
+        let conn = seed();
+        let tx = conn.unchecked_transaction().expect("tx");
+        let error = update_metadata(&tx, "nope", &draft("书", &[]));
+        assert!(matches!(error, Err(AppError::NotFound(_))));
     }
 }

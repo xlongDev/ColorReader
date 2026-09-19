@@ -175,6 +175,15 @@ export const commands = {
   /**  `book.setFavorite` */
   bookSetFavorite: (id: string, favorite: boolean) =>
     __TAURI_INVOKE<null>("book_set_favorite", { id, favorite }),
+  /**
+   *  `book.update` — rewrites title, authors and the descriptive fields.
+   *
+   *  Synchronous: it is a handful of row updates on an indexed table, far
+   *  cheaper than the round trip that asked for it. The reader keeps whatever
+   *  position it had — none of these columns are a reading anchor.
+   */
+  bookUpdate: (id: string, patch: BookMetadataPatch) =>
+    __TAURI_INVOKE<null>("book_update", { id, patch }),
   /**  `bookmark.create` — pins the current position and returns it. */
   bookmarkCreate: (bookId: string, chapterIdx: number, fraction: number | null, label: string) =>
     __TAURI_INVOKE<Bookmark>("bookmark_create", { bookId, chapterIdx, fraction, label }),
@@ -480,6 +489,21 @@ export type BookFormat =
 export type BookImage = {
   chapterIdx: number;
   path: string;
+};
+
+/**
+ *  The editable half of a book's metadata, as the edit sheet sends it.
+ *
+ *  The whole form travels, not a diff: the sheet opens pre-filled from the book
+ *  and saves what is on screen. `authors` replaces the list outright.
+ */
+export type BookMetadataPatch = {
+  title: string;
+  subtitle: string | null;
+  description: string | null;
+  language: string | null;
+  publisher: string | null;
+  authors: string[];
 };
 
 export type BookOutcome = {

@@ -38,6 +38,7 @@ import {
   useLibraryStats,
   usePdfCovers,
   useSetFavorite,
+  useUpdateBook,
 } from "@/hooks/useLibrary";
 import { DURATION, useMotion } from "@/lib/motion";
 import { isDesktopRuntime } from "@/lib/ipc";
@@ -60,6 +61,9 @@ const TagDialog = lazy(() =>
 );
 const ClippingsDialog = lazy(() =>
   import("@/features/library/ClippingsDialog").then((m) => ({ default: m.ClippingsDialog })),
+);
+const BookMetaDialog = lazy(() =>
+  import("@/features/library/BookMetaDialog").then((m) => ({ default: m.BookMetaDialog })),
 );
 
 /**
@@ -175,6 +179,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const [tag, setTag] = useState<string | null>(null);
   /** Books the label sheet is open for; one book = edit, several = add. */
   const [tagTarget, setTagTarget] = useState<BookSummary[] | null>(null);
+  /** The book whose metadata sheet is open; one book at a time, since a title
+   *  is not something a multi-selection could share. */
+  const [metaTarget, setMetaTarget] = useState<BookSummary | null>(null);
 
   useEffect(() => {
     const id = window.setInterval(() => setNow(new Date()), 60_000);
@@ -194,6 +201,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const exportPack = useExportPack();
   const deleteBook = useDeleteBook();
   const setFavorite = useSetFavorite();
+  const updateBook = useUpdateBook();
   const progress = useImportProgress();
   usePdfCovers(books.data ?? []);
 
@@ -323,6 +331,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           onAskDelete={setDeleteTarget}
           onAskExport={setExportTarget}
           onEditTags={(target) => setTagTarget([target])}
+          onEditMeta={setMetaTarget}
           onImport={startImport}
         />
       </div>
@@ -431,6 +440,27 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
               assignTags.mutate(
                 { ids: tagTarget.map((book) => book.id), ...change },
                 { onSuccess: () => setTagTarget(null) },
+              )
+            }
+          />
+        </Suspense>
+      )}
+
+      {metaTarget && (
+        <Suspense fallback={null}>
+          <BookMetaDialog
+            book={metaTarget}
+            busy={updateBook.isPending}
+            onCancel={() => {
+              setMetaTarget(null);
+              // A failed save left its error on the mutation; the next open must
+              // not inherit it.
+              updateBook.reset();
+            }}
+            onSave={(patch) =>
+              updateBook.mutate(
+                { id: metaTarget.id, patch },
+                { onSuccess: () => setMetaTarget(null) },
               )
             }
           />

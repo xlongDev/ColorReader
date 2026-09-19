@@ -5,7 +5,7 @@ import { ipc, isDesktopRuntime, onImportProgress } from "@/lib/ipc";
 import { demoBooks, demoEnabled, demoLibraryStats } from "@/lib/demo";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { renderFirstPagePng } from "@/lib/pdf";
-import type { BookQuery, BookSummary, ImportProgress } from "@/types/ipc";
+import type { BookMetadataPatch, BookQuery, BookSummary, ImportProgress } from "@/types/ipc";
 
 /** Shelf contents for one filter/sort/search combination. */
 export function useBooks(query: BookQuery) {
@@ -108,6 +108,22 @@ export function useSetFavorite() {
       ipc.bookSetFavorite(id, favorite),
     // Optimistic-free is fine at this size; the query is refreshed after.
     onSettled: invalidate,
+  });
+}
+
+/** Rewrites a book's metadata (title, authors, description, …).
+ *
+ * The whole form travels, so a half-filled sheet never clears a field it did
+ * not show — see `BookMetaDialog`. `onSuccess` rather than `onSettled`: a
+ * rejected edit changed nothing, and refetching then would only re-render the
+ * shelf with the values the reader was trying to replace.
+ */
+export function useUpdateBook() {
+  const invalidate = useInvalidateShelf();
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: BookMetadataPatch }) =>
+      ipc.bookUpdate(id, patch),
+    onSuccess: invalidate,
   });
 }
 
