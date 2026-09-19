@@ -141,10 +141,20 @@ export function ReaderChapterView({
     // and illustrations. Deliberately outside the multicol prose
     // article: a page-sized canvas inside a column layout always
     // spills one column, which reads as a blank page after every page.
+    //
+    // No `key={chapterIdx}` here, on purpose. A key unmounts the canvas on
+    // every turn, and the reader then watches an empty box plus "正在渲染页面…"
+    // while pdf.js rasterises the next page. Left mounted, the page already on
+    // screen holds until the new bitmap is blitted in one frame (see
+    // PdfPageView). The cost is the page-turn transition: any entrance
+    // animation would fade in the *previous* page's bitmap, so a paged PDF
+    // turns without one.
+    // `ponytail:` no preload of the next spread, so a turn still waits out the
+    // raster. Cache the rendered bitmap per (book, page, size) and warm
+    // `chapterIdx + 1` after a paint if that wait ever reads as lag.
     return paged ? (
       <div
-        key={chapterIdx}
-        className={cn("mx-auto flex h-full w-full items-stretch justify-center", transitionClass)}
+        className="mx-auto flex h-full w-full items-stretch justify-center"
         style={{ paddingInline: margin, paddingBlock: blockMargin, gap: pdf.gap }}
       >
         <div className="h-full min-w-0 flex-1">
