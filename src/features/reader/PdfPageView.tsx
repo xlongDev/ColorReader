@@ -1,10 +1,19 @@
 import { useEffect, useRef, useState } from "react";
+import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 
 import { cn } from "@/lib/cn";
 import { loadDoc } from "@/lib/pdf";
 import type { Annotation } from "@/types/ipc";
 
-import { canvasRatio, displaySize, MAX_DPR } from "./pdfCanvas";
+import {
+  displaySize,
+  hasRaster,
+  MAX_DPR,
+  pageScales,
+  putRaster,
+  rasterKeyOf,
+  takeRaster,
+} from "./pdfCanvas";
 import { installNightContext } from "./pdfNightContext";
 import {
   clearPageHighlights,
@@ -32,6 +41,18 @@ const EMPTY: Annotation[] = [];
     short enough that it lands while the page is still under the eye. */
 const ZOOM_SETTLE_MS = 240;
 
+/** How long the page must sit still before the next one is rasterised behind
+    the reader's back. Any resize, zoom or turn clears and restarts it, so a
+    sidebar spring or a window drag costs one prefetch at the resting size
+    rather than one per frame. */
+const PREFETCH_SETTLE_MS = 300;
+
+/** A cancellable pdf.js render, held by whoever started it so a newer one —
+    or the reader turning the page — can call it off. */
+interface TaskSlot {
+  task: { cancel: () => void } | null;
+}
+
 /**
  * Draws page `pageNumber` (1-based) into a canvas, sized to fill its wrapper.
  * Re-renders when the wrapper resizes; `fit` picks between filling the width
@@ -39,10 +60,17 @@ const ZOOM_SETTLE_MS = 240;
  * in CSS straight away so a pinch stays responsive, then re-rasterises the
  * bitmap at that scale once the gesture rests: a page shown at 300% is drawn
  * at 300%, not stretched from the bitmap rasterised for the fitted size.
+ *
+ * `prefetchPage` is the page the reader will ask for next, rasterised once
+ * this one has settled. It is the only reason a turn is instant: rasterising
+ * an illustrated page costs 90–150 ms, and without it the reader sits on the
+ * old page for that long. The result is a plain bitmap in a two-slot store —
+ * see `pdfCanvas.ts` for what the key covers and what that costs.
  */
 export function PdfPageView({
   bookId,
   pageNumber,
+  prefetchPage = null,
   fit,
   zoom = 1,
   animated = false,
@@ -56,6 +84,8 @@ export function PdfPageView({
 }: {
   bookId: string;
   pageNumber: number;
+  /** The page after this one, or null at the end of the book. */
+  prefetchPage?: number | null;
   fit: "width" | "box";
   zoom?: number;
   /** Eases the CSS resize; pinch zooming passes false to stay direct. */
@@ -84,8 +114,6 @@ export function PdfPageView({
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
-  const taskRef = useRef<{ cancel: () => void } | null>(null);
-  const textTaskRef = useRef<{ cancel: () => void } | null>(null);
   const [state, setState] = useState<RenderState>("loading");
   /** Fitted CSS size at zoom 1; zoom rescales it in JSX. */
   const [base, setBase] = useState<{ w: number; h: number } | null>(null);
@@ -118,6 +146,166 @@ export function PdfPageView({
   useEffect(() => {
     let cancelled = false;
     let frame = 0;
+    // Cancellable work owned by this run of the effect. Plain locals rather
+    // than refs: nothing outside reads them, and a ref would have to be
+    // re-read in the cleanup, by which point it has already moved on.
+    const pageSlot: TaskSlot = { task: null };
+    const prefetchSlot: TaskSlot = { task: null };
+    let textTask: { cancel: () => void } | null = null;
+    let prefetchTimer: number | null = null;
+
+    const deviceDpr = () => Math.min(window.devicePixelRatio || 1, MAX_DPR);
+
+    /** Everything this raster's pixels depend on, as one string. Built from
+        the wrapper's measured box rather than the derived scale so it is
+        available before `getPage` resolves — the prefetch files under the
+        same key from the other side of the same render. */
+    const keyFor = (page: number, wrap: HTMLDivElement, zoomToRaster: number, dpr: number) =>
+      rasterKeyOf({
+        bookId,
+        pageNumber: page,
+        fit,
+        boxWidth: wrap.clientWidth,
+        boxHeight: wrap.clientHeight,
+        zoom: zoomToRaster,
+        dpr,
+        nightFg,
+        nightBg,
+        invertImages,
+      });
+
+    /** Paints a finished bitmap into the visible canvas and sizes the box it
+        sits in. One synchronous block: the browser never paints between the
+        clear and the draw, so the swap is atomic on screen. */
+    const blit = (
+      canvas: HTMLCanvasElement,
+      bitmap: HTMLCanvasElement,
+      fitted: { w: number; h: number },
+      zoomToRaster: number,
+      fromCache: boolean,
+    ) => {
+      setBase(fitted);
+      // Written at the size the page is *shown* at, zoom included — the same
+      // size JSX gives the canvas. React skips a style write whose value is
+      // unchanged, so a fit-sized pair here would survive the re-render
+      // `setBase` triggers and snap a zoomed page back to fit the moment the
+      // raster landed.
+      const shown = displaySize(fitted, zoomToRaster);
+      canvas.style.width = `${shown.w}px`;
+      canvas.style.height = `${shown.h}px`;
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+      // `data-pdf-raster` is how a test tells a prefetched page from a
+      // rasterised one — the two are indistinguishable on screen by design,
+      // which is the whole point of the prefetch. Written here rather than
+      // through state so the swap stays one synchronous block.
+      wrapRef.current?.setAttribute("data-pdf-raster", fromCache ? "cached" : "rendered");
+    };
+
+    /** Rasterises one page into a detached canvas. Shared by the page the
+        reader is waiting on and the one fetched behind their back: a second
+        copy of this geometry is exactly how a prefetched bitmap ends up
+        unlike what a live render would have produced, while still matching
+        the key it was filed under. */
+    const rasterise = async (
+      page: PDFPageProxy,
+      wrap: HTMLDivElement,
+      zoomToRaster: number,
+      dpr: number,
+      slot: TaskSlot,
+    ) => {
+      const unit = page.getViewport({ scale: 1 });
+      const { fitScale, rasterScale } = pageScales({
+        unitWidth: unit.width,
+        unitHeight: unit.height,
+        boxWidth: wrap.clientWidth,
+        boxHeight: wrap.clientHeight,
+        fit,
+        zoom: zoomToRaster,
+        dpr,
+      });
+      const viewport = page.getViewport({ scale: rasterScale });
+      // The raster lands in a detached canvas, so the page already on screen
+      // survives the whole render — a turn never shows an empty box while
+      // pdf.js works. (readest does the same: it builds the canvas off-DOM and
+      // swaps it in.)
+      const bitmap = document.createElement("canvas");
+      bitmap.width = Math.floor(viewport.width);
+      bitmap.height = Math.floor(viewport.height);
+      // The night wrapper goes on the raster's own canvas, never the visible
+      // one: pdf.js v6 discards a handed-in `canvasContext` as soon as
+      // `canvas` is set and calls `getContext("2d")` on that element itself,
+      // so the element is the only hook that survives into the render.
+      // Installing it before the context is fetched means both routes hand
+      // pdf.js the wrapped one. Still per-canvas, so the shelf's cover
+      // renderer in lib/pdf.ts keeps the document's real colours.
+      const restore =
+        nightFg && nightBg ? installNightContext(bitmap, nightFg, nightBg, invertImages) : null;
+      const context = bitmap.getContext("2d");
+      if (!context) {
+        restore?.();
+        return null;
+      }
+      // Whatever this slot was rendering is superseded the moment a new one
+      // starts — two renders of the same page only make each other slower.
+      slot.task?.cancel();
+      // `background` is the paper the page is painted on; without it pdf.js
+      // defaults to white and the whole page glares.
+      const task = page.render({
+        canvas: bitmap,
+        canvasContext: context,
+        viewport,
+        ...(nightBg ? { background: nightBg } : {}),
+      });
+      slot.task = task;
+      try {
+        await task.promise;
+      } finally {
+        restore?.();
+        if (slot.task === task) slot.task = null;
+      }
+      // The page at zoom 1. `blit` scales it by the zoom for the box it is
+      // shown in — the fitted box itself never leaves this function.
+      const fitted = {
+        w: Math.floor(unit.width * fitScale),
+        h: Math.floor(unit.height * fitScale),
+      };
+      return { fitScale, fitted, bitmap };
+    };
+
+    /** Rasterises the page the reader will ask for next, once this one has
+        settled. It is the whole reason a turn is a blit instead of a 90–150 ms
+        wait, and it costs one bitmap held in a two-slot store. */
+    const schedulePrefetch = (doc: PDFDocumentProxy, wrap: HTMLDivElement) => {
+      if (prefetchPage === null) return;
+      if (prefetchTimer !== null) window.clearTimeout(prefetchTimer);
+      prefetchTimer = window.setTimeout(() => {
+        prefetchTimer = null;
+        // The box is read now, not when the timer was set: whatever the reader
+        // has settled on is what the turn after this one will render into.
+        if (cancelled || wrap.clientWidth === 0) return;
+        const zoomToRaster = rasterZoomRef.current;
+        const dpr = deviceDpr();
+        const key = keyFor(prefetchPage, wrap, zoomToRaster, dpr);
+        if (hasRaster(key)) return;
+        void (async () => {
+          const page = await doc.getPage(prefetchPage);
+          if (cancelled) return;
+          const raster = await rasterise(page, wrap, zoomToRaster, dpr, prefetchSlot);
+          if (!raster) return;
+          if (cancelled) {
+            raster.bitmap.width = 0;
+            raster.bitmap.height = 0;
+            return;
+          }
+          putRaster(key, { bitmap: raster.bitmap, fitted: raster.fitted });
+        })().catch(() => {
+          // A prefetch that fails or is superseded costs nothing; the reader
+          // was never waiting on it, and the turn will render for real.
+        });
+      }, PREFETCH_SETTLE_MS);
+    };
 
     const render = async () => {
       // Only the first raster of this box announces itself. Once a page is up,
@@ -127,7 +315,21 @@ export function PdfPageView({
       const signature = `${pageNumber}|${fit}|${nightFg}|${nightBg}|${invertImages}`;
       if (paintedRef.current === "") setState("loading");
       setTextReady(false);
-      textTaskRef.current?.cancel();
+      // Cleared until this render lands, so the attribute always describes the
+      // page currently on screen rather than the one that just left.
+      wrapRef.current?.removeAttribute("data-pdf-raster");
+      textTask?.cancel();
+      // The reader has asked for a page. Anything still rasterising — the
+      // speculative next page, or a render of the page they just left — must
+      // neither share the main thread with it nor land on the canvas after it:
+      // a superseded render that is left to finish would blit the page the
+      // reader has already moved off.
+      pageSlot.task?.cancel();
+      if (prefetchTimer !== null) {
+        window.clearTimeout(prefetchTimer);
+        prefetchTimer = null;
+      }
+      prefetchSlot.task?.cancel();
       try {
         const doc = await loadDoc(bookId);
         const page = await doc.getPage(pageNumber);
@@ -138,93 +340,45 @@ export function PdfPageView({
         if (fit === "box" && wrap.clientHeight === 0) return;
 
         const unit = page.getViewport({ scale: 1 });
-        const widthScale = wrap.clientWidth / unit.width;
-        // "box" mode also fits the height, so one page = one screen, the same
-        // contract a paged layout gives prose.
-        const scale =
-          fit === "box" ? Math.min(widthScale, wrap.clientHeight / unit.height) : widthScale;
         // The bitmap spans the zoomed page, not the fitted one: the canvas is
-        // displayed at `fitted × zoom`, so rasterising at `scale × zoom` keeps
-        // one bitmap pixel per device pixel however far the reader zooms in.
+        // displayed at `fitted × zoom`, so rasterising at `fitScale × zoom`
+        // keeps one bitmap pixel per device pixel however far the reader zooms
+        // in. `pageScales` is the only expression of that — the prefetch asks
+        // it the same question, and the answer is what the cache key means.
         const zoomToRaster = rasterZoomRef.current;
-        const dpr = Math.min(window.devicePixelRatio || 1, MAX_DPR);
-        const viewport = page.getViewport({
-          scale:
-            Math.max(scale * zoomToRaster, 0.01) *
-            canvasRatio({
-              unitWidth: unit.width,
-              unitHeight: unit.height,
-              fitScale: scale,
-              zoom: zoomToRaster,
-              dpr,
-            }),
+        const dpr = deviceDpr();
+        const { fitScale } = pageScales({
+          unitWidth: unit.width,
+          unitHeight: unit.height,
+          boxWidth: wrap.clientWidth,
+          boxHeight: wrap.clientHeight,
+          fit,
+          zoom: zoomToRaster,
+          dpr,
         });
 
-        // `fitted` is the page at zoom 1; both the layout and the write below
-        // scale it by the zoom. An explicit size — not `width: 100%` — is what
-        // makes "box" fit actually shrink the page into the visible box
-        // instead of clipping its bottom off.
-        const fitted = {
-          w: Math.floor(unit.width * scale),
-          h: Math.floor(unit.height * scale),
-        };
-        setBase(fitted);
-        // Written at the size the page is *shown* at, zoom included — the same
-        // size JSX gives the canvas. React skips a style write whose value is
-        // unchanged, so a fit-sized pair here would survive the re-render
-        // `setBase` triggers and snap a zoomed page back to fit the moment the
-        // raster landed.
-        const shown = displaySize(fitted, zoomToRaster);
-        canvas.style.width = `${shown.w}px`;
-        canvas.style.height = `${shown.h}px`;
-
-        // The raster lands in a detached canvas and is blitted in one frame,
-        // so the page already on screen survives the whole render — a turn
-        // never shows an empty box while pdf.js works. (readest does the same:
-        // it builds the canvas off-DOM and swaps it in.)
-        const scratch = document.createElement("canvas");
-        scratch.width = Math.floor(viewport.width);
-        scratch.height = Math.floor(viewport.height);
-        // The night wrapper goes on the scratch canvas, not the visible one:
-        // pdf.js v6 discards a handed-in `canvasContext` as soon as `canvas` is
-        // set and calls `getContext("2d")` on that element itself. Installing
-        // it before the context is fetched means both routes hand pdf.js the
-        // wrapped one. Still per-canvas, so the shelf's cover renderer in
-        // lib/pdf.ts keeps the document's real colours.
-        const restoreScratch =
-          nightFg && nightBg ? installNightContext(scratch, nightFg, nightBg, invertImages) : null;
-        const scratchContext = scratch.getContext("2d");
-        if (!scratchContext) {
-          restoreScratch?.();
-          return;
+        // The page the reader is waiting on, already rasterised behind their
+        // back: blit it and skip the render entirely. This is the whole point
+        // of the store — on an illustrated page it turns a 90–150 ms wait into
+        // a frame.
+        const warm = takeRaster(keyFor(pageNumber, wrap, zoomToRaster, dpr));
+        if (warm) {
+          blit(canvas, warm.bitmap, warm.fitted, zoomToRaster, true);
+        } else {
+          const raster = await rasterise(page, wrap, zoomToRaster, dpr, pageSlot);
+          if (!raster || cancelled) {
+            if (raster) {
+              raster.bitmap.width = 0;
+              raster.bitmap.height = 0;
+            }
+            return;
+          }
+          blit(canvas, raster.bitmap, raster.fitted, zoomToRaster, false);
+          // Release the scratch bitmap before the text layer builds; at 2x dpr
+          // a page-sized one is ~10–25 MB.
+          raster.bitmap.width = 0;
+          raster.bitmap.height = 0;
         }
-
-        taskRef.current?.cancel();
-        // `background` is the paper the page is painted on; without it pdf.js
-        // defaults to white and the whole page glares.
-        const task = page.render({
-          canvas: scratch,
-          canvasContext: scratchContext,
-          viewport,
-          ...(nightBg ? { background: nightBg } : {}),
-        });
-        taskRef.current = task;
-        try {
-          await task.promise;
-        } finally {
-          restoreScratch?.();
-        }
-        if (cancelled) return;
-
-        // Same task, so the browser never paints between the clear and the
-        // blit: the swap is atomic on screen.
-        canvas.width = scratch.width;
-        canvas.height = scratch.height;
-        canvas.getContext("2d")?.drawImage(scratch, 0, 0);
-        // Release the scratch bitmap before the text layer builds; at 2x dpr a
-        // page-sized one is ~10 MB.
-        scratch.width = 0;
-        scratch.height = 0;
         paintedRef.current = signature;
         setState("ready");
 
@@ -235,26 +389,30 @@ export function PdfPageView({
         // through its CSS transform. Recorded only once it has rendered, so a
         // cancelled build is redone rather than left half-filled.
         const layer = layerRef.current;
-        const layerKey = `${pageNumber}|${scale}`;
+        const layerKey = `${pageNumber}|${fitScale}`;
         if (layer && layeredRef.current !== layerKey) {
           layer.replaceChildren();
           // pdf.js v6 rewrites the layer box itself via setLayerDimensions:
           // width: calc(var(--total-scale-factor) * pageWidth …). Without the
           // variable the calc is invalid, the container collapses to 0×0 and
           // nothing on the page is selectable. The viewer defines this as the
-          // viewport's CSS scale — exactly our `scale`.
-          layer.style.setProperty("--total-scale-factor", String(scale));
+          // viewport's CSS scale — exactly our fitted scale.
+          layer.style.setProperty("--total-scale-factor", String(fitScale));
           const { TextLayer } = await import("pdfjs-dist");
           const textLayer = new TextLayer({
             textContentSource: page.streamTextContent(),
             container: layer,
-            viewport: page.getViewport({ scale: Math.max(scale, 0.01) }),
+            viewport: page.getViewport({ scale: Math.max(fitScale, 0.01) }),
           });
-          textTaskRef.current = textLayer;
+          textTask = textLayer;
           await textLayer.render();
           layeredRef.current = layerKey;
         }
-        if (!cancelled) setTextReady(true);
+        if (!cancelled) {
+          setTextReady(true);
+          // Last, so the reader's own page is never behind the speculative one.
+          schedulePrefetch(doc, wrap);
+        }
       } catch (error) {
         // A cancelled render is bookkeeping, not a failure, and a failure in
         // the text layer must not stamp an error over a page that did raster.
@@ -285,15 +443,17 @@ export function PdfPageView({
       cancelled = true;
       cancelAnimationFrame(frame);
       observer.disconnect();
-      taskRef.current?.cancel();
-      textTaskRef.current?.cancel();
+      pageSlot.task?.cancel();
+      textTask?.cancel();
+      if (prefetchTimer !== null) window.clearTimeout(prefetchTimer);
+      prefetchSlot.task?.cancel();
       clearPageHighlights(pageNumber);
       if (washPainted.current) {
         clearTtsWash();
         washPainted.current = false;
       }
     };
-  }, [bookId, pageNumber, fit, nightFg, nightBg, invertImages]);
+  }, [bookId, pageNumber, prefetchPage, fit, nightFg, nightBg, invertImages]);
 
   // Paint this page's saved annotations onto its text layer whenever either
   // side changes. `annotations` must arrive reference-stable (the parent
@@ -370,7 +530,7 @@ export function PdfPageView({
   const shown = base ? displaySize(base, zoom) : null;
 
   return (
-    <div ref={wrapRef} className="relative h-full w-full">
+    <div ref={wrapRef} data-pdf-page={pageNumber} className="relative h-full w-full">
       {/* Canvas and text layer share one centred box so the layer always sits
           exactly on the page, whatever the wrapper's width. The layer scales
           with `zoom` via transform: rebuilding it per pinch frame would
