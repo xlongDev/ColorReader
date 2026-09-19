@@ -2,32 +2,55 @@ import { describe, expect, it, vi } from "vitest";
 
 import { alignTail, applyPosition, columnPitch, flipPage, type TailPad } from "./paging";
 
-/** The only four properties the paging maths reads. */
+/**
+ * Element stub for the paging maths: the scroll properties, plus the tail
+ * spacer the column alignment reaches for. A spacer is a real box in a real
+ * scroller — while it is displayed it stretches `scrollWidth` on its own — so
+ * the stub reports the content's own end only once the spacer is hidden,
+ * which is how the alignment reads it.
+ */
 function scroller(over: {
   clientWidth: number;
-  scrollWidth: number;
+  /** The content's own right edge, spacer not counted. */
+  contentEnd: number;
+  /** The spacer already in the scroller, if any. */
+  pad?: TailPad | null;
   clientHeight?: number;
   scrollHeight?: number;
 }) {
+  const spacer = {
+    style: {
+      display: "" as string,
+      removeProperty: () => {
+        spacer.style.display = "";
+      },
+    },
+  };
   return {
     clientWidth: over.clientWidth,
-    scrollWidth: over.scrollWidth,
     clientHeight: over.clientHeight ?? 600,
     scrollHeight: over.scrollHeight ?? 600,
     scrollLeft: 0,
     scrollTop: 0,
-  } as HTMLDivElement;
+    get scrollWidth() {
+      const pad = over.pad;
+      if (!pad || spacer.style.display === "none") return over.contentEnd;
+      return Math.max(over.contentEnd, pad.left + pad.width);
+    },
+    querySelector: (selector: string) =>
+      selector === "[data-tail-pad]" && over.pad ? spacer : null,
+  } as unknown as HTMLDivElement;
 }
 
 describe("columnPitch", () => {
   it("is the full column plus the gutter in single-column mode", () => {
     // content = 1000 - 2*40 = 920; pitch = 920 + 40
-    expect(columnPitch(scroller({ clientWidth: 1000, scrollWidth: 5000 }), "single", 40)).toBe(960);
+    expect(columnPitch(scroller({ clientWidth: 1000, contentEnd: 5000 }), "single", 40)).toBe(960);
   });
 
   it("halves the content and keeps the middle gutter in a spread", () => {
     // content = 920; col = (920 - 40) / 2 = 440; pitch = 440 + 40
-    expect(columnPitch(scroller({ clientWidth: 1000, scrollWidth: 5000 }), "double", 40)).toBe(480);
+    expect(columnPitch(scroller({ clientWidth: 1000, contentEnd: 5000 }), "double", 40)).toBe(480);
   });
 });
 
@@ -35,7 +58,7 @@ describe("applyPosition", () => {
   it("maps the fraction onto vertical scroll range in scroll mode", () => {
     const el = scroller({
       clientWidth: 1000,
-      scrollWidth: 1000,
+      contentEnd: 1000,
       clientHeight: 200,
       scrollHeight: 1200,
     });
@@ -45,13 +68,13 @@ describe("applyPosition", () => {
 
   it("snaps to a whole column instead of a raw pixel offset when paged", () => {
     // pitch 960, max = 5000 - 1000 = 4000 → 4 columns; 0.5 should land on 2
-    const el = scroller({ clientWidth: 1000, scrollWidth: 5000 });
+    const el = scroller({ clientWidth: 1000, contentEnd: 5000 });
     applyPosition(el, 0.5, "single", 40);
     expect(el.scrollLeft).toBe(1920);
   });
 
   it("never scrolls past the end when the fraction overshoots", () => {
-    const el = scroller({ clientWidth: 1000, scrollWidth: 5000 });
+    const el = scroller({ clientWidth: 1000, contentEnd: 5000 });
     applyPosition(el, 1, "single", 40);
     expect(el.scrollLeft).toBeLessThanOrEqual(4000);
   });
@@ -69,7 +92,7 @@ const animated = () =>
 
 describe("alignTail", () => {
   it("drops any pad in scroll mode", () => {
-    const el = scroller({ clientWidth: 1000, scrollWidth: 5000 });
+    const el = scroller({ clientWidth: 1000, contentEnd: 5000 });
     const r = { current: { left: 5000, width: 120 } as TailPad | null };
     const set = vi.fn();
     alignTail(el, "scroll", 40, r, set);
@@ -79,22 +102,35 @@ describe("alignTail", () => {
 
   it("extends the scroll range to the next column boundary", () => {
     // contentEnd 5000, max 4000, pitch 960 → 4000 % 960 = 160 → pad 800
-    const el = scroller({ clientWidth: 1000, scrollWidth: 5000 });
+    const el = scroller({ clientWidth: 1000, contentEnd: 5000 });
     const set = vi.fn<(p: TailPad | null) => void>();
     alignTail(el, "single", 40, padRef(), set);
     expect(set).toHaveBeenCalledWith({ left: 5000, width: 800 });
   });
 
   it("is idempotent once the pad is in place", () => {
-    const el = scroller({ clientWidth: 1000, scrollWidth: 5000 });
-    const r = padRef();
+    const pad = { left: 5000, width: 800 };
+    const el = scroller({ clientWidth: 1000, contentEnd: 5000, pad });
+    const r = { current: pad as TailPad | null };
     const set = vi.fn<(p: TailPad | null) => void>();
     alignTail(el, "single", 40, r, set);
-    const calls = set.mock.calls.length;
-    // The pad is now rendered: the scroller really is this much wider.
-    const grown = scroller({ clientWidth: 1000, scrollWidth: 5000 + r.current!.width });
-    alignTail(grown, "single", 40, r, set);
-    expect(set.mock.calls.length).toBe(calls);
+    expect(set).not.toHaveBeenCalled();
+  });
+
+  it("drops a pad the chapter underneath it has outgrown", () => {
+    // The reader moved to a one-page chapter. The spacer still sits at the end
+    // of the chapter that left, holding the scroller that wide, so reading the
+    // range through it pages the new chapter the length of the old one.
+    const el = scroller({
+      clientWidth: 1000,
+      contentEnd: 1000,
+      pad: { left: 5000, width: 800 },
+    });
+    const r = { current: { left: 5000, width: 800 } as TailPad | null };
+    const set = vi.fn<(p: TailPad | null) => void>();
+    alignTail(el, "single", 40, r, set);
+    expect(r.current).toBeNull();
+    expect(set).toHaveBeenCalledWith(null);
   });
 });
 

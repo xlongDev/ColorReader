@@ -57,8 +57,17 @@ export function alignTail(
     return;
   }
   const pitch = columnPitch(el, mode, margin);
-  // Exclude the currently rendered spacer so the measurement is idempotent.
-  const contentEnd = el.scrollWidth - (ref.current?.width ?? 0);
+  // Read the content's own end with the spacer out of the layout. The spacer
+  // is absolutely positioned, so it stretches `scrollWidth` on its own, and
+  // subtracting its width alone leaves it self-perpetuating: a spacer past the
+  // content still reports the end the content used to have. That is exactly
+  // the state a shorter chapter arrives to — its predecessor's end — and the
+  // scroller then stays as wide as the chapter that left, so the new chapter
+  // pages out too long and scrolls on into blank space.
+  const pad = el.querySelector<HTMLElement>("[data-tail-pad]");
+  if (pad) pad.style.display = "none";
+  const contentEnd = el.scrollWidth;
+  if (pad) pad.style.removeProperty("display");
   const max = contentEnd - el.clientWidth;
   const width = pitch > 0 && max > 0 ? (pitch - (max % pitch)) % pitch : 0;
   const next = width > 0 ? { left: contentEnd, width } : null;

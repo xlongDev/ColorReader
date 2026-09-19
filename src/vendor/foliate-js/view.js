@@ -409,11 +409,24 @@ export class View extends HTMLElement {
         const tocItem = this.#tocProgress?.getProgress(index, range)
         const pageItem = this.#pageProgress?.getProgress(index, range)
         const cfi = this.getCFI(index, range)
-        // Section page counter for the reader's "N / M 页" indicator. `size`
-        // is the fraction one page turn covers within the section (paginated
-        // only; scrolled mode leaves it undefined).
+        // Section page counter for the reader's "N / M 页" indicator.
+        //
+        // Counted in *columns* rather than in turns. The renderer reports
+        // `fraction` as the column offset within the section and `size` as the
+        // fraction one turn covers (`columnCount / contentPages`), so
+        // `columnCount / size` is the section's page count outright and
+        // `fraction / size` is the turn the reader is on. In a single-column
+        // layout a turn is one column and the arithmetic collapses to what it
+        // always was; in a spread one turn moves two columns, and the counter
+        // has to move with them or "N / M 页" calls a two-page turn one page.
+        // The number it lands on is the spread's first page. Scrolled mode
+        // leaves `size` undefined: there are no pages to count there.
+        const columns = this.renderer?.columnCount ?? 1
         const page = size > 0
-            ? { current: Math.round(fraction / size) + 1, total: Math.round(1 / size) }
+            ? {
+                current: Math.round(fraction / size) * columns + 1,
+                total: Math.round(columns / size),
+            }
             : null
         this.lastLocation = { ...progress, page, tocItem, pageItem, cfi, range }
         if (reason === 'snap' || reason === 'page' || reason === 'scroll')

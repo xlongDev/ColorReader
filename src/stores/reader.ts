@@ -106,10 +106,11 @@ export const MAX_FONT_SIZE = 26;
  * What the page indicator counts.
  *
  * `chapter` is the unit the layout actually measured — a chapter on the prose
- * pager, a foliate section in a Kindle book. `book` is the whole-book estimate
- * `bookPageAt` derives from it, which is what a paper edition's page number
- * means and what a reader quoting a passage wants to say. It is an estimate,
- * so the indicator says 约 in front of it.
+ * pager, a foliate section in a Kindle book. `book` is the whole book: for a
+ * foliate book, the counter foliate itself numbers reading positions with (a
+ * property of the book's bytes, so it never moves); for the prose pager, what
+ * the layout has measured plus the rest of the book weighed at that density
+ * (`bookPagesOf`) — an estimate, and the only one that says 约 in front of it.
  */
 export type PageNumberScope = "off" | "chapter" | "book";
 

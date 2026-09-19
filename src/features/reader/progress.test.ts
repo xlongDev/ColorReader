@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  bookPageAt,
+  bookPageFromLocation,
+  bookPageOf,
+  bookPagesOf,
+  emptyTally,
   estimateLabel,
   globalProgress,
   locateChapter,
+  observeUnit,
   remainingChars,
   totalChars,
 } from "./progress";
@@ -87,54 +91,129 @@ describe("estimateLabel", () => {
   });
 });
 
-describe("bookPageAt", () => {
-  // A four-chapter book of equal chapters, five pages in each. The unit spans a
-  // quarter of the book and holds five pages, so the book reads as 20 pages.
-  const quarter = 0.25;
+describe("bookPageOf", () => {
+  it("maps a fraction onto the book's pages, counting from one", () => {
+    expect(bookPageOf(0, 20)).toEqual({ page: 1, pages: 20 });
+    expect(bookPageOf(0.5, 20)).toEqual({ page: 11, pages: 20 });
+    expect(bookPageOf(1, 20)).toEqual({ page: 20, pages: 20 });
+  });
 
-  it("counts the pages before the unit, then the page inside it", () => {
-    // Third chapter, its third page: 10 pages before it, so page 13.
-    expect(bookPageAt(quarter * 2, quarter, { page: 3, pages: 5 })).toEqual({
-      page: 13,
-      pages: 20,
+  it("cannot report a page outside the book", () => {
+    // A layout can hand over a fraction a hair past the end, or a negative one
+    // on the first paint; "21 / 20 页" is a number disagreeing with itself.
+    expect(bookPageOf(1.4, 20)).toEqual({ page: 20, pages: 20 });
+    expect(bookPageOf(-0.2, 20)).toEqual({ page: 1, pages: 20 });
+  });
+});
+
+/** Chapters of `chars` characters each, as the importer reports them. */
+const chaptersOf = (...chars: number[]): ChapterMeta[] =>
+  chars.map((c, idx) => ({ idx, title: "", chars: c }));
+
+describe("bookPagesOf", () => {
+  it("counts a measured chapter as measured and sizes the rest at that density", () => {
+    // A chapter of 1000 characters paginated into 4 pages: 250 characters a
+    // page, which is what the three chapters not yet read are sized with.
+    const tally = emptyTally();
+    observeUnit(tally, 0, 4);
+    expect(bookPagesOf(tally, chaptersOf(1000, 1000, 1000))).toBe(12);
+
+    // Reading the second one does not move the book: the layout counted the
+    // same 4 pages the estimate had already given it.
+    observeUnit(tally, 1, 4);
+    expect(bookPagesOf(tally, chaptersOf(1000, 1000, 1000))).toBe(12);
+  });
+
+  it("does not let the chapter on screen set the book's density", () => {
+    // The defect this replaces: the whole-book count came out of the chapter
+    // under the cursor (`measured pages / measured share` of the book), so the
+    // same EPUB reported 493, 977, 805, 2202 and 939 pages to one reader as it
+    // was read. Here the count is a sum over chapters, so a chapter that is
+    // long, short or in the middle of the book weighs exactly itself.
+    const tally = emptyTally();
+    const book = chaptersOf(1000, 1000, 1000, 40);
+    observeUnit(tally, 0, 4);
+    const first = bookPagesOf(tally, book);
+    observeUnit(tally, 1, 4);
+    observeUnit(tally, 2, 4);
+    observeUnit(tally, 3, 1);
+    expect(bookPagesOf(tally, book)).toBe(first);
+    // 4 + 4 + 4 pages of the long chapters, and one page for the one-paragraph
+    // chapter that is a hundredth of the book.
+    expect(first).toBe(13);
+  });
+
+  it("sizes a short chapter down to a single page rather than to nothing", () => {
+    const tally = emptyTally();
+    observeUnit(tally, 0, 4);
+    // 40 characters at 250 a page is a sixth of a page, and a sixth of a page
+    // is still a page: a chapter cannot be smaller than the page it starts on.
+    expect(bookPagesOf(tally, chaptersOf(1000, 40))).toBe(5);
+  });
+
+  it("keeps a one-page unit out of the density it reads", () => {
+    // A cover, a plate, a divider — and every chapter that fits on one page,
+    // where the break at the end is most of what the "page" is. Letting one of
+    // those speak is how a 1-page chapter dragged the count off by a page.
+    const tally = emptyTally();
+    const book = chaptersOf(1000, 40);
+    // Nothing long enough to be evidence yet: the caller keeps the chapter's
+    // own counter instead of a number made up from one page.
+    observeUnit(tally, 1, 1);
+    expect(bookPagesOf(tally, book)).toBeNull();
+
+    observeUnit(tally, 0, 4);
+    expect(bookPagesOf(tally, book)).toBe(5);
+    // Measuring the short chapter again does not move it.
+    observeUnit(tally, 1, 1);
+    expect(bookPagesOf(tally, book)).toBe(5);
+  });
+
+  it("stays quiet until a chapter carrying real text has been measured", () => {
+    const tally = emptyTally();
+    expect(bookPagesOf(tally, chaptersOf(1000, 1000))).toBeNull();
+    observeUnit(tally, 0, 0);
+    expect(bookPagesOf(tally, chaptersOf(1000, 1000))).toBeNull();
+  });
+
+  it("lets a chapter that is measured again replace its own entry", () => {
+    // A re-layout re-paginates every chapter, and the chapter after a
+    // roll-over is first measured with the previous chapter's pages still on
+    // screen. Counting it twice would let one chapter outweigh the book.
+    const tally = emptyTally();
+    observeUnit(tally, 0, 9);
+    observeUnit(tally, 0, 4);
+    expect(bookPagesOf(tally, chaptersOf(1000, 1000))).toBe(8);
+  });
+});
+
+describe("bookPageFromLocation", () => {
+  it("prints foliate's counter one-based", () => {
+    // foliate counts from zero; a reader counts pages from one.
+    expect(bookPageFromLocation({ current: 11, next: 12, total: 467 })).toEqual({
+      page: 12,
+      pages: 467,
     });
   });
 
-  it("agrees with itself at both ends of the book", () => {
-    expect(bookPageAt(0, quarter, { page: 1, pages: 5 })).toEqual({ page: 1, pages: 20 });
-    expect(bookPageAt(quarter * 3, quarter, { page: 5, pages: 5 })).toEqual({
-      page: 20,
-      pages: 20,
+  it("cannot print a page past the end of the book", () => {
+    // The last position is the total, and a turn past it must not read
+    // "468 / 467 页" — a number disagreeing with itself.
+    expect(bookPageFromLocation({ current: 467, next: 468, total: 467 })).toEqual({
+      page: 467,
+      pages: 467,
+    });
+    expect(bookPageFromLocation({ current: 0, next: 2, total: 1 })).toEqual({
+      page: 1,
+      pages: 1,
     });
   });
 
-  it("weighs an uneven unit by its own page density", () => {
-    // A long chapter holding a third of the book in 12 pages: 36 pages of book.
-    // 12 pages in, on page 2 of the next unit.
-    expect(bookPageAt(1 / 3, 1 / 6, { page: 2, pages: 6 })).toEqual({ page: 14, pages: 36 });
-  });
-
-  it("takes the book's length from the unit's density, not from the unit", () => {
-    // A one-page chapter that measures as a fortieth of the book says the book
-    // is forty pages long, and says the reader is on page 1 of it.
-    expect(bookPageAt(0, 1 / 40, { page: 1, pages: 1 })).toEqual({ page: 1, pages: 40 });
-  });
-
-  it("cannot contradict itself on a span that is not a share of the book", () => {
-    // Well-formed input satisfies both bounds on its own, so these assertions
-    // pin the guards rather than a live branch. A unit overlapping the book's
-    // end would otherwise run 5 pages past it and print "28 / 25 页"…
-    expect(bookPageAt(0.9, 0.2, { page: 5, pages: 5 })).toEqual({ page: 25, pages: 25 });
-    // …and a unit wider than the book would make the book shorter than the
-    // chapter the reader is looking at.
-    expect(bookPageAt(0, 1.5, { page: 1, pages: 5 })).toEqual({ page: 1, pages: 5 });
-  });
-
-  it("gives nothing back when there is nothing to measure", () => {
-    // Unpaginated (foliate's scroll layout reports no counter at all).
-    expect(bookPageAt(0, quarter, { page: 1, pages: 0 })).toBeNull();
-    // A book whose chapters carry no text, or a section foliate could not size.
-    expect(bookPageAt(0, 0, { page: 1, pages: 5 })).toBeNull();
-    expect(bookPageAt(0, -1, { page: 1, pages: 5 })).toBeNull();
+  it("has nothing to say before foliate builds its table", () => {
+    // The caller falls back to the section's own counter, which is true but is
+    // not the book — inventing a book length here is the bug being fixed.
+    expect(bookPageFromLocation(undefined)).toBeNull();
+    expect(bookPageFromLocation(null)).toBeNull();
+    expect(bookPageFromLocation({ current: 0, next: 0, total: 0 })).toBeNull();
   });
 });

@@ -64,9 +64,30 @@ function shelfSize(): number {
   return Number.isFinite(asked) && asked > TITLES.length ? Math.min(asked, 500) : TITLES.length;
 }
 
+/**
+ * `?demo=1&epub=1` also puts a real EPUB on the sample shelf.
+ *
+ * The three samples above are plain text, which means the browser build never
+ * loads foliate — and foliate is where a Kindle-style book's page number comes
+ * from (a section's bytes, not anything the host can measure). Every page-number
+ * defect a reader reported landed in exactly that gap: the suite could pass
+ * while a real EPUB printed "1 / 1 页" on every page.
+ *
+ * Opt-in rather than always on: the tile would otherwise change the shelf every
+ * other spec counts and clicks through. Built by
+ * `scripts/generate-demo-epub.py`, served from `public/demo/`.
+ */
+function epubEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("epub") === "1";
+}
+
+/** The fixture EPUB's book id, so `demoEpubBytes` knows what it can answer. */
+const EPUB_ID = "demo-epub";
+
 const COUNT = shelfSize();
 
-export const demoBooks: BookSummary[] = Array.from({ length: COUNT }, (_, index) => ({
+const shelf: BookSummary[] = Array.from({ length: COUNT }, (_, index) => ({
   id: `demo-${index + 1}`,
   // Beyond the three samples the shelf repeats them, numbered, so a locator that
   // names a book still names exactly one tile.
@@ -102,6 +123,44 @@ export const demoBooks: BookSummary[] = Array.from({ length: COUNT }, (_, index)
   authors: AUTHORS[index % AUTHORS.length]!,
   tags: index === 1 ? ["小说", "悬疑"] : [],
 })) as unknown as BookSummary[];
+
+const epubBook: BookSummary = {
+  id: EPUB_ID,
+  title: "页码样书",
+  subtitle: null,
+  description: null,
+  language: "zh",
+  publisher: null,
+  format: "epub",
+  fileSize: 19_546,
+  coverUrl: cover(3, PALETTES[0]![0], PALETTES[1]![1]),
+  addedAt: 0,
+  updatedAt: 0,
+  lastReadAt: null,
+  progress: 0,
+  location: null,
+  favorite: false,
+  authors: ["样书"],
+  tags: [],
+} as unknown as BookSummary;
+
+export const demoBooks: BookSummary[] = [...shelf, ...(epubEnabled() ? [epubBook] : [])];
+
+/**
+ * The fixture EPUB's bytes, for the reader's foliate path.
+ *
+ * In the app the book comes over IPC (or streams over the ColorReader
+ * protocol); a browser has no backend to read a file from, so the fixture
+ * serves one from `public/` instead. `null` for every other book — the caller
+ * falls through to the real load path, which in a browser is what it always
+ * was.
+ */
+export async function demoEpubBytes(bookId: string): Promise<ArrayBuffer | null> {
+  if (bookId !== EPUB_ID) return null;
+  const response = await fetch("/demo/page-numbers.epub");
+  if (!response.ok) throw new Error(`样书 EPUB 取不到：HTTP ${response.status}`);
+  return response.arrayBuffer();
+}
 
 export const demoLibraryStats: LibraryStats = {
   total: demoBooks.length,
@@ -181,8 +240,8 @@ const demoAnnotations: Annotation[] = [
     id: "demo-a5",
     bookId: "demo-2",
     chapterIdx: 3,
-    startChar: 180,
-    endChar: 231,
+    startChar: 0,
+    endChar: 28,
     text: "理解这一点并不会立刻治好什么病，但它会改变提问的方式。",
     cfi: null,
     color: "#b08fe8",
@@ -232,14 +291,36 @@ const PARAGRAPHS = [
   "理解这一点并不会立刻治好什么病，但它会改变提问的方式，而提问的方式决定了找得到什么答案。",
 ];
 
+/** `paragraphs`, repeated `times` over — the sample body of one chapter. */
+const repeat = (times: number): string[] => Array.from({ length: times }, () => PARAGRAPHS).flat();
+
+/**
+ * The body of each chapter.
+ *
+ * The first three are ten times the shared pool, long enough to paginate into
+ * several pages. The last is a single paragraph, deliberately: the whole-book
+ * page indicator reads a book's length off the units it has measured, and a
+ * shelf whose chapters are all one length makes every estimator look right —
+ * including the one that extrapolated the book from whichever chapter happened
+ * to be on screen, which reported 493 pages and then 2202 for the same EPUB.
+ * One long chapter against one very short one is what tells those two apart,
+ * and a very short chapter is where the real thing goes wrong too: the last
+ * page of a chapter is never full.
+ *
+ * It keeps the paragraph `demo-a5` quotes, so the notes page still finds the
+ * line it points at on a real page of the book.
+ */
+const CHAPTER_BODIES: string[][] = [repeat(10), repeat(10), repeat(10), [PARAGRAPHS[5]!]];
+
 export const demoToc: ChapterMeta[] = CHAPTER_TITLES.map((title, idx) => ({
   idx,
   title,
-  chars: PARAGRAPHS.join("").length,
+  chars: (CHAPTER_BODIES[idx] ?? []).join("").length,
 }));
 
 export function demoChapter(idx: number): ChapterContent | null {
   const title = CHAPTER_TITLES[idx];
-  if (title === undefined) return null;
-  return { idx, title, paragraphs: PARAGRAPHS };
+  const paragraphs = CHAPTER_BODIES[idx];
+  if (title === undefined || paragraphs === undefined) return null;
+  return { idx, title, paragraphs };
 }

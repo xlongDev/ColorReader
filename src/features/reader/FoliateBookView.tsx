@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { ipc, isDesktopRuntime } from "../../lib/ipc";
+import { demoEnabled, demoEpubBytes } from "../../lib/demo";
 import { Overlayer } from "foliate-js/overlayer.js";
 import type { FoliateRelocate, View, makeBook } from "foliate-js/view.js";
 import type { Annotation } from "@/types/ipc";
@@ -10,6 +11,7 @@ import { buildStyleSheet } from "./foliateStyle";
 import { markLoneFigures } from "./loneFigure";
 import type { FoliateStyle } from "./foliateStyle";
 import { inkWash, selectionBottom } from "./selection";
+import { bookPageFromLocation } from "./progress";
 import { findInSections, findRange, indexText } from "./textAnchor";
 import type { TextIndex } from "./textAnchor";
 
@@ -23,17 +25,15 @@ export type FoliateLocation = {
   /** Page within the current section, paginated layouts only. */
   page: { current: number; total: number } | null;
   /**
-   * Where the section `page` counts lives in the book, 0..1.
+   * Where the reader is, in whole-book pages, or `null` before foliate has
+   * built its section-progress table.
    *
-   * foliate weights its sections by byte size, so this is the share of the
-   * book the current page counter speaks for. It is what turns a section-local
-   * "3 / 5 页" into the whole-book estimate `bookPageAt` derives — a Kindle
-   * book has no other measure of how long a section is until it is paginated.
-   * `null` when foliate could not build its section-progress table (a book
-   * whose TOC does not map onto the spine), which is the same condition that
-   * disables `goToFraction`.
+   * This is foliate's own `location` counter — the size domain, 1500 bytes a
+   * page — not an estimate off the section on screen. See
+   * `bookPageFromLocation`: the counter is a property of the book, so it does
+   * not move as the book is read, which is what an estimate could not manage.
    */
-  sectionSpan: { start: number; end: number } | null;
+  bookPage: { page: number; pages: number } | null;
 };
 
 /**
@@ -615,14 +615,6 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
 ) {
   const hostRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<View | null>(null);
-  /**
-   * foliate's section boundaries, as fractions of the book, captured once per
-   * open. Read on every relocate to turn a section-local page counter into a
-   * whole-book estimate, and not recomputed there: `getSectionFractions()`
-   * allocates a copy of the whole table, and relocate fires on every page turn
-   * and every scroll frame.
-   */
-  const sectionFractionsRef = useRef<number[]>([]);
   const [error, setError] = useState<string | null>(null);
   // Read-aloud wash. The prose path draws the same one with a `<mark>`, so a
   // reader switching a book's format sees one marker, not two styles.
@@ -929,21 +921,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
 
     const onRelocate = (event: Event) => {
       const detail = (event as CustomEvent<FoliateRelocate>).detail;
-      // The section's share of the book, for the whole-book page estimate.
-      // `getSectionFractions()` leads with a hard 0 and so has one entry more
-      // than there are sections: `[index]` is where this one starts and
-      // `[index + 1]` where it ends.
-      const fractions = sectionFractionsRef.current;
-      const index = detail.section?.current ?? -1;
-      const start = fractions[index];
-      const end = fractions[index + 1];
       report.current?.({
         cfi: detail.cfi ?? "",
         fraction: detail.fraction ?? 0,
         label: detail.tocItem?.label ?? "",
         page: detail.page ?? null,
-        sectionSpan:
-          start !== undefined && end !== undefined && end > start ? { start, end } : null,
+        bookPage: bookPageFromLocation(detail.location),
       });
     };
 
@@ -953,7 +936,17 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         // with the (fast) source-URL lookup or the whole-file transfer below.
         const viewModule = import("foliate-js/view.js");
         let book: Awaited<ReturnType<typeof makeBook>>;
-        if (format === "epub" && isDesktopRuntime) {
+        // A browser has no backend to read a book file from; the fixture serves
+        // its EPUB itself (`?demo=1&epub=1`, see `lib/demo.ts`). `null` for
+        // every other book, so this drops through to the real path below.
+        const demoBytes = !isDesktopRuntime && demoEnabled() ? await demoEpubBytes(bookId) : null;
+        if (demoBytes) {
+          const container = CONTAINER[format] ?? CONTAINER.epub!;
+          const { makeBook } = await viewModule;
+          book = await makeBook(
+            new File([demoBytes], `${bookId}.${container.ext}`, { type: container.type }),
+          );
+        } else if (format === "epub" && isDesktopRuntime) {
           // EPUB streams over the ColorReader protocol with HTTP Range requests,
           // so opening no longer waits on the whole file crossing IPC.
           try {
@@ -1001,9 +994,6 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         view.addEventListener("create-overlay", onOverlay);
         host.append(view);
         await view.open(book);
-        // After `open`: foliate builds its section-progress table there, and
-        // the getter answers an empty list before it.
-        sectionFractionsRef.current = view.getSectionFractions();
         await view.init(startCfi ? { lastLocation: startCfi } : {});
         if (!startCfi && startFraction && view.book?.splitTOCHref) {
           await view.goToFraction(startFraction);
@@ -1046,7 +1036,6 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       paintedRef.current = new Map();
       searchedRef.current = new Set();
       ttsRef.current = null;
-      sectionFractionsRef.current = [];
       if (view) {
         view.renderer?.removeEventListener("load", attachSection);
         view.removeEventListener("relocate", onRelocate);

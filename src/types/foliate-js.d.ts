@@ -61,6 +61,14 @@ type FoliateRelocateDetail = {
   page?: { current: number; total: number } | null;
   /** Which section the position is in, and how many there are. */
   section?: { current: number; total: number };
+  /**
+   * foliate's whole-book position, in the size domain it numbers reading
+   * positions in — one unit per 1500 bytes of section markup. `current` is
+   * zero-based and only ever rises, `total` is fixed by the book's contents,
+   * and neither moves when the layout does. This is what the whole-book page
+   * indicator reads (`bookPageFromLocation`).
+   */
+  location?: { current: number; next: number; total: number };
   range?: unknown;
 };
 

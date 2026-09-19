@@ -2,29 +2,32 @@ import { describe, expect, it } from "vitest";
 
 import { SectionProgress } from "foliate-js/progress.js";
 
-import { bookPageAt } from "@/features/reader/progress";
+import { bookPageFromLocation } from "@/features/reader/progress";
 
 /**
- * The foliate half of the whole-book page estimate.
+ * The foliate half of the whole-book page indicator.
  *
- * `ReaderPage` builds the estimate's `span` out of two numbers foliate hands
- * over separately: the section boundaries (`View.getSectionFractions()`, which
- * is `SectionProgress.sectionFractions`) and the index a relocate reports
- * (`progress.section.current`). The estimate is only meaningful if those two
- * index the *same* array — and getting that wrong produces a page number that
- * looks entirely plausible, which is why it is pinned here rather than trusted.
+ * foliate numbers reading positions the way a Kindle does: a section's byte
+ * size is the book's unit of length, and `SectionProgress` turns a position
+ * into `location = { current, next, total }` on a fixed scale (1500 bytes a
+ * page). `View` puts that straight into the `relocate` detail, and the whole-
+ * book indicator prints it (`bookPageFromLocation`).
  *
- * This is someone else's module, so the test is deliberately narrow: it asserts
- * the three facts the app relies on, not foliate's behaviour in general. If a
+ * Both numbers a reader sees therefore come off the book's bytes, which is the
+ * property worth pinning: the total cannot move while the book is read, and
+ * the position can only go up. The estimate that used to stand here —
+ * extrapolating the book from the section on screen — moved by hundreds of
+ * pages between two turns, and this test is the shape of the thing that
+ * replaced it.
+ *
+ * This is someone else's module, so the test is deliberately narrow: it
+ * asserts the facts the app relies on, not foliate's behaviour in general. If a
  * foliate upgrade reshapes any of them, this fails here instead of printing a
  * wrong page number in the reader.
  *
  * What it cannot cover: whether foliate ever *calls* `getProgress` with the
- * index we assume. That is `View`'s business and is best pinned with a real
- * book (a reader ran the foliate path on an EPUB and the 全书 page count
- * tracked the section weights it reported back, on 2026-09-18 — so the
- * link from `onRelocate` to `SectionProgress` is now exercised in the
- * running app, just not by this test).
+ * index and fraction we assume. That is `View`'s business and is best pinned
+ * with a real book.
  */
 
 /** `size` is foliate's byte count for a section; `linear: "no"` is skipped. */
@@ -32,69 +35,66 @@ function sections(sizes: number[]) {
   return sizes.map((size) => ({ linear: "yes", size }));
 }
 
-describe("foliate's section-progress table", () => {
-  it("leads with a hard zero and ends at one, one entry per boundary", () => {
-    const progress = new SectionProgress(sections([100, 300, 100]), 1500, 1600);
+/** 15 KB + 45 KB + 15 KB = 75 KB, which is 50 pages at 1500 bytes a page. */
+const BOOK = [15_000, 45_000, 15_000];
+const PAGE = 1500;
 
-    // Four entries for three sections: `[i]` starts section `i`, `[i + 1]`
-    // ends it. `ReaderPage` reads exactly that pair.
-    expect(progress.sectionFractions).toHaveLength(4);
-    expect(progress.sectionFractions[0]).toBe(0);
-    expect(progress.sectionFractions[3]).toBeCloseTo(1);
-    expect(progress.sectionFractions[1]).toBeCloseTo(0.2);
-    expect(progress.sectionFractions[2]).toBeCloseTo(0.8);
-  });
+describe("foliate's location counter", () => {
+  it("is the book's length, not the section's", () => {
+    const progress = new SectionProgress(sections(BOOK), PAGE, 1600);
+    const start = progress.getProgress(0, 0, 0).location;
 
-  it("reports the index the fractions array is indexed by", () => {
-    const progress = new SectionProgress(sections([100, 300, 100]), 1500, 1600);
-
-    for (const index of [0, 1, 2]) {
-      const { section } = progress.getProgress(index, 0, 0);
-      expect(section.current, `section ${index} reported itself as another`).toBe(index);
-      // The end of that section is the start of the next one — the pair
-      // `bookPageAt` is handed as (before, span).
-      expect(progress.sectionFractions[index + 1]).toBeGreaterThan(
-        progress.sectionFractions[index]!,
-      );
+    expect(start.total).toBe(50);
+    // Every position in the book reports the same total — the counter is a
+    // property of the book's bytes, and that is why it never moves.
+    for (const [index, fraction] of [
+      [0, 0.5],
+      [1, 0.25],
+      [1, 0.9],
+      [2, 1],
+    ] as const) {
+      expect(progress.getProgress(index, fraction, 0).location.total).toBe(50);
     }
-    expect(progress.getProgress(1, 0, 0).section.total).toBe(3);
   });
 
-  it("gives the last section a span that reaches the end of the book", () => {
-    const progress = new SectionProgress(sections([100, 300, 100]), 1500, 1600);
-    const last = progress.sectionFractions.length - 2;
-    expect(progress.sectionFractions[last + 1]).toBeCloseTo(1);
+  it("advances with the reader and stops at the end", () => {
+    const progress = new SectionProgress(sections(BOOK), PAGE, 1600);
+    // Section 0 is 10 pages, so section 1 starts on page 11 and its middle is
+    // page 26. Zero-based, and one turn can move it by more than one.
+    expect(progress.getProgress(0, 0, 0).location.current).toBe(0);
+    expect(progress.getProgress(1, 0, 0).location.current).toBe(10);
+    expect(progress.getProgress(1, 0.5, 0).location.current).toBe(25);
+    // The very end is the total, not one past it: the indicator clamps the
+    // one-based position, so the last page reads "50 / 50 页".
+    const end = progress.getProgress(2, 1, 0).location;
+    expect(end.current).toBe(50);
+    expect(bookPageFromLocation(end)).toEqual({ page: 50, pages: 50 });
   });
 
-  it("skips a section that is not in the linear reading order", () => {
-    // `linear: "no"` and a zero-byte section both weigh nothing, so they get no
-    // share of the book. The estimate divides by the span, so a zero span must
-    // stay a zero span rather than becoming a division by nothing.
+  it("gives a section outside the reading order no share of the book", () => {
+    // A cover or a nav document is `linear: "no"`: it carries no part of the
+    // length, and reading through it does not move the position. The page a
+    // reader sees there is the page the chapter start is on.
     const progress = new SectionProgress(
       [
-        { linear: "yes", size: 100 },
-        { linear: "no", size: 300 },
-        { linear: "yes", size: 100 },
+        { linear: "yes", size: 15_000 },
+        { linear: "no", size: 45_000 },
+        { linear: "yes", size: 15_000 },
       ],
-      1500,
+      PAGE,
       1600,
     );
-    expect(progress.sectionFractions[1]).toBeCloseTo(0.5);
-    expect(progress.sectionFractions[2]! - progress.sectionFractions[1]!).toBe(0);
+    expect(progress.getProgress(0, 0, 0).location.total).toBe(20);
+    expect(progress.getProgress(1, 0, 0).location.current).toBe(10);
+    expect(progress.getProgress(2, 0, 0).location.current).toBe(10);
   });
 
-  it("feeds the estimator a span it can use, and a zero span it refuses", () => {
-    const progress = new SectionProgress(sections([100, 300, 100]), 1500, 1600);
-    const start = progress.sectionFractions[1]!;
-    const span = progress.sectionFractions[2]! - start;
-
-    // A 300-byte section holding 0.6 of the book (the other two are 100 each),
-    // paginated into 6 pages. On its 2nd page: 0.2 of the way in, 6 pages per
-    // 0.6 of book = 10 pages of book, so page 4.
-    expect(bookPageAt(start, span, { page: 2, pages: 6 })).toEqual({ page: 4, pages: 10 });
-
-    // The non-linear section: no span, so no estimate — the caller falls back
-    // to the section counter rather than printing a number it made up.
-    expect(bookPageAt(progress.sectionFractions[1]!, 0, { page: 1, pages: 4 })).toBeNull();
+  it("reads as the indicator, one-based", () => {
+    const progress = new SectionProgress(sections(BOOK), PAGE, 1600);
+    // A fifth of the way into section 1 — byte 15000 + 9000 — is page 17.
+    expect(bookPageFromLocation(progress.getProgress(1, 0.2, 0).location)).toEqual({
+      page: 17,
+      pages: 50,
+    });
   });
 });
