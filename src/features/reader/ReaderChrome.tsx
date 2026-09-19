@@ -333,6 +333,7 @@ export function ReaderFooterControls({
           buttons that all respond reads as frozen, not as steady. */}
       <motion.span
         key={Math.round(progress * 100)}
+        data-reader-progress
         initial={{ opacity: 0.35 }}
         animate={{ opacity: 1 }}
         transition={{ duration: 0.3 }}
