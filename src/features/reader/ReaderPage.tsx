@@ -2324,19 +2324,24 @@ function ReaderView({
           // every page of the chapter reads as the same sheet of paper.
           style={{
             background: surface.background,
-            // The prose path pins its `<article>`; foliate has no article, so
-            // the host itself is what has to hold its width while the sidebar
-            // spring runs. foliate re-paginates the whole book whenever its
-            // element is resized, and a per-frame re-pagination of a whole
-            // book is what made collapsing or hiding the sidebar janky — the
-            // pin turns ~30 re-paginations into one, after the spring settles.
+            // The prose path pins its `<article>`; foliate and PDF have no
+            // article, so the host itself is what has to hold its width while
+            // the sidebar spring runs.
+            //
+            // foliate re-paginates the whole book whenever its element is
+            // resized, and a per-frame re-pagination of a whole book is what
+            // made collapsing or hiding the sidebar janky — the pin turns ~30
+            // re-paginations into one, after the spring settles. PDF pays the
+            // same toll in rasterisation instead: `PdfPageView` watches its own
+            // wrapper, so an unpinned pane re-renders every page on screen once
+            // per frame, at 50–150 ms each on an illustrated book.
             //
             // `flexBasis`, not `width`: this box is `flex-1`, so its
             // `flex-basis` is `0%` and a `width` on a flex item with a
             // definite basis is ignored outright — the width pin was silently
             // doing nothing. `flexGrow`/`flexShrink` have to go to 0 as well,
             // or the box grows straight back to the pane's new width.
-            ...(pinnedW !== null && useFoliate
+            ...(pinnedW !== null && (useFoliate || isPdf)
               ? { flexGrow: 0, flexShrink: 0, flexBasis: pinnedW }
               : {}),
             ...(wallpaperUrl
