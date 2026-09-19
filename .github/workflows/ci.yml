@@ -32,12 +32,39 @@ jobs:
       # installing chromium alone left the webkit project failing to launch
       # (and the whole job red) since this step was added.
       - run: pnpm exec playwright install --with-deps chromium webkit
-      - run: pnpm test:e2e
+      # The job log and the `test-results` artifact both need admin rights to
+      # download (403), so a red e2e used to say nothing but "exit code 1" —
+      # seven runs in a row failed and nobody could tell which test. Keep the
+      # step from killing the job, print the failures as annotations (which the
+      # public check-runs API does serve), and fail at the end instead.
+      - name: Run e2e
+        id: e2e
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pnpm test:e2e 2>&1 | tee e2e.log
+      # GitHub keeps only 10 annotations per step and silently drops the rest,
+      # so collapse each failure block into ONE line (`N) [project] › spec ›
+      # test` + its message) before emitting — one annotation per failing test,
+      # and the Expected/Received survive the cut.
+      - name: Annotate e2e failures
+        if: ${{ steps.e2e.outcome == 'failure' }}
+        run: |
+          awk '/^[[:space:]]+[0-9]+\) /{ if (b) print b; b=$0; next } { if (b) b=b " " $0 } END { if (b) print b }' e2e.log |
+            head -20 |
+            while IFS= read -r line; do
+              printf '::error::%s\n' "$(printf '%s' "$line" | cut -c1-900)"
+            done
+      - name: Fail the job if e2e failed
+        if: ${{ steps.e2e.outcome == 'failure' }}
+        run: exit 1
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
           name: playwright-trace
-          path: test-results/
+          path: |
+            test-results/
+            e2e.log
           if-no-files-found: ignore
       - name: Report bundle size
         run: |
