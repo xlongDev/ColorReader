@@ -30,10 +30,12 @@ const KEY: &str = "lookup.dictionaries";
 
 /// Fixed names inside a bundle; the reader never has to remember the originals.
 /// A StarDict dictionary is three files, an MDict one is a single `.mdx` — the
-/// header inside it carries what a StarDict `.ifo` would.
+/// header inside it carries what a StarDict `.ifo` would. `SYN` is the optional
+/// fourth StarDict file and is simply absent for the many bundles without one.
 const IFO: &str = "meta.ifo";
 const INDEX: &str = "index.idx";
 const BODY: &str = "body.dict";
+const SYN: &str = "variants.syn";
 const MDX: &str = "body.mdx";
 
 /// The formats a bundle can hold.
@@ -73,12 +75,13 @@ fn invalid(message: impl Into<String>) -> AppError {
 
 /// What a lookup needs from disk, per dictionary.
 ///
-/// Parsed once: for StarDict the index offsets, for MDict the header and both
-/// block indexes. Rebuilding either is a scan of a multi-megabyte file, and
-/// neither can change while the bundle exists.
+/// Parsed once: for StarDict the index offsets and — when the bundle ships one
+/// — the variant list's, for MDict the header and both block indexes. Rebuilding
+/// any of them is a scan of a multi-megabyte file, and none can change while the
+/// bundle exists.
 #[derive(Clone)]
 enum Cached {
-    StarDict(Arc<Vec<u32>>),
+    StarDict { offsets: Arc<Vec<u32>>, variants: Option<Arc<Vec<u32>>> },
     Mdict(Arc<mdict::Index>),
 }
 
@@ -169,9 +172,10 @@ fn finish(
 /// Copies a StarDict bundle in.
 ///
 /// The reader picks the `.ifo`; the sibling `.idx` and `.dict` (or `.dict.dz`)
-/// come from the same directory. The body is written out **uncompressed**: a
-/// `.dict.dz` has no random access, and inflating the whole dictionary on every
-/// word would cost more than the disk costs once.
+/// come from the same directory, and the optional `.syn` with them. The body is
+/// written out **uncompressed**: a `.dict.dz` has no random access, and
+/// inflating the whole dictionary on every word would cost more than the disk
+/// costs once.
 fn import_stardict(library: &Library, root: &Path, ifo: &Path) -> AppResult<Dictionary> {
     let stem = ifo.file_stem().ok_or_else(|| invalid("无法从文件名推断词典"))?;
     let base = ifo.with_file_name(stem);
@@ -207,10 +211,24 @@ fn import_stardict(library: &Library, root: &Path, ifo: &Path) -> AppResult<Dict
         metadata.wordcount = offsets.len() as u64;
     }
 
+    // The variant list, when the bundle ships one — the `.syn` its `.ifo`
+    // counts in `synwordcount`. Validated on the way in for the same reason the
+    // index is: a truncated file fails where the reader is looking instead of
+    // silently never answering for a variant.
+    let syn = base.with_extension("syn");
+    let variants = syn.exists().then_some(syn);
+    if let Some(path) = &variants {
+        stardict::syn_offsets(&std::fs::read(path)?)?;
+    }
+
     let name = metadata.bookname;
     let wordcount = metadata.wordcount;
     finish(library, root, name, STARDICT, wordcount, |bundle| {
-        write_bundle(ifo, &index_path, &body_path, compressed, bundle)
+        write_bundle(ifo, &index_path, &body_path, compressed, bundle)?;
+        if let Some(path) = &variants {
+            std::fs::copy(path, bundle.join(SYN))?;
+        }
+        Ok(())
     })
 }
 
@@ -312,26 +330,68 @@ pub fn lookup(library: &Library, root: &Path, term: &str) -> AppResult<Option<Hi
 fn query(root: &Path, dictionary: &Dictionary, term: &str) -> AppResult<Option<String>> {
     let bundle = root.join(&dictionary.id);
     match cached(root, dictionary)? {
-        Cached::StarDict(offsets) => {
+        Cached::StarDict { offsets, variants } => {
             let metadata =
                 stardict::parse_ifo(&String::from_utf8_lossy(&std::fs::read(bundle.join(IFO))?))?;
             let mut index = Index::open(&bundle.join(INDEX), offsets)?;
 
-            // Exact first, then the lowercased form: plenty of dictionaries
-            // index only lowercase headwords while the selection keeps its
-            // capital.
-            let entry = match index.find(term)? {
-                Some(found) => Some(found),
-                None => {
-                    let lowered = term.to_lowercase();
-                    if lowered == term { None } else { index.find(&lowered)? }
-                }
+            let Some(found) = position(&bundle, &mut index, variants.as_ref(), term)? else {
+                return Ok(None);
             };
-            let Some(entry) = entry else { return Ok(None) };
+            let entry = index.entry(found)?;
             let body = stardict::read_body(&bundle.join(BODY), &entry)?;
             Ok(stardict::decode(&body, metadata.sametypesequence.as_deref()))
         }
         Cached::Mdict(index) => mdict::Reader::open(&bundle.join(MDX), index)?.lookup(term),
+    }
+}
+
+/// Where `term` lives: an entry of its own, or the one a `.syn` variant
+/// spelling points at.
+///
+/// Each spelling is tried against the index first and the variant list second.
+/// A variant hit comes back as the *index* position of the entry it names, so
+/// the two answers are interchangeable to the caller.
+fn position(
+    bundle: &Path,
+    index: &mut Index,
+    variants: Option<&Arc<Vec<u32>>>,
+    term: &str,
+) -> AppResult<Option<usize>> {
+    // Exact first, then the lowercased form: plenty of dictionaries index only
+    // lowercase headwords while the selection keeps its capital.
+    let lowered = term.to_lowercase();
+    let mut spellings = vec![term];
+    if lowered != term {
+        spellings.push(lowered.as_str());
+    }
+
+    for spelling in spellings {
+        if let Some(found) = index.position(spelling)? {
+            return Ok(Some(found));
+        }
+        if let Some(found) = variant(bundle, variants, spelling)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
+/// The index entry a variant spelling names, when the bundle has a `.syn` at all.
+///
+/// A `.syn` record carries the entry's *number* rather than its offset, so it
+/// can name an entry the index does not have; `Index::entry` rejects that
+/// instead of indexing past the end.
+fn variant(
+    bundle: &Path,
+    variants: Option<&Arc<Vec<u32>>>,
+    spelling: &str,
+) -> AppResult<Option<usize>> {
+    let Some(offsets) = variants else { return Ok(None) };
+    let mut syn = Index::open(&bundle.join(SYN), Arc::clone(offsets))?;
+    match syn.position(spelling)? {
+        Some(found) => Ok(Some(syn.ordinal(found)? as usize)),
+        None => Ok(None),
     }
 }
 
@@ -345,8 +405,19 @@ fn cached(root: &Path, dictionary: &Dictionary) -> AppResult<Cached> {
     let computed = if dictionary.kind == MDICT {
         Cached::Mdict(Arc::new(mdict::open_index(&bundle.join(MDX))?))
     } else {
-        // The index stays on disk; only the offset list is held.
-        Cached::StarDict(Arc::new(stardict::entry_offsets(&std::fs::read(bundle.join(INDEX))?)?))
+        // The files stay on disk; only the offset lists are held.
+        let variants = bundle.join(SYN);
+        Cached::StarDict {
+            offsets: Arc::new(stardict::entry_offsets(&std::fs::read(bundle.join(INDEX))?)?),
+            // Absent for a dictionary that ships no variant list, and for every
+            // one imported before the list was read at all; neither has
+            // variants to consult, which is a miss rather than a failure.
+            variants: if variants.exists() {
+                Some(Arc::new(stardict::syn_offsets(&std::fs::read(&variants)?)?))
+            } else {
+                None
+            },
+        }
     };
     cache.insert(dictionary.id.clone(), computed.clone());
     Ok(computed)
@@ -399,6 +470,73 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir
+    }
+
+    /// Writes the `.syn` a StarDict bundle may ship: each `variant` spelling
+    /// and the index entry number it stands for.
+    fn variants(dir: &Path, name: &str, entries: &[(&str, u32)]) {
+        let mut syn = Vec::new();
+        for (word, ordinal) in entries {
+            syn.extend_from_slice(word.as_bytes());
+            syn.push(0);
+            syn.extend_from_slice(&ordinal.to_be_bytes());
+        }
+        std::fs::write(dir.join(format!("{name}.syn")), &syn).expect("syn");
+    }
+
+    #[test]
+    fn a_variant_spelling_reaches_the_entry_it_belongs_to() {
+        let dir = scratch("variants");
+        let library = Library::open(&dir).expect("library");
+        let root = dir.join("dictionaries");
+        let source = dir.join("source");
+        let ifo = bundle(&source, "变形词典", &[("run", "跑"), ("zebra", "斑马")]);
+        variants(&source, "变形词典", &[("ran", 0)]);
+
+        import(&library, &root, &ifo).expect("import");
+
+        // The index has never heard of `ran`; only the variant list connects it.
+        let hit = lookup(&library, &root, "ran").expect("lookup").expect("变形词要能查到");
+        assert_eq!(hit.text, "跑");
+        assert_eq!(hit.source, "变形词典");
+        // And a capitalised selection reaches a lowercase variant, through the
+        // same lowercased retry the index itself gets.
+        assert_eq!(lookup(&library, &root, "Ran").expect("lookup").expect("大写也算").text, "跑");
+        // A word in neither list is still a miss.
+        assert!(lookup(&library, &root, "zzzzqqqq").expect("lookup").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_dictionary_without_a_variant_list_still_answers() {
+        // Most bundles ship no `.syn`, and every dictionary imported before the
+        // list was read at all has none on disk either. Neither is an error.
+        let dir = scratch("no-variants");
+        let library = Library::open(&dir).expect("library");
+        let root = dir.join("dictionaries");
+        let source = bundle(&dir.join("source"), "朴素", &[("run", "跑")]);
+        import(&library, &root, &source).expect("import");
+
+        assert_eq!(lookup(&library, &root, "run").expect("lookup").expect("命中").text, "跑");
+        assert!(lookup(&library, &root, "ran").expect("lookup").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_truncated_variant_list_is_refused_on_the_way_in() {
+        let dir = scratch("syn-truncated");
+        let library = Library::open(&dir).expect("library");
+        let root = dir.join("dictionaries");
+        let source = dir.join("source");
+        let ifo = bundle(&source, "残缺", &[("run", "跑")]);
+        // A record whose entry number is cut in half.
+        std::fs::write(source.join("残缺.syn"), b"ran\0\x00\x00").expect("write syn");
+
+        assert!(matches!(import(&library, &root, &ifo), Err(AppError::Message(_))));
+        assert!(list(&library).expect("list").is_empty());
+        let leftovers = std::fs::read_dir(&root).map(|entries| entries.count()).unwrap_or(0);
+        assert_eq!(leftovers, 0, "失败的导入不能留下半份词典");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
