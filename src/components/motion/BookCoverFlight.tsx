@@ -179,6 +179,14 @@ function Flight({
       // frame to be delivered — which is what makes it usable from a test on a
       // runner that hands out a frame every 200ms.
       data-flight-phase={launched ? (dissolving ? "dissolving" : "landing") : "aiming"}
+      // And where it is going, because that is the one thing about a flight that
+      // cannot be measured off the screen: the travel is a CSS transition. Where
+      // the cover *is* is the compositor's answer and only arrives with a frame;
+      // where it is *aimed* is this number, written where it is decided. A test
+      // that reads this asks the app what it decided; one that reads the rect
+      // asks a runner painting five frames a second to have painted the right
+      // one.
+      data-flight-landing-y={landing.y}
       className="shadow-panel pointer-events-none fixed z-[70] overflow-hidden"
       style={{
         left: from.x,

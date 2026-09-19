@@ -200,22 +200,44 @@ test("a scroll under a flight home does not drag the flight with it", async ({ p
   });
   await page.waitForTimeout(600);
 
-  // Sampled inside the page: a flight lives 420ms, and by the time an outer
-  // assertion could look, the box it was aiming at is already gone. Only the
-  // flight is sampled — where the tile was is read from the driver, either side
-  // of the scroll, because that pair is what the sampler used to have to catch
-  // inside one frame.
+  // Where the flight ends up, taken from the app rather than off the screen.
+  //
+  // This used to be a 16ms `setInterval` watching the flight's rect, and it was
+  // a coin toss on CI: a flight lives 420ms and the runner hands out a frame
+  // about every 200ms, so the sampling window holds two looks at best — and a
+  // busy main thread delays the timer on top of that. Measured on CI: the last
+  // look taken before the element was removed read the *aiming* position, 298px
+  // from the slot the flight went on to land in, and the assertion read that as
+  // the flight having chased the scroll. That is the sampler's blind spot, not
+  // the flight: nothing on that runner had moved yet when it looked.
+  //
+  // `transitionend` is an event, so it is queued rather than dropped when the
+  // main thread is busy, and it fires while the element is still mounted — the
+  // app ends the handoff from its own listener on the same event, and this one
+  // is on `document` in the capture phase, so it runs first. What it reads is
+  // `data-flight-landing-y`: the aim the app committed, not a position the
+  // compositor was asked to have painted by then. A re-aimed flight writes a new
+  // one, so this still catches the regression it is here for.
   await page.evaluate(() => {
-    const w = window as unknown as { aim?: { flight: number; samples: number } };
-    w.aim = { flight: 0, samples: 0 };
-    const sample = () => {
-      const flight = document.querySelector("[data-cover-flight]");
-      if (!flight) return;
-      w.aim!.samples += 1;
-      w.aim!.flight = Math.round(flight.getBoundingClientRect().y);
+    const w = window as unknown as {
+      aim?: { seen: number; landed: number | null; rect: number | null };
     };
-    sample();
-    window.setInterval(sample, 16);
+    w.aim = { seen: 0, landed: null, rect: null };
+    document.addEventListener(
+      "transitionend",
+      (event) => {
+        const el = event.target as HTMLElement | null;
+        if (!el?.hasAttribute("data-cover-flight")) return;
+        if ((event as TransitionEvent).propertyName !== "transform") return;
+        w.aim!.seen += 1;
+        w.aim!.landed = Number(el.getAttribute("data-flight-landing-y"));
+        // Kept for the next person reading a failure: never asserted, because a
+        // rect read mid-flight is exactly the measurement this test stopped
+        // trusting. If it disagrees with `landed`, the runner was the problem.
+        w.aim!.rect = el.getBoundingClientRect().y;
+      },
+      true,
+    );
   });
 
   await page.getByRole("button", { name: "返回书库" }).first().click();
@@ -240,10 +262,10 @@ test("a scroll under a flight home does not drag the flight with it", async ({ p
   await expect(page.locator('[data-cover-flight][data-flight-phase="landing"]')).toHaveCount(1, {
     timeout: 15_000,
   });
-  // Read here, from the driver, rather than off the in-page sampler: the tile's
-  // own y is the baseline everything below is measured against, and a 16ms
-  // interval on a runner that paints five times a second can miss the whole
-  // window between this scroll and the flight landing.
+  // Read here, from the driver, rather than off a sampler: the tile's own y is
+  // the baseline everything below is measured against, and a 16ms interval on a
+  // runner that paints five times a second can miss the whole window between
+  // this scroll and the flight landing.
   const tileBefore = await page
     .locator("[data-book-cover]")
     .first()
@@ -261,20 +283,27 @@ test("a scroll under a flight home does not drag the flight with it", async ({ p
   await expect(page.locator("[data-cover-flight]")).toHaveCount(0, { timeout: 5_000 });
 
   const aim = await page.evaluate(
-    () => (window as unknown as { aim: { flight: number; samples: number } }).aim,
+    () =>
+      (window as unknown as { aim: { seen: number; landed: number | null; rect: number | null } })
+        .aim,
   );
-  expect(aim?.samples ?? 0, "a flight has to have been sampled").toBeGreaterThan(0);
+  expect(aim?.seen ?? 0, "the flight has to have run its transition").toBeGreaterThan(0);
   // The tile moved a long way; the flight did not follow it.
   expect(Math.abs(tileAfter - tileBefore), "the shelf really moved the tile").toBeGreaterThan(200);
-  // Within a few pixels, not within one. This compares the last sample taken
-  // while the flight was still in the air against where the tile was when the
-  // flight left, so it can be a frame short of the arrival — the same
-  // measurement that reads 2.4px on CI in the test above. What it guards is
-  // anything but a rounding error: the re-aimed flight landed 262px away.
+  // Within a few pixels, not within one: the slot is measured a moment after the
+  // aim was registered, and a page still settling under it reads 2.4px apart in
+  // the test above. What this guards is anything but a rounding error — the
+  // re-aimed flight ended 262px away.
   expect(
-    Math.abs((aim?.flight ?? 0) - tileBefore),
+    Math.abs((aim?.landed ?? 0) - tileBefore),
     "and the flight stayed on the aim it had",
   ).toBeLessThanOrEqual(4);
+  // Stated the other way round, because this is the regression: the aim is the
+  // slot the tile had when the flight left, not the one the scroll moved it to.
+  expect(
+    Math.abs((aim?.landed ?? 0) - tileAfter),
+    "and not on the slot the scroll moved it to",
+  ).toBeGreaterThan(200);
 });
 
 /**
