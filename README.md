@@ -1,69 +1,91 @@
 # ColorReader
 
-> AI Native + Local First + High Performance 的下一代电子书阅读器。
+> AI Native · Local First · High Performance 的跨平台电子书阅读器。
 
-跨平台桌面应用。Rust 负责文本引擎、索引与存储，React 负责交互与呈现，两者之间只走一层类型化的 Tauri IPC。
+[![CI](https://github.com/xlongDev/ColorReader/actions/workflows/ci.yml/badge.svg)](https://github.com/xlongDev/ColorReader/actions/workflows/ci.yml)
+![license](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)
+![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
+![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-1.88-000000?logo=rust&logoColor=white)
+![React](https://img.shields.io/badge/React-19-087EA4?logo=react&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white)
+
+桌面应用。**Rust 负责文本引擎、解析、索引与存储，React 负责交互与呈现，两者之间只走一层类型化的 Tauri IPC**——命令签名由 Rust 生成 TypeScript 绑定，漏掉一处接线 `tsc` 就报错，不会静默漂移。
+
+三条贯穿全局的取舍：
+
+- **Local First** —— 书、标注、进度、词典、字体都在本机。联网能力（AI、翻译、WebDAV 同步、自动更新）全部可选，一个都不配也照样读。
+- **不打包任何数据集** —— 查词先问系统词典，再问读者自己导入的 StarDict / MDict，都不收录才交给 AI。所以「离线查词」不等于「附带几百 MB 词典」。
+- **整本书不进 React** —— 阅读器只持有当前 viewport 与相邻 buffer，正文提取、切章与索引留在 Rust。
 
 ---
 
-## 当前进度
+## 目录
 
-**Phase 0（项目初始化）至 Phase 14（生产化）全部完成。**
+- [能力](#能力) · [支持的格式](#支持的格式) · [技术栈](#技术栈)
+- [快速开始](#快速开始) · [常用脚本](#常用脚本) · [质量门禁](#质量门禁) · [发布与部署](#发布与部署)
+- [目录结构](#目录结构) · [文档](#文档) · [许可](#许可)
 
-| 能力                                           | 状态 | 阶段     |
-| ---------------------------------------------- | ---- | -------- |
-| Tauri 2 桌面壳 / 窗口 / 拖拽区                 | ✅   | Phase 1  |
-| Liquid Glass 材质与 Design Token               | ✅   | Phase 1  |
-| 侧边栏导航 + 折叠                              | ✅   | Phase 1  |
-| 命令面板（⌘K）+ 命令注册表 + 快捷键系统        | ✅   | Phase 1  |
-| 主题（浅色 / 深色 / 跟随系统）+ 减少透明度     | ✅   | Phase 1  |
-| 设置页 + Rust 系统信息 IPC                     | ✅   | Phase 1  |
-| Error Boundary + 前端结构化日志                | ✅   | Phase 1  |
-| SQLite 书库（WAL + 自动 Migration）            | ✅   | Phase 2  |
-| 七种格式导入（SHA-256 去重，见下表）           | ✅   | Phase 2  |
-| 元数据解析 + 封面提取（`colorreader://` 协议） | ✅   | Phase 2  |
-| 书库 UI（网格 / 搜索 / 排序 / 收藏 / 删除）    | ✅   | Phase 2  |
-| 拖拽导入 + 原生文件选择器                      | ✅   | Phase 2  |
-| 章节存储与全文提取（migration v2）             | ✅   | Phase 3  |
-| Reader Core（章节导航 / 虚拟渲染 / 进度续读）  | ✅   | Phase 3  |
-| 标注（划词高亮 / 列表 / 删除，migration v3）   | ✅   | Phase 4  |
-| 全文检索（FTS5 + BM25 / 书库与书内搜索）       | ✅   | Phase 5  |
-| Book Pack `.ctz` 导出 / 导入（含阅读状态）     | ✅   | Phase 6  |
-| Book Pack `.ctzx` 加密（Argon2id + AES-GCM）   | ✅   | Phase 6  |
-| AI 阅读助手（OpenAI 兼容 / 流式 / 划词问答）   | ✅   | Phase 7  |
-| RAG（组块索引 / 全库检索问答 / 引用跳转）      | ✅   | Phase 8  |
-| 知识图谱（实体 / 关系抽取 / 邻域查询）         | ✅   | Phase 9  |
-| 检索重排（Cohere 兼容 `/rerank`，可选）        | ✅   | Phase 10 |
-| 朗读 TTS（Web Speech / 逐段高亮 / 自动跨章）   | ✅   | Phase 10 |
-| 书源插件（JSON 规则 / 搜索 / 下载进书架）      | ✅   | Phase 11 |
-| WebDAV 同步（进度 / 标注 / 书签，LWW + 墓碑）  | ✅   | Phase 12 |
-| 性能与代码分割（路由 lazy / vendor 分块）      | ✅   | Phase 13 |
-| 生产化（CI / 多平台打包 / E2E / Benchmark）    | ✅   | Phase 14 |
+---
 
-### 已落地能力（未单列阶段）
+## 能力
 
-以下能力已随各阶段陆续实现，但未单独编号成 Phase：
+### 阅读
 
-| 能力                                            | 状态 | 说明                                                                                                                            |
-| ----------------------------------------------- | ---- | ------------------------------------------------------------------------------------------------------------------------------- |
-| PDF 划词标注 + 问 AI（文字版）                  | ✅   | pdf.js 文本层可划选，`createHighlight` 以 `chapterIdx = page - 1` 落库；扫描件无文字层仍不支持                                  |
-| 书签（章节定位 / 阅读位置标记）                 | ✅   | 独立 `bookmarks` 表，与标注并列                                                                                                 |
-| 划词查词（系统词典 + 导入词典 + AI 兜底）       | ✅   | 先问平台自带词典（macOS `DictionaryServices`），再问导入的本地词典（StarDict / MDict），都不收录才交给 AI；前两级全离线、免 Key |
-| 划词翻译 / 维基百科（DeepL + Wikipedia）        | ✅   | `SelectionToolbar` 划词后翻译 / 查百科，需 Key 或网络                                                                           |
-| 阅读统计（时长 / 进度 / 标注数）                | ✅   | `StatsPage` + `reading_sessions`（migration v13）                                                                               |
-| 书架标签（多标签分类）                          | ✅   | `tags` / `book_tags`（migration v1），`TagDialog` / `TagBar` 编辑                                                               |
-| Kindle 标注导入（My Clippings）                 | ✅   | `clippings.rs` 按高亮文本在已入库正文里锚定 UTF-16 区间，回填标注                                                               |
-| AI 导读（流式章节导读）                         | ✅   | `GuidePanel` 流式生成，按 `guide:<book_id>` 缓存完整答案                                                                        |
-| 标注笔记 + 笔记导出（md / csv）                 | ✅   | `AnnotationNote` + `ExportNotesDialog`，带回本应用深链                                                                          |
-| 深链 `colorreader://book/<id>?annotation=<aid>` | ✅   | 三种位置模型（CFI / 章+偏移 / 页码）通解，macOS 需打包安装 `/Applications`                                                      |
-| single-instance 深链合流                        | ✅   | Windows / Linux 由 `tauri-plugin-single-instance` 把第二进程 argv 交给先到实例                                                  |
-| 自动更新（设置 → 关于，手动检查）               | ✅   | Tauri updater + process 插件，读 GitHub Releases 的 `latest.json`；签名用**自生成** minisign 密钥，不需要平台证书               |
-| 自定义字体导入（阅读器「字体」里选用）          | ✅   | 导入 .ttf / .otf / .ttc / .woff / .woff2，经资源协议 `/font/{id}` 加载；不内置字体（体积与许可各自独立）                        |
-| 全书元数据编辑                                  | ✅   | 书架卡片 hover 的「编辑信息」：书名 / 副标题 / 作者 / 出版社 / 语言 / 简介。手动纠正解析错的元数据，不动阅读位置与标注          |
-| 全库备份 / 恢复（设置 → 备份）                  | ✅   | 数据目录原样打包成 zip（含书文件、词典、字体与阅读记录）；恢复在**重启时**替换，被替换的书库保留在 `-previous` 目录             |
-| 命令面板搜书 · 「继续阅读」                     | ✅   | ⌘K 直接按书名 / 作者 / 标签搜书并打开；「继续阅读」跳到最近在读的那本                                                           |
+| 能力                                       | 说明                                                                                                                  |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| 七种格式导入（SHA-256 去重）               | EPUB / PDF / MOBI / AZW3 / FB2 / CBZ / Markdown / TXT，拖进窗口或走选择器；同一份文件重复导入只留一本                 |
+| 阅读器（paged / scroll 双模式）            | 分页与滚动可切换，字号、行距、段距、缩进、页边距均可调；进度按字数定位，续读不加载整本书                              |
+| 自定义字体                                 | 导入 .ttf / .otf / .ttc / .woff / .woff2，经 `/font/{id}` 资源协议加载。**不内置字体**（体积与许可各自独立）          |
+| 主题（浅色 / 深色 / 跟随系统）             | 外加「减少透明度」；所有动效统一尊重 `prefers-reduced-motion`                                                         |
+| 划词标注 + 笔记                            | 高亮以 UTF-16 字符区间锚定在不可变的章节文本上（EPUB 走 CFI），可加笔记、侧栏按章列出、批量删除                       |
+| 书签                                       | 独立于标注的阅读位置标记                                                                                              |
+| 朗读（双引擎）                             | 系统 `speechSynthesis`（离线）与 **Edge TTS**（默认音色 Yunjian）；逐段高亮跟随、读完自动翻章，语速改动从当前位置重播 |
+| 划词查词                                   | 平台词典 → 导入的本地词典 → AI 兜底，前两级全离线免 Key；StarDict 的 `.syn` 变形词也查（划 `ran` 能落到 `run`）       |
+| 划词翻译 / 维基百科                        | DeepL 与 Wikipedia REST；没配 Key 时翻译与词典共用同一个 AI 流式回答                                                  |
+| 深链 `colorreader://book/<id>?annotation=` | 三种位置模型（CFI / 章+偏移 / 页码）通解；Windows / Linux 由 single-instance 把第二进程的 argv 交给先到实例           |
 
-### 支持的格式
+### 书库
+
+| 能力                            | 说明                                                                                                                  |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| 书库 UI                         | 网格 / 搜索 / 排序 / 收藏 / 标签 / 多选批量操作，滚动位置跨路由记忆                                                   |
+| 元数据与封面                    | Rust 侧解析并提取，封面走 `colorreader://` 协议；导入后仍可**手动纠正**书名 / 作者 / 出版社 / 语言 / 简介             |
+| 命令面板（⌘K）                  | 按书名 / 作者 / 标签搜书并打开，「继续阅读」跳到最近在读的那本                                                        |
+| 书源插件（在线找书）            | 一份用户可编辑的 JSON 规则（迷你 JSONPath 子集）描述一个网站接口的搜索 / 详情 / 章节 / 正文取法；下载后走既有导入管线 |
+| Kindle 标注导入（My Clippings） | 按高亮文本在已入库正文里锚定 UTF-16 区间并回填标注                                                                    |
+| 阅读统计                        | 时长 / 进度 / 标注数与连续天数                                                                                        |
+
+### 检索与 AI
+
+| 能力             | 说明                                                                                                                            |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 全文检索         | FTS5 外部内容索引（trigram 分词，中文子串也能命中）+ BM25 排序；书库侧与书内抽屉两处入口，查询不足 3 字自动退回 `LIKE` 子串匹配 |
+| AI 阅读助手      | 任意 OpenAI 兼容端点（托管 API 或本地 Ollama / LM Studio），SSE 流式；划词问答、章节导读                                        |
+| RAG 全书库问答   | 段落边界切块 + 向量暴力点积 Top-6，附编号引用，点引用直接跳到对应书的对应位置                                                   |
+| 检索重排（可选） | Cohere 兼容 `/rerank`：先放宽召回再精排。**失败直接报错**而非静默降级                                                           |
+| 知识图谱         | 由 AI 逐章抽实体与关系（附原文证据句），点实体看关系、点关系跳证据所在章节                                                      |
+
+### 数据
+
+| 能力                 | 说明                                                                                                                                 |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Book Pack `.ctz`     | 一本书连同进度、收藏与全部标注导出成单个文件；只装原文件与阅读状态，章节与封面由既有管线重新提取，所以不存在两份数据对不上的可能     |
+| 加密书档 `.ctzx`     | Argon2id 派生密钥 + AES-256-GCM，KDF 参数与 salt 作为 GCM 的附加数据参与校验                                                         |
+| 笔记导出（md / csv） | 带回本应用深链                                                                                                                       |
+| WebDAV 同步          | 进度 / 标注 / 书签同步到云端单个 `state.json`；进度按 `content_hash` 对齐，冲突 LWW + 墓碑传播，云端解析失败**直接中止**而不覆盖本地 |
+| 全库备份 / 恢复      | 数据目录原样打包 zip（含书文件、词典、字体与阅读记录）；恢复在**重启时**替换，被替换的书库留在 `-previous` 目录                      |
+
+### 平台
+
+| 能力              | 说明                                                                                                           |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| 自动更新          | Tauri updater + process，读 GitHub Releases 的 `latest.json`；签名用**自生成**的 minisign 密钥，不需要平台证书 |
+| 单实例 + 深链合流 | 第二个进程把 argv 交给先到实例                                                                                 |
+
+---
+
+## 支持的格式
 
 | 格式        | 扩展名                        | 正文来源                                       | 元数据               | 内嵌图片 |
 | ----------- | ----------------------------- | ---------------------------------------------- | -------------------- | -------- |
@@ -75,49 +97,25 @@
 | Markdown    | `.md` `.markdown`             | ATX 标题切分                                   | 首个标题             | ❌       |
 | TXT         | `.txt`                        | `第N章` 标记切分                               | 文件名               | ❌       |
 
-PDF 按固定版式渲染（pdf.js，每一页所见即所得，字体与插图原样重现），书签目录由 pdf.js 解析文档 outline；封面自动取第 1 页；提取出的逐页文本供全文检索、朗读与 AI 使用。纯扫描件仍只有图片页，没有文字层可供检索。
-
-Phase 2 交付物是**一个可用的书库**：把上表的文件拖进窗口或通过选择器导入，Rust 侧解析元数据与封面、写入 SQLite，前端以 TanStack Query 展示网格，支持搜索、排序、收藏与删除。
-
-Phase 3 交付物是**一个可用的阅读器**：导入时一次性提取并落库章节正文（EPUB 走 spine 顺序，TXT/Markdown 按标题切分），阅读时按章节懒加载正文、段落虚拟化渲染，支持字号调节、`← →` 翻章与全局进度续读（按字数定位，续读不加载整本书）。
-
-Phase 4 交付物是**一个可用的标注系统**：划词选中正文后浮出「高亮」按钮，高亮以字符区间锚定在不可变的章节文本上（UTF-16 偏移，前端计算、后端不透明存储），正文内联高亮渲染，侧栏按章节列出全部标注并支持删除。
-
-Phase 5 交付物是**一个可用的全文检索**：章节正文上建 FTS5 外部内容索引（trigram 分词，中文子串也能命中），按 BM25 排序。书库侧提供「全文检索」页（侧边栏与 ⌘K 均可进入），书内提供搜索抽屉；命中结果带上下文片段，点击直接跳到对应章节并把命中段落滚动到视野中间，章节内所有匹配与标注一起高亮。查询不足 3 字时自动退回 `LIKE` 子串匹配。
-
-Phase 6 交付物是**一个可搬家的书档**：一本书连同阅读进度、收藏与全部标注导出成单个 `.ctz` 文件；选择加密则写成 `.ctzx`，用 Argon2id 从密码派生密钥、AES-256-GCM 加密，KDF 参数与 salt 作为 GCM 的附加数据参与校验。书档只装原文件与阅读状态，章节和封面不打包，导入时由既有管线重新提取，所以不存在两份数据对不上的可能。导入加密书档会先要密码，重复导入同一份书档不会复制标注。
-
-Phase 7 交付物是**一个 AI 阅读助手**：设置里配置任意 OpenAI 兼容端点（托管 API 或本地 Ollama / LM Studio），API Key 只存本地 SQLite、不进渲染层。阅读器内划词点「问 AI」针对片段提问，不带引用则附上整章；回答经 SSE 流式推送逐字渲染，一次一问，失败原因直说（Key 被拒 / 限流 / 服务端错）。
-
-Phase 8 交付物是**全书检索问答（RAG）**：设置里填上向量模型后，可对任意一本书建立组块索引（按段落边界切成约 600 字的块，嵌入归一化后存 SQLite），AI 抽屉开启「检索全书库」即以问题向量对全库做暴力点积取 Top-6，作为上下文流式回答并附编号引用，点引用直接跳到对应书的对应章节位置。
-
-Phase 9 交付物是**本书知识图谱**：阅读器侧边栏新增「知识图谱」面板，一键由 AI 逐章抽取实体（人物 / 地点 / 组织等）与关系（关系短语 + 原文证据句），实体按出现次数排序，点实体看它的全部关系，点关系直接跳到证据所在章节。抽取复用已配置的 AI 端点，进度实时汇报，中途失败保留旧图谱。
-
-Phase 10 交付物是**检索重排与朗读**：设置里可选填重排模型（Cohere 兼容 `/rerank`），全书检索问答会先放宽召回再精排，命中更准；失败直接报错而非静默降级。朗读基于浏览器内建的 Web Speech API，底栏一键从本章头开始读，逐段高亮跟随、语速循环切换、读完自动翻章续读，无任何后端依赖。
-
-Phase 11 交付物是**在线找书（书源插件）**：书架新增「在线找书」入口，书源是一份用户可编辑的 JSON 规则（迷你 JSONPath 子集 `$.a.b[*].c`），描述一个网站 JSON 接口的搜索、详情、章节列表与正文取法。搜索结果一键下载，Rust 逐章抓取拼成带「第N章」标记的 TXT，走既有导入管线（去重、哈希、切章全部复用），进度逐章汇报，下载完成直接跳书架。
-
-Phase 12 交付物是**WebDAV 同步**：设置里配置任意 WebDAV 服务（坚果云、InfiniCloud 等），阅读进度、标注与书签同步到云端单个 `state.json`，同一本书在多台设备间自动对齐。进度以 `content_hash` 为键，标注与书签以各自 UUID 为键。冲突逐项解决：两边相同视为一致，不同时时间戳新者胜、平局云端胜，**删除则胜过同秒的活项**，每一本的决策（上传 / 下载 / 云端独有 / 一致）连同标注、书签的计数都会在同步结果里列出，绝不静默覆盖；删除靠墓碑传播（本地行真删、另记一行删除），否则删掉的标注会被旧副本拉回来。云端文件解析失败时直接中止同步，绝不拿本地数据覆盖一个可能恢复的远端。凭据只存本地 SQLite。
-
-Phase 13 交付物是**性能与代码分割**：主 chunk 从 719 kB 降到 285 kB（gzip 87 kB），消除 500 kB 告警。手段有三：阅读器 / 搜索 / 设置三个页面路由级 `React.lazy`，按需从本地磁盘加载；书架的重对话框（在线找书、书档导入导出）拆成独立 chunk，首次打开才加载；react-dom 与路由 / react-query 两个稳定 vendor 块单独成 chunk，只在依赖升级时失效，浏览器缓存长期命中。
-
-Phase 14 交付物是**生产化**：GitHub Actions 双工作流（CI 全门禁 + tag 触发 tauri-action 多平台打包，产物为 draft release）；本地实测 `tauri build` 产出 ColorReader.app（arm64，ad-hoc 签名，7.7 MB 二进制）；Playwright E2E smoke（`pnpm test:e2e`）对生产构建验证四个路由渲染且零 console 错误，专防懒加载分包崩坏；可重复的 release 基准测试（600 章 / 2.7 MB 参考书）：导入含切章与 FTS 索引 60 ms、全文检索均值 1.3 ms、目录加载 0.6 ms。**自动更新已于 2026-09-15 落地，且不需要任何证书**：更新签名用的是本地生成的 minisign 密钥对（`pnpm tauri signer generate`），公钥钉在 `tauri.conf.json`、私钥进 GitHub Secrets，与 Apple / 微软账号无关。入口在设置的「关于」区，只做手动检查（`latest.json` → 验签 → 下载安装 → 重启）。**剩下唯一待办是代码签名**：它不影响功能，只影响他人首次打开时的那次信任提示，详见 **[ARCHITECTURE.md](./ARCHITECTURE.md)** 第 9 节。多设备同步方面，进度、标注与书签的 WebDAV 同步（墓碑机制）已于 2026-09-14 落地，不再有缺口。
+EPUB / MOBI / AZW3 走 vendored [foliate-js](./THIRD-PARTY-NOTICES.md) 渲染，其余由 Rust 纯文本管线处理，两侧共用同一份章节语料。PDF 按固定版式渲染（每一页所见即所得），封面取第 1 页，提取出的逐页文本供检索、朗读与 AI 使用——**纯扫描件仍只有图片页**，没有文字层可供检索。
 
 ---
 
 ## 技术栈
 
-| 层         | 选型                                         | 说明                                             |
-| ---------- | -------------------------------------------- | ------------------------------------------------ |
-| 桌面运行时 | **Tauri 2**                                  | 不用 Electron，不引入 Node 作为桌面 Runtime      |
-| 后端       | **Rust**（edition 2024，MSRV 1.88）          | 文本引擎、解析、索引、搜索、文件 IO              |
-| 前端       | **React 19** + **TypeScript 7** + **Vite 8** | 只用函数组件与 Hooks                             |
-| 样式       | **Tailwind CSS v4**                          | 自建 Design Token 与材质层，不套用现成组件库视觉 |
-| UI 状态    | **Zustand**                                  | UI / 阅读器 / 设置 / 导航状态                    |
-| 异步数据   | **TanStack Query**                           | 所有 Tauri IPC 数据、库查询、搜索、AI            |
-| 动画       | **Motion**                                   | 短、轻、自然；统一尊重 `prefers-reduced-motion`  |
-| 测试       | **Vitest** + Testing Library / `cargo test`  |                                                  |
-| 包管理     | **pnpm**                                     |                                                  |
+| 层         | 选型                                                         | 说明                                           |
+| ---------- | ------------------------------------------------------------ | ---------------------------------------------- |
+| 桌面运行时 | **Tauri 2**                                                  | 不用 Electron，不引入 Node 作为桌面 Runtime    |
+| 后端       | **Rust**（edition 2024，MSRV 1.88）                          | 文本引擎、解析、索引、搜索、文件 IO            |
+| 前端       | **React 19** + **TypeScript 7**                              | 只用函数组件与 Hooks                           |
+| 构建       | **Vite 8**                                                   | 路由级 `lazy` + 手工 vendor 分块               |
+| 样式       | **Tailwind CSS v4**                                          | 自建 Design Token 与材质层，不套现成组件库视觉 |
+| UI 状态    | **Zustand**                                                  | 交互 / 阅读器 / 设置 / 导航状态                |
+| 异步数据   | **TanStack Query**                                           | 全部 Tauri IPC 数据、库查询、搜索、AI          |
+| 动画       | **Motion**                                                   | 短、轻、自然                                   |
+| 数据库     | **SQLite**（WAL）+ FTS5                                      | 单连接单写者；跨表写入一律走事务               |
+| 测试       | **Vitest** + Testing Library · `cargo test` · **Playwright** | 见[质量门禁](#质量门禁)                        |
+| 包管理     | **pnpm**                                                     |                                                |
 
 ---
 
@@ -127,17 +125,19 @@ Phase 14 交付物是**生产化**：GitHub Actions 双工作流（CI 全门禁 
 # 1. 安装依赖
 pnpm install
 
-# 2. 挂载 git hooks（clone 后只需一次）
+# 2. 挂载 git hooks（clone 后只需一次）——pre-commit 跑 prettier + oxlint + tsc + rustfmt + clippy
 pnpm hooks
 
-# 3. 浏览器模式：只跑前端，IPC 会降级为浏览器兜底数据
-pnpm dev
-
-# 4. 桌面模式：完整 Tauri 壳 + 真实 Rust IPC
+# 3. 桌面模式：完整 Tauri 壳 + 真实 Rust IPC
 pnpm tauri dev
+
+# 4. 纯前端模式：只跑 Vite，IPC 降级为浏览器兜底数据
+pnpm dev        # 加 ?demo=1 得到一份样本书架（?demo=1&books=84 可放大到 84 本）
 ```
 
-要求：Node 22+、pnpm 10+、Rust 1.88+。macOS 还需要 Xcode Command Line Tools。
+要求：**Node 22+、pnpm 11+、Rust 1.88+**；macOS 另需 Xcode Command Line Tools，Linux 需要 webkit2gtk / gtk 等打包依赖（见 `.github/workflows/ci.yml`）。
+
+> 浏览器模式只是 UI 预览：没有后端，导入、foliate 渲染、PDF、搜索与书签都用不了。要看真东西请用 `pnpm tauri dev`。
 
 ---
 
@@ -151,13 +151,50 @@ pnpm tauri dev
 | `pnpm typecheck`   | TypeScript 严格模式检查                            |
 | `pnpm lint`        | oxlint（0 warning / 0 error 为通过标准）           |
 | `pnpm test`        | Vitest 单元测试                                    |
+| `pnpm test:e2e`    | Playwright（chromium **与** webkit 两个 project）  |
 | `pnpm format`      | Prettier 格式化                                    |
-| `pnpm verify`      | typecheck + lint + test + build                    |
+| `pnpm verify`      | typecheck + lint + test + build（前端门禁）        |
 | `pnpm verify:rust` | rustfmt 检查 + clippy（`-D warnings`）+ cargo test |
 | `pnpm verify:all`  | 前端门禁 + Rust 门禁                               |
 | `pnpm tauri build` | 打包当前平台安装包                                 |
 
-Rust 侧也提供 `pnpm rust:check`、`pnpm rust:fmt`、`pnpm rust:lint`、`pnpm rust:test`。
+Rust 侧另有 `pnpm rust:check` / `rust:fmt` / `rust:lint` / `rust:test`。
+
+---
+
+## 质量门禁
+
+四项全绿才算通过，CI 与本地钩子跑的是同一套：
+
+| 项           | 规模                                                                            |
+| ------------ | ------------------------------------------------------------------------------- |
+| `tsc`        | 严格模式，0 错误                                                                |
+| `oxlint`     | 0 warning / 0 error（错误逐条修，不降级、不加白名单）                           |
+| Vitest       | **356** 用例 / 39 文件                                                          |
+| `cargo test` | **400** 用例（解析器、章节识别、文本引擎、搜索、标注、Book Pack、数据库、词典） |
+| Playwright   | **41** 用例 × 2 引擎 = 82 次运行                                                |
+| bundle       | 入口 chunk **254 kB**（gzip 75 kB），Vite 的 500 kB 告警线内                    |
+
+e2e 两个引擎是刻意的：**WebKit 正是 Tauri 实际渲染用的引擎**，只装 chromium 会让 webkit 那组起不来，等于没测。
+
+Rust 侧硬约束：数据库是**单连接单写者**，所以解析、哈希、网络必须在拿锁之前做完；跨多表写入一律走事务；生产路径禁用 `unwrap` / `expect`。详见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+
+---
+
+## 发布与部署
+
+| 工作流                               | 触发           | 产物                                                                                                     |
+| ------------------------------------ | -------------- | -------------------------------------------------------------------------------------------------------- |
+| `.github/workflows/ci.yml`           | push main / PR | Frontend gates（`verify` + e2e 双引擎）与 Rust gates；失败时把 e2e 原文写成 annotation 并上传 trace 制品 |
+| `.github/workflows/deploy-pages.yml` | push main      | **纯前端预览站**部署到 GitHub Pages（无后端，`?demo=1` 提供样本书架）                                    |
+| `.github/workflows/release.yml`      | `v*` tag       | 四平台安装包（macOS arm64 / macOS x86_64 / Linux / Windows）+ `latest.json` 自动更新清单                 |
+
+打包时 `releaseDraft` 必须是 `false`：更新端点指向 `releases/latest/download/latest.json`，而 GitHub 的 `latest` 明确跳过草稿，草稿发布会让已安装的客户端永远查不到更新。
+
+### 两个必须先备份的机密
+
+- `TAURI_SIGNING_PRIVATE_KEY`（+ 密码，留空即空）——更新签名的私钥。**丢了它，已经装出去的版本再也收不到更新**，只能换密钥并让用户手动重装。
+- **平台代码签名尚未做**（没有 Apple / Windows 证书）。产物在 macOS 上是 ad-hoc 签名，代价只是他人首次打开要绕过一次 Gatekeeper（右键「打开」，或 `xattr -dr com.apple.quarantine`），Windows 侧是 SmartScreen 的「未知发布者」。它不阻塞功能。
 
 ---
 
@@ -171,34 +208,45 @@ Rust 侧也提供 `pnpm rust:check`、`pnpm rust:fmt`、`pnpm rust:lint`、`pnpm
 │   │   ├── glass/              # 材质原语：Surface / Panel / Button / Input / Overlay / Sidebar
 │   │   ├── layout/             # AppShell / TitleBar / NavList
 │   │   ├── command/            # 命令面板 UI
+│   │   ├── motion/             # 封面飞行等共享动效件
 │   │   ├── brand/              # 品牌标识
 │   │   └── common/             # EmptyState 等通用件
-│   ├── features/               # 按业务领域组织（library / reader / search / ai / settings ...）
-│   ├── hooks/                  # useTheme / useHotkeys / useSystemInfo / useReader / useAnnotations / useSearch / useAi / useRag / useGraph / useSource
-│   ├── lib/                    # cn / ipc / commands（命令评分）
-│   ├── stores/                 # Zustand：settings / commands / command-palette / reader
+│   ├── features/               # 按业务领域组织：library / reader / search / notes / graph / settings / source / stats / command
+│   ├── hooks/                  # 29 个 hook：IPC 查询、热键、主题、朗读、手势……
+│   ├── lib/                    # cn / ipc（IPC 单一出口）/ bindings.ts（Rust 生成）/ demo.ts
+│   ├── stores/                 # Zustand：settings / commands / command-palette / reader / chrome / toasts / book-handoff
 │   ├── styles/                 # globals.css = Design Token + 材质层
-│   └── types/ipc.ts            # Rust 命令返回值的镜像类型
-└── src-tauri/
-    ├── src/
-    │   ├── commands/           # Tauri 命令，按域分文件（system / book / reader / annotation / bookmark / search / export / ai / rag / graph / source / sync / stats / tag / clippings / dictionary / font / lookup / tts）
-    │   ├── db/                 # SQLite 连接与迁移（WAL、单写者）
-    │   ├── document/           # 七格式的元数据 / 封面 / 章节提取（epub / pdf / mobi / fb2 / cbz / html / plain）
-    │   ├── ai/                 # AI 配置仓储 + 流式聊天 / embedding / rerank 客户端
-    │   ├── library/            # 导入 / 仓储 / 章节 / 标注 / 检索 / 书档 / 笔记导出 / RAG / 知识图谱 / 书源 / WebDAV 同步 / 词典
-    │   ├── dictionary.rs       # macOS 平台词典（DictionaryServices）
-    │   ├── resource.rs         # colorreader:// 协议（封面 / 书源文件 / 字体）
-    │   ├── tts.rs              # Edge TTS 服务端把手（voices / speak）
-    │   ├── error.rs            # AppError：类型化 + 可序列化
-    │   ├── state.rs            # 全局 AppState
-    │   └── lib.rs              # 应用装配与 tracing 初始化
-    └── capabilities/           # 最小权限集合
+│   └── types/ipc.ts            # Rust 返回值的转出与少量别名
+├── src-tauri/
+│   ├── src/
+│   │   ├── commands/           # 71 个 Tauri 命令，按域分文件（book / reader / annotation / search / ai / rag / graph / source / sync / dictionary / font / tts …）
+│   │   ├── db/                 # SQLite 连接与迁移（WAL、单写者）
+│   │   ├── document/           # 七格式的元数据 / 封面 / 章节提取（epub / pdf / mobi / fb2 / cbz / html / plain）
+│   │   ├── ai/                 # AI 配置仓储 + 流式聊天 / embedding / rerank 客户端
+│   │   ├── library/            # 导入 / 仓储 / 章节 / 标注 / 检索 / 书档 / RAG / 图谱 / 书源 / WebDAV 同步 / 词典（stardict + mdict）
+│   │   ├── dictionary.rs       # macOS 平台词典（DictionaryServices FFI）
+│   │   ├── tts.rs              # Edge TTS：WebSocket + Sec-MS-GEC 签名
+│   │   ├── resource.rs         # colorreader:// 协议（封面 / 书源文件 / 字体）
+│   │   ├── error.rs            # AppError：类型化 + 可序列化
+│   │   ├── state.rs            # 全局 AppState
+│   │   └── lib.rs              # 应用装配与 tracing 初始化
+│   ├── capabilities/           # 最小权限集合
+│   └── tests/fixtures/         # 第三方写入器产出的 MDict 夹具（正确性不靠自我印证）
+└── e2e/                        # Playwright，19 个 spec
 ```
 
-架构约定、IPC 命名规范与性能红线见 **[ARCHITECTURE.md](./ARCHITECTURE.md)**，开发流程与提交规范见 **[CONTRIBUTING.md](./CONTRIBUTING.md)**。
+---
+
+## 文档
+
+| 文档                                               | 内容                                                              |
+| -------------------------------------------------- | ----------------------------------------------------------------- |
+| [ARCHITECTURE.md](./ARCHITECTURE.md)               | 分层、数据模型、IPC 契约、Design System、安全、性能红线、尚未落地 |
+| [CONTRIBUTING.md](./CONTRIBUTING.md)               | 分支模型、提交规范、代码规范、新增 IPC 命令的步骤                 |
+| [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md) | 第三方组件与许可                                                  |
 
 ---
 
 ## 许可
 
-尚未确定，暂按私有项目处理。
+**AGPL-3.0-or-later**，见 [LICENSE](./LICENSE)。第三方组件许可见 [THIRD-PARTY-NOTICES.md](./THIRD-PARTY-NOTICES.md)。
