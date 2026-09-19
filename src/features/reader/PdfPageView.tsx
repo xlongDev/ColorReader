@@ -118,22 +118,14 @@ export function PdfPageView({
   useEffect(() => {
     let cancelled = false;
     let frame = 0;
-    // pdf.js v6 ignores a handed-in `canvasContext` whenever `canvas` is set —
-    // it calls `canvas.getContext("2d")` itself — so the night wrapper goes on
-    // this one element instead. Still per-canvas, so the shelf's cover
-    // renderer in lib/pdf.ts keeps the document's real colours.
-    const element = canvasRef.current;
-    const restore =
-      element && nightFg && nightBg
-        ? installNightContext(element, nightFg, nightBg, invertImages)
-        : null;
 
     const render = async () => {
-      // A re-raster at a new zoom draws the page that is already up: the
-      // resize below clears the canvas, so announcing a load would blank the
-      // page the reader is looking at. Only a different page says so.
+      // Only the first raster of this box announces itself. Once a page is up,
+      // a turn — or a zoom, or a theme flip — keeps it on screen until the new
+      // bitmap is ready; announcing a load would blank the page the reader is
+      // looking at, which is the flash this exists to avoid.
       const signature = `${pageNumber}|${fit}|${nightFg}|${nightBg}|${invertImages}`;
-      if (paintedRef.current !== signature) setState("loading");
+      if (paintedRef.current === "") setState("loading");
       setTextReady(false);
       textTaskRef.current?.cancel();
       try {
@@ -168,10 +160,6 @@ export function PdfPageView({
             }),
         });
 
-        const context = canvas.getContext("2d");
-        if (!context) return;
-        canvas.width = Math.floor(viewport.width);
-        canvas.height = Math.floor(viewport.height);
         // `fitted` is the page at zoom 1; both the layout and the write below
         // scale it by the zoom. An explicit size — not `width: 100%` — is what
         // makes "box" fit actually shrink the page into the visible box
@@ -190,17 +178,55 @@ export function PdfPageView({
         canvas.style.width = `${shown.w}px`;
         canvas.style.height = `${shown.h}px`;
 
+        // The raster lands in a detached canvas and is blitted in one frame,
+        // so the page already on screen survives the whole render — a turn
+        // never shows an empty box while pdf.js works. (readest does the same:
+        // it builds the canvas off-DOM and swaps it in.)
+        const scratch = document.createElement("canvas");
+        scratch.width = Math.floor(viewport.width);
+        scratch.height = Math.floor(viewport.height);
+        // The night wrapper goes on the scratch canvas, not the visible one:
+        // pdf.js v6 discards a handed-in `canvasContext` as soon as `canvas` is
+        // set and calls `getContext("2d")` on that element itself. Installing
+        // it before the context is fetched means both routes hand pdf.js the
+        // wrapped one. Still per-canvas, so the shelf's cover renderer in
+        // lib/pdf.ts keeps the document's real colours.
+        const restoreScratch =
+          nightFg && nightBg ? installNightContext(scratch, nightFg, nightBg, invertImages) : null;
+        const scratchContext = scratch.getContext("2d");
+        if (!scratchContext) {
+          restoreScratch?.();
+          return;
+        }
+
         taskRef.current?.cancel();
         // `background` is the paper the page is painted on; without it pdf.js
         // defaults to white and the whole page glares.
         const task = page.render({
-          canvas,
-          canvasContext: context,
+          canvas: scratch,
+          canvasContext: scratchContext,
           viewport,
           ...(nightBg ? { background: nightBg } : {}),
         });
         taskRef.current = task;
-        await task.promise;
+        try {
+          await task.promise;
+        } finally {
+          restoreScratch?.();
+        }
+        if (cancelled) return;
+
+        // Same task, so the browser never paints between the clear and the
+        // blit: the swap is atomic on screen.
+        canvas.width = scratch.width;
+        canvas.height = scratch.height;
+        canvas.getContext("2d")?.drawImage(scratch, 0, 0);
+        // Release the scratch bitmap before the text layer builds; at 2x dpr a
+        // page-sized one is ~10 MB.
+        scratch.width = 0;
+        scratch.height = 0;
+        paintedRef.current = signature;
+        setState("ready");
 
         // The selectable text layer sits over the canvas at the page's CSS
         // size (no dpr: it must line up with layout pixels, and pdf.js scales
@@ -228,15 +254,17 @@ export function PdfPageView({
           await textLayer.render();
           layeredRef.current = layerKey;
         }
-        if (!cancelled) {
-          paintedRef.current = signature;
-          setTextReady(true);
-          setState("ready");
-        }
+        if (!cancelled) setTextReady(true);
       } catch (error) {
-        // A cancelled render is bookkeeping, not a failure.
+        // A cancelled render is bookkeeping, not a failure, and a failure in
+        // the text layer must not stamp an error over a page that did raster.
         const name = (error as { name?: string }).name;
-        if (!cancelled && name !== "RenderingCancelledException" && name !== "AbortException") {
+        if (
+          !cancelled &&
+          name !== "RenderingCancelledException" &&
+          name !== "AbortException" &&
+          paintedRef.current !== signature
+        ) {
           setState("error");
         }
       }
@@ -264,7 +292,6 @@ export function PdfPageView({
         clearTtsWash();
         washPainted.current = false;
       }
-      restore?.();
     };
   }, [bookId, pageNumber, fit, nightFg, nightBg, invertImages]);
 
