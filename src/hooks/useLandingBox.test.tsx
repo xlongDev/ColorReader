@@ -117,4 +117,22 @@ describe("useLandingBox", () => {
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(land).not.toHaveBeenCalled();
   });
+
+  it("reads the destination without waiting for a frame", async () => {
+    const land = vi.fn<(id: string, to: CoverBox) => void>();
+    flightInTheAir(land);
+    // No frames at all, which is the shape of the problem rather than an
+    // exaggeration of it: the launcher stops waiting for a destination after
+    // `DISSOLVE_AFTER` (200ms) and a runner that hands out five frames a second
+    // takes 200ms to hand out one — so a first reading scheduled on a frame
+    // arrives *after* the flight has left, aimed at the dissolve box instead of
+    // the tile, and the cover lifts and fades where it should have flown home.
+    vi.stubGlobal("requestAnimationFrame", () => 0);
+    try {
+      render(<Probe />);
+      await vi.waitFor(() => expect(land).toHaveBeenCalled());
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

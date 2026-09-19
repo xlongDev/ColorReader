@@ -172,6 +172,13 @@ function Flight({
   return (
     <div
       data-cover-flight
+      // Which of the three states this flight is in, and the only one of them
+      // an observer can see: this layer mounts *before* it has anywhere to
+      // land, so "the element exists" is not "the flight has left". Written on
+      // the same commit that starts the transition, so reading it needs no
+      // frame to be delivered — which is what makes it usable from a test on a
+      // runner that hands out a frame every 200ms.
+      data-flight-phase={launched ? (dissolving ? "dissolving" : "landing") : "aiming"}
       className="shadow-panel pointer-events-none fixed z-[70] overflow-hidden"
       style={{
         left: from.x,

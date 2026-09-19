@@ -201,20 +201,18 @@ test("a scroll under a flight home does not drag the flight with it", async ({ p
   await page.waitForTimeout(600);
 
   // Sampled inside the page: a flight lives 420ms, and by the time an outer
-  // assertion could look, the box it was aiming at is already gone.
+  // assertion could look, the box it was aiming at is already gone. Only the
+  // flight is sampled — where the tile was is read from the driver, either side
+  // of the scroll, because that pair is what the sampler used to have to catch
+  // inside one frame.
   await page.evaluate(() => {
-    const w = window as unknown as {
-      aim?: { flight: number; tileAtLaunch: number | null; tileNow: number | null };
-    };
-    w.aim = { flight: 0, tileAtLaunch: null, tileNow: null };
+    const w = window as unknown as { aim?: { flight: number; samples: number } };
+    w.aim = { flight: 0, samples: 0 };
     const sample = () => {
       const flight = document.querySelector("[data-cover-flight]");
-      const tile = document.querySelector("[data-book-cover]");
-      if (!flight || !tile) return;
+      if (!flight) return;
+      w.aim!.samples += 1;
       w.aim!.flight = Math.round(flight.getBoundingClientRect().y);
-      const y = Math.round(tile.getBoundingClientRect().y);
-      w.aim!.tileAtLaunch ??= y;
-      w.aim!.tileNow = y;
     };
     sample();
     window.setInterval(sample, 16);
@@ -223,57 +221,60 @@ test("a scroll under a flight home does not drag the flight with it", async ({ p
   await page.getByRole("button", { name: "返回书库" }).first().click();
   // A beat into the flight, then scroll the shelf out from under it. Waited for
   // rather than timed: the flight only launches once it has somewhere to land
-  // (see `BookFlight`), so its first movement *is* the proof that the box was
-  // read — and on a loaded runner that first frame arrives later than any fixed
-  // beat. Measured on CI: the shelf mounted slowly enough that the scroll landed
-  // before the box was read, the flight then aimed at the tile's scrolled slot
-  // and ended 262px from where this test thought its aim was. That is the flight
-  // obeying the aim it was given, not the "chased the scroll" regression under
-  // test — so the scroll has to wait until there is an aim to not-chase.
-  // Polled on a timer rather than on `requestAnimationFrame` (the default).
-  // The flight lives 420ms and headless WebKit on CI hands out a frame about
-  // every 200ms, so an rAF-driven poll gets two or three looks at the whole
-  // window — and one that lands after `onTransitionEnd` removes the element
-  // never sees it at all, which is how this read as a 5s timeout. A 50ms
-  // interval is independent of how fast the runner paints.
-  await page.waitForFunction(
-    () => {
-      const w = window as unknown as { flightStart?: number };
-      const flight = document.querySelector("[data-cover-flight]");
-      if (!flight) return false;
-      const y = Math.round(flight.getBoundingClientRect().y);
-      w.flightStart ??= y;
-      return Math.abs(y - w.flightStart) > 4;
-    },
-    undefined,
-    { timeout: 15_000, polling: 50 },
-  );
+  // (see `BookFlight`), so its leaving *is* the proof that the box was read — and
+  // on a loaded runner that happens later than any fixed beat. Measured on CI:
+  // the shelf mounted slowly enough that the scroll landed before the box was
+  // read, the flight then aimed at the tile's scrolled slot and ended 262px from
+  // where this test thought its aim was. That is the flight obeying the aim it
+  // was given, not the "chased the scroll" regression under test — so the scroll
+  // has to wait until there is an aim to not-chase.
+  //
+  // Waited for on the app's own state, not on the pixels moving. The layer
+  // mounts *before* it has anywhere to land, so its existence is not the answer,
+  // and "the box moved more than 4px" made a second question out of a first one:
+  // it asked the compositor to deliver a frame during a 420ms transition that
+  // headless WebKit on CI samples about twice, and it answered by timing out —
+  // for 15s, once the timeout was raised from 5s. `data-flight-phase` is written
+  // on the commit that starts the transition, so no frame has to be delivered
+  // for it to be read.
+  await expect(page.locator('[data-cover-flight][data-flight-phase="landing"]')).toHaveCount(1, {
+    timeout: 15_000,
+  });
+  // Read here, from the driver, rather than off the in-page sampler: the tile's
+  // own y is the baseline everything below is measured against, and a 16ms
+  // interval on a runner that paints five times a second can miss the whole
+  // window between this scroll and the flight landing.
+  const tileBefore = await page
+    .locator("[data-book-cover]")
+    .first()
+    .evaluate((el) => el.getBoundingClientRect().y);
   const scrolled = await shelf.evaluate((el) => {
     el.scrollTop += 260;
     return el.scrollTop;
   });
   expect(scrolled, "the shelf has to actually scroll").toBeGreaterThan(200);
+  const tileAfter = await page
+    .locator("[data-book-cover]")
+    .first()
+    .evaluate((el) => el.getBoundingClientRect().y);
 
   await expect(page.locator("[data-cover-flight]")).toHaveCount(0, { timeout: 5_000 });
 
   const aim = await page.evaluate(
-    () =>
-      (
-        window as unknown as {
-          aim: { flight: number; tileAtLaunch: number | null; tileNow: number | null };
-        }
-      ).aim,
+    () => (window as unknown as { aim: { flight: number; samples: number } }).aim,
   );
-  expect(aim?.tileAtLaunch ?? null, "a flight has to have been sampled").not.toBeNull();
+  expect(aim?.samples ?? 0, "a flight has to have been sampled").toBeGreaterThan(0);
   // The tile moved a long way; the flight did not follow it.
+  expect(Math.abs(tileAfter - tileBefore), "the shelf really moved the tile").toBeGreaterThan(200);
+  // Within a few pixels, not within one. This compares the last sample taken
+  // while the flight was still in the air against where the tile was when the
+  // flight left, so it can be a frame short of the arrival — the same
+  // measurement that reads 2.4px on CI in the test above. What it guards is
+  // anything but a rounding error: the re-aimed flight landed 262px away.
   expect(
-    Math.abs((aim?.tileNow ?? 0) - (aim?.tileAtLaunch ?? 0)),
-    "the shelf really moved the tile",
-  ).toBeGreaterThan(200);
-  expect(
-    Math.abs((aim?.flight ?? 0) - (aim?.tileAtLaunch ?? 0)),
+    Math.abs((aim?.flight ?? 0) - tileBefore),
     "and the flight stayed on the aim it had",
-  ).toBeLessThanOrEqual(2);
+  ).toBeLessThanOrEqual(4);
 });
 
 /**

@@ -5,7 +5,7 @@ import { rectOf, useBookHandoff, type CoverBox } from "@/stores/book-handoff";
 /**
  * Keeps a flight's aim on the destination until the flight leaves.
  *
- * Polled rather than read on mount, because the far end is not laid out in the
+ * Polled rather than read once, because the far end is not laid out in the
  * same commit this element mounts in — and re-read until the flight is under
  * way, because the first frame the destination *can* be measured is not the
  * frame it stops moving in. Some of what moves it settles late: the library
@@ -15,6 +15,10 @@ import { rectOf, useBookHandoff, type CoverBox } from "@/stores/book-handoff";
  * last rows ends up tens of pixels from where its cover was aimed, and the
  * handoff snaps the cover onto it, reported as the flight "running down and then
  * up".
+ *
+ * The first reading does not wait for a frame, though — see the note on the
+ * effect below. Reading *this* element is safe the moment the commit ends; what
+ * the polling is for is the moving, not the first look.
  *
  * Updating before the flight leaves is free: the CSS transition has not started,
  * so there is no clock to restart. That is the whole difference between this and
@@ -49,8 +53,10 @@ export function useLandingBox(
   useEffect(() => {
     if (!landing || launched) return;
     let frame = 0;
+    let disposed = false;
     let previous: Omit<CoverBox, "radius"> | null = null;
     const tick = () => {
+      if (disposed) return;
       const element = ref.current;
       if (element && !useBookHandoff.getState().launched) {
         const box = rectOf(element);
@@ -78,7 +84,21 @@ export function useLandingBox(
       }
       frame = requestAnimationFrame(tick);
     };
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
+    // The first reading does not wait for a frame.
+    //
+    // The launcher stops waiting for a destination after `DISSOLVE_AFTER` (200ms)
+    // and leaves toward the dissolve box instead — up and 16% larger — so a first
+    // reading that arrives later than that does not merely aim badly: the cover
+    // lifts and fades where it should have flown home. A frame is not a fixed
+    // amount of time, and the runner this app is tested on hands one out about
+    // every 200ms, which is exactly how late that reading lands. Reading in this
+    // task instead is early by a fraction of a frame on a laptop and measurably
+    // early where it matters. The box is the same one the frame would have read:
+    // layout is up to date the moment the commit ends, and this forces it.
+    queueMicrotask(tick);
+    return () => {
+      disposed = true;
+      cancelAnimationFrame(frame);
+    };
   }, [landing, launched, id, land, ref, visible]);
 }

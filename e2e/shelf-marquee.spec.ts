@@ -46,21 +46,24 @@ test("a long author name marquees on hover instead of staying truncated", async 
 
   // `whileHover` is on the inner span, so the pointer goes to the text itself.
   await slot.hover();
-  const travelled = await page.evaluate(async () => {
-    const inner = document.querySelector("[data-marquee]")!.firstElementChild as HTMLElement;
-    // Bounded by the clock, not by a frame count: the slide is 1.5s of
-    // animation, and a frame is not a unit of time — WebKit's headless rAF runs
-    // at its own rate, so a fixed number of frames covered barely a second of
-    // it and the assertion landed on the threshold rather than past it.
-    const deadline = performance.now() + 3000;
-    let least = 0;
-    while (performance.now() < deadline) {
-      await new Promise((resolve) => requestAnimationFrame(resolve));
+  // The slide is aimed at `-overflow`: the distance the name has to cover to get
+  // out from under the mask, which this fixture measures for itself rather than
+  // taking as a constant. The same name is a different width in each engine —
+  // WebKit resolves a different CJK font and the two disagree by about 15% — so
+  // a fixed threshold turns a font metric into a pass or a fail. Measured on CI:
+  // the travel was -20px against an assertion of `< -20`.
+  const overflow = measured.content - measured.slot;
+  const x = () =>
+    page.evaluate(() => {
+      const inner = document.querySelector("[data-marquee]")!.firstElementChild as HTMLElement;
       const match = /matrix\(([^)]+)\)/.exec(getComputedStyle(inner).transform);
-      if (match) least = Math.min(least, Number((match[1] ?? "").split(",")[4] ?? 0));
-      if (least < -20) break;
-    }
-    return Math.round(least);
-  });
-  expect(travelled, "the name has to slide out from under the mask").toBeLessThan(-20);
+      return match ? Math.round(Number((match[1] ?? "").split(",")[4] ?? 0)) : 0;
+    });
+  // Polled to the far end of the slide, rather than sampled for a minimum on the
+  // frame grid. The name parks at that end for `PAUSE_SECONDS` — 1.2s, six looks
+  // even at the five frames a second CI hands out — so the end state is
+  // catchable at any frame rate, while a frame-by-frame minimum over a fixed 3s
+  // window measures how far the animation got inside that window, which is a
+  // statement about the runner rather than about the marquee.
+  await expect.poll(x, { timeout: 15_000 }).toBeLessThanOrEqual(-(overflow - 1));
 });
