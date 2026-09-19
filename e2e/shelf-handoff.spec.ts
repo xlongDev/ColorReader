@@ -230,6 +230,12 @@ test("a scroll under a flight home does not drag the flight with it", async ({ p
   // and ended 262px from where this test thought its aim was. That is the flight
   // obeying the aim it was given, not the "chased the scroll" regression under
   // test — so the scroll has to wait until there is an aim to not-chase.
+  // Polled on a timer rather than on `requestAnimationFrame` (the default).
+  // The flight lives 420ms and headless WebKit on CI hands out a frame about
+  // every 200ms, so an rAF-driven poll gets two or three looks at the whole
+  // window — and one that lands after `onTransitionEnd` removes the element
+  // never sees it at all, which is how this read as a 5s timeout. A 50ms
+  // interval is independent of how fast the runner paints.
   await page.waitForFunction(
     () => {
       const w = window as unknown as { flightStart?: number };
@@ -240,7 +246,7 @@ test("a scroll under a flight home does not drag the flight with it", async ({ p
       return Math.abs(y - w.flightStart) > 4;
     },
     undefined,
-    { timeout: 5_000 },
+    { timeout: 15_000, polling: 50 },
   );
   const scrolled = await shelf.evaluate((el) => {
     el.scrollTop += 260;
