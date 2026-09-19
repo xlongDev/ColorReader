@@ -144,7 +144,69 @@ const epubBook: BookSummary = {
   tags: [],
 } as unknown as BookSummary;
 
-export const demoBooks: BookSummary[] = [...shelf, ...(epubEnabled() ? [epubBook] : [])];
+/**
+ * `?demo=1&pdf=1` also puts a real PDF on the sample shelf.
+ *
+ * Same argument as the EPUB above, and the same gap it closed. A PDF page is
+ * rasterised into a canvas, gets its own text layer, and turns through an
+ * offscreen double buffer — none of which a plain-text sample exercises. Two
+ * defects found by reading alone landed here in one evening: a page turn that
+ * flashed white because the canvas was unmounted, and a sidebar spring that
+ * re-rasterised every page on screen once per frame.
+ *
+ * The fixture is deliberately not uniform: five ordinary text pages against a
+ * sixth that is a dense vector grid, so an assertion about the prefetch has
+ * something to measure. Built by `scripts/generate-demo-pdf.py`, served from
+ * `public/demo/`.
+ */
+function pdfEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("pdf") === "1";
+}
+
+/** The fixture PDF's book id, so `demoPdfBytes` knows what it can answer. */
+const PDF_ID = "demo-pdf";
+
+const pdfBook: BookSummary = {
+  id: PDF_ID,
+  title: "PDF 样书",
+  subtitle: null,
+  description: null,
+  language: "zh",
+  publisher: null,
+  format: "pdf",
+  fileSize: 56_016,
+  coverUrl: cover(4, PALETTES[1]![0], PALETTES[2]![1]),
+  addedAt: 0,
+  updatedAt: 0,
+  lastReadAt: null,
+  progress: 0,
+  location: null,
+  favorite: false,
+  authors: ["样书"],
+  tags: [],
+} as unknown as BookSummary;
+
+/**
+ * The fixture PDF's bytes, for the reader's pdf.js path.
+ *
+ * `loadDoc` in `lib/pdf.ts` calls this before it gives up on a browser, so the
+ * whole PDF surface — raster, text layer, prefetch — is reachable under
+ * `?demo=1&pdf=1`. `null` for every other book, which is what keeps a browser
+ * showing its honest "PDF 阅读只能在桌面端使用" instead of an empty page.
+ */
+export async function demoPdfBytes(bookId: string): Promise<ArrayBuffer | null> {
+  if (bookId !== PDF_ID) return null;
+  const response = await fetch("/demo/pdf-pages.pdf");
+  if (!response.ok) throw new Error(`样书 PDF 取不到：HTTP ${response.status}`);
+  return response.arrayBuffer();
+}
+
+export const demoBooks: BookSummary[] = [
+  ...shelf,
+  ...(epubEnabled() ? [epubBook] : []),
+  ...(pdfEnabled() ? [pdfBook] : []),
+];
 
 /**
  * The fixture EPUB's bytes, for the reader's foliate path.

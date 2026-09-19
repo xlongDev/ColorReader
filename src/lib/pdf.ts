@@ -1,6 +1,7 @@
 import type { PDFDocumentProxy } from "pdfjs-dist";
 import type * as PdfjsModule from "pdfjs-dist";
 
+import { demoPdfBytes } from "@/lib/demo";
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 
 /**
@@ -28,6 +29,25 @@ function loadPdfjs() {
 
 const docs = new Map<string, Promise<PDFDocumentProxy>>();
 
+/**
+ * The document's bytes: over IPC in the app, from the browser fixture under
+ * `?demo=1&pdf=1`.
+ *
+ * This is the one thing about a PDF that differs between the two runtimes, so
+ * it is the one thing that has to know about both. Every other book in a
+ * browser still gets the honest refusal — a reader who opens a real PDF in the
+ * dev server should be told the desktop app is what reads it, not handed an
+ * empty page.
+ */
+async function bookBytes(bookId: string): Promise<ArrayBuffer> {
+  if (!isDesktopRuntime) {
+    const fixture = await demoPdfBytes(bookId);
+    if (fixture) return fixture;
+    throw new Error("PDF 阅读只能在桌面端使用");
+  }
+  return ipc.bookFile(bookId);
+}
+
 /** One document per book per session: pdf.js parses the byte stream once and
     the reader then only asks for pages as the user flips. */
 export function loadDoc(bookId: string): Promise<PDFDocumentProxy> {
@@ -35,8 +55,7 @@ export function loadDoc(bookId: string): Promise<PDFDocumentProxy> {
   if (cached) return cached;
   const promise = (async () => {
     const pdfjs = await loadPdfjs();
-    if (!isDesktopRuntime) throw new Error("PDF 阅读只能在桌面端使用");
-    const bytes = new Uint8Array(await ipc.bookFile(bookId));
+    const bytes = new Uint8Array(await bookBytes(bookId));
     return pdfjs.getDocument({
       data: bytes,
       // JPEG2000 and JBIG2 page images decode in the worker through the wasm
