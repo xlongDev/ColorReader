@@ -149,9 +149,15 @@ export function ReaderChapterView({
     // PdfPageView). The cost is the page-turn transition: any entrance
     // animation would fade in the *previous* page's bitmap, so a paged PDF
     // turns without one.
-    // `ponytail:` no preload of the next spread, so a turn still waits out the
-    // raster. Cache the rendered bitmap per (book, page, size) and warm
-    // `chapterIdx + 1` after a paint if that wait ever reads as lag.
+    //
+    // Each page view warms the one a turn will ask for, so that turn is a blit
+    // rather than a 50–150 ms raster. The step is the spread, not one page:
+    // in double-page mode a turn advances both views at once.
+    // `ponytail:` forward only — a turn is what the reader feels, and a
+    // spread's worth of rasters is the memory that buys it. Caching history
+    // too would double that for a rarer gesture. See `MAX_RASTERS`.
+    const step = doublePage ? 2 : 1;
+    const prefetchAfter = (page: number) => (page + step <= total ? page + step : null);
     return paged ? (
       <div
         className="mx-auto flex h-full w-full items-stretch justify-center"
@@ -162,6 +168,7 @@ export function ReaderChapterView({
             <PdfPageView
               bookId={bookId}
               pageNumber={chapterIdx + 1}
+              prefetchPage={prefetchAfter(chapterIdx + 1)}
               fit="box"
               zoom={pdf.zoom}
               animated={pdf.animated}
@@ -185,6 +192,7 @@ export function ReaderChapterView({
               <PdfPageView
                 bookId={bookId}
                 pageNumber={chapterIdx + 2}
+                prefetchPage={prefetchAfter(chapterIdx + 2)}
                 fit="box"
                 zoom={pdf.zoom}
                 animated={pdf.animated}
