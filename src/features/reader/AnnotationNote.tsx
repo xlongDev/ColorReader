@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { NotePencil } from "@phosphor-icons/react";
+import { Check, Eraser, NotePencil } from "@phosphor-icons/react";
+
+import { cn } from "@/lib/cn";
 
 /**
  * The reader's own note hanging off a highlight.
@@ -87,7 +89,15 @@ export function NoteEditor({
   // caret should already be in it — but not through `autoFocus`, which the a11y
   // rule bans for the page-load case it cannot tell this apart from.
   useEffect(() => {
-    field.current?.focus();
+    const el = field.current;
+    if (!el) return;
+    el.focus();
+    // ...and *at the end* of what is already there, not at index 0. A focused
+    // textarea keeps the selection React gave it, which on a fresh mount is
+    // the start — so editing an existing note typed backwards through it, and
+    // the reader had to arrow to the end before writing a word.
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
   }, []);
 
   const commit = () => {
@@ -96,33 +106,124 @@ export function NoteEditor({
     else onSave(next === "" ? null : next);
   };
 
+  const changed = draft.trim() !== (value ?? "").trim();
+
   return (
-    <textarea
-      ref={field}
-      aria-label="标注笔记"
-      rows={2}
-      value={draft}
+    // The same mousedown guard the selection toolbar's panel carries, for the
+    // same reason: WebKit does not focus a button on press, so pressing one of
+    // these blurred the field, the blur committed and unmounted the editor,
+    // and the click landed on nothing — 保存 and 清空 both read as dead.
+    // Holding focus where it is makes WebKit and Chromium agree, and the blur
+    // still commits when the reader leaves for somewhere else entirely.
+    <div className="flex flex-col gap-1">
+      <textarea
+        ref={field}
+        aria-label="标注笔记"
+        rows={2}
+        value={draft}
+        disabled={disabled}
+        placeholder="写下你的想法"
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={() => {
+          if (rewound.current) {
+            rewound.current = false;
+            onCancel();
+            return;
+          }
+          commit();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            rewound.current = true;
+            event.currentTarget.blur();
+          } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+            event.currentTarget.blur();
+          }
+        }}
+        className="border-hairline bg-surface-1 text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 w-full resize-none rounded-md border px-2.5 py-2 text-[12.5px] leading-relaxed transition-colors focus-visible:outline-none"
+      />
+      {/* The strip is what makes the field manageable without leaving it:
+          blur commits, but a reader who came here to add one line should be
+          able to say so, and emptying the field is the way to drop a note
+          that is already saved. */}
+      <div className="flex items-center gap-0.5">
+        <NoteAction
+          label="保存笔记"
+          text="保存"
+          // Nothing to write while the field still says what is saved.
+          disabled={disabled || !changed}
+          onClick={commit}
+        >
+          <Check size={14} />
+        </NoteAction>
+        <NoteAction
+          label="清空输入"
+          text="清空"
+          disabled={disabled || draft === ""}
+          onClick={() => setDraft("")}
+        >
+          <Eraser size={14} />
+        </NoteAction>
+        <span className="text-text-3 ml-auto pr-1 text-[11px]">⌘↵ 保存 · Esc 取消</span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One button on a note field's action strip.
+ *
+ * `label` names the action for assistive tech and the tooltip; `text` is the
+ * short form on the button. They are separate because the names have to
+ * disambiguate — 删除笔记 against the toolbar's 取消标注 — while the strip only
+ * has room for the verb.
+ *
+ * Shared by the reader's own note and the selection toolbar's, so a note is
+ * finished the same way wherever it is written.
+ *
+ * Module scope rather than declared in the render: a component defined inside
+ * another gets a fresh identity every render, which both oxlint and the React
+ * Compiler reject.
+ */
+export function NoteAction({
+  label,
+  text,
+  disabled,
+  danger,
+  onClick,
+  children,
+}: {
+  label: string;
+  text: string;
+  disabled?: boolean;
+  danger?: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
       disabled={disabled}
-      placeholder="写下你的想法"
-      onChange={(event) => setDraft(event.target.value)}
-      onBlur={() => {
-        if (rewound.current) {
-          rewound.current = false;
-          onCancel();
-          return;
-        }
-        commit();
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "Escape") {
-          rewound.current = true;
-          event.currentTarget.blur();
-        } else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
-          event.currentTarget.blur();
-        }
-      }}
-      className="border-hairline bg-surface-1 text-text-1 placeholder:text-text-3 focus-visible:border-accent focus-visible:bg-surface-2 w-full resize-none rounded-md border px-2.5 py-2 text-[12.5px] leading-relaxed transition-colors focus-visible:outline-none"
-    />
+      onClick={onClick}
+      // Hold focus where it is, rather than letting the press move it off the
+      // field and blur it: WebKit does not focus a button on mousedown, while
+      // Chromium does, so without this the blur commits and unmounts the
+      // editor before the click lands — 保存 and 清空 read as dead buttons on
+      // the platform this ships on. `focus-visible` is for the keyboard,
+      // which arrives by Tab and never through here.
+      onMouseDown={(event) => event.preventDefault()}
+      className={cn(
+        "press focus-visible:focus-ring flex h-7 items-center gap-1 rounded-lg px-2 text-[11.5px] transition-colors",
+        "text-text-2 hover:text-text-1 hover:bg-(--glass-btn)",
+        danger && "hover:text-red-400",
+        "disabled:pointer-events-none disabled:opacity-40",
+      )}
+    >
+      {children}
+      <span>{text}</span>
+    </button>
   );
 }
 

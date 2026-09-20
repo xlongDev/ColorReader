@@ -104,6 +104,39 @@ describe("AnnotationNote", () => {
     expect(onSave).toHaveBeenCalledWith(null);
   });
 
+  it("starts writing at the end of a note that is already there", async () => {
+    // Focus alone leaves the caret at index 0, which types *backwards*
+    // through the saved note — the whole reason opening one to add a line
+    // felt broken.
+    const user = userEvent.setup();
+    setup("原笔记");
+    await user.click(screen.getByRole("button", { name: "原笔记" }));
+    await user.keyboard("！");
+    expect(field()).toHaveValue("原笔记！");
+  });
+
+  it("saves from the strip's own 保存 button", async () => {
+    const user = userEvent.setup();
+    const onSave = setup();
+    await user.click(add());
+    await user.type(field(), "记一笔");
+    await user.click(screen.getByRole("button", { name: "保存笔记" }));
+    expect(onSave).toHaveBeenCalledTimes(1);
+    expect(onSave).toHaveBeenCalledWith("记一笔");
+  });
+
+  it("empties the field with 清空 and only saves the note on 保存", async () => {
+    const user = userEvent.setup();
+    const onSave = setup("原笔记");
+    await user.click(screen.getByRole("button", { name: "原笔记" }));
+    await user.click(screen.getByRole("button", { name: "清空输入" }));
+    expect(field()).toHaveValue("");
+    expect(onSave).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "保存笔记" }));
+    expect(onSave).toHaveBeenCalledWith(null);
+  });
+
   it("treats a whitespace-only draft on a bare highlight as no change", async () => {
     const user = userEvent.setup();
     const onSave = setup();

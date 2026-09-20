@@ -25,6 +25,7 @@ import { cn } from "@/lib/cn";
 import { OverlayPortal } from "@/components/glass/overlay";
 import type { Annotation, AnnotationStyle } from "@/types/ipc";
 import { HIGHLIGHT_COLORS } from "@/stores/reader";
+import { NoteAction } from "./AnnotationNote";
 import { inkWash } from "./selection";
 import { SPRING } from "@/lib/motion";
 
@@ -161,9 +162,15 @@ export function SelectionToolbar({
   );
   // Focus the field as it appears — the reader asked for it by clicking. Not
   // via `autoFocus`: the a11y rule bans it for the page-load case it cannot
-  // tell this apart from.
+  // tell this apart from. The caret lands at the end of the note that is
+  // already there, so editing one continues it instead of typing backwards.
   useEffect(() => {
-    if (noting) field.current?.focus();
+    if (!noting) return;
+    const el = field.current;
+    if (!el) return;
+    el.focus();
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
   }, [noting]);
 
   /**
@@ -514,51 +521,10 @@ export function SelectionToolbar({
 }
 
 /**
- * One button on the note field's action strip.
- *
- * `label` names the action for assistive tech and the tooltip; `text` is the
- * short form on the button. They are separate because the names have to
- * disambiguate — 删除笔记 against the row's 取消标注 — while the strip only has
- * room for the verb.
- *
- * Module scope rather than declared in the render: a component defined inside
- * another gets a fresh identity every render, which both oxlint and the React
- * Compiler reject.
+ * One button on the note field's action strip: `NoteAction`, shared with the
+ * reader's own note cell — see `AnnotationNote` for why `label` and `text` are
+ * two strings.
  */
-function NoteAction({
-  label,
-  text,
-  disabled,
-  danger,
-  onClick,
-  children,
-}: {
-  label: string;
-  text: string;
-  disabled?: boolean;
-  danger?: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-      className={cn(
-        "press focus-visible:focus-ring flex h-7 items-center gap-1 rounded-lg px-2 text-[11.5px] transition-colors",
-        "text-text-2 hover:text-text-1 hover:bg-(--glass-btn)",
-        danger && "hover:text-red-400",
-        "disabled:pointer-events-none disabled:opacity-40",
-      )}
-    >
-      {children}
-      <span>{text}</span>
-    </button>
-  );
-}
 
 /** The style preview inside its button: a wash, a line, a wave — drawn at the
  *  ink's own colour so the swatch previews the combination, not just the shape. */
