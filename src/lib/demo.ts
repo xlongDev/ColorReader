@@ -82,7 +82,7 @@ function epubEnabled(): boolean {
   return new URLSearchParams(window.location.search).get("epub") === "1";
 }
 
-/** The fixture EPUB's book id, so `demoEpubBytes` knows what it can answer. */
+/** The fixture EPUB's book id, so the foliate fixture table can answer for it. */
 const EPUB_ID = "demo-epub";
 
 const COUNT = shelfSize();
@@ -188,6 +188,52 @@ const pdfBook: BookSummary = {
 } as unknown as BookSummary;
 
 /**
+ * `?demo=1&kindle=1` also puts a real AZW3 on the sample shelf.
+ *
+ * Same argument as the EPUB above, and the one gap the EPUB could not close.
+ * An EPUB and a Kindle container share foliate, but not a parser: an AZW3 is a
+ * Palm database, and before this fixture nothing in a browser had ever opened
+ * one. The Rust side was covered — `library::import` reads a Kindle file's
+ * metadata and chapters through `document::mobi` — but every step past the
+ * importer rested on reading: foliate reassembling the book's own XHTML, the
+ * paginator numbering the book's bytes, and the reader picking foliate at all
+ * from the format it was handed. `isFoliateFormat` deciding *which* renderer an
+ * `azw3` gets is a unit test; whether that renderer can open the file is this.
+ *
+ * The format is the point, so it is `azw3` and not `mobi`: the shelf prints
+ * what it is given, and a `mobi` entry would exercise the same parser while
+ * leaving the label — the thing the reader actually reported — untested.
+ * Built by `scripts/generate-demo-kindle.py`, served from `public/demo/`.
+ */
+function kindleEnabled(): boolean {
+  if (typeof window === "undefined") return false;
+  return new URLSearchParams(window.location.search).get("kindle") === "1";
+}
+
+/** The fixture AZW3's book id, so the foliate fixture table can answer for it. */
+const KINDLE_ID = "demo-kindle";
+
+const kindleBook: BookSummary = {
+  id: KINDLE_ID,
+  title: "Kindle 样书",
+  subtitle: null,
+  description: null,
+  language: "zh",
+  publisher: null,
+  format: "azw3",
+  fileSize: 2_906,
+  coverUrl: cover(5, PALETTES[2]![0], PALETTES[0]![1]),
+  addedAt: 0,
+  updatedAt: 0,
+  lastReadAt: null,
+  progress: 0,
+  location: null,
+  favorite: false,
+  authors: ["样书"],
+  tags: [],
+} as unknown as BookSummary;
+
+/**
  * The fixture PDF's bytes, for the reader's pdf.js path.
  *
  * `loadDoc` in `lib/pdf.ts` calls this before it gives up on a browser, so the
@@ -206,10 +252,24 @@ export const demoBooks: BookSummary[] = [
   ...shelf,
   ...(epubEnabled() ? [epubBook] : []),
   ...(pdfEnabled() ? [pdfBook] : []),
+  ...(kindleEnabled() ? [kindleBook] : []),
 ];
 
 /**
- * The fixture EPUB's bytes, for the reader's foliate path.
+ * Where each foliate fixture's bytes live, keyed by the id the shelf hands out.
+ *
+ * One table rather than a function per format, because the formats do not
+ * differ on this path: `makeBook` sniffs the container by content — a zip
+ * header, a PDF header, then `BOOKMOBI` at byte 60 — so an EPUB and an AZW3
+ * differ only in which file gets fetched. A third fixture is a row.
+ */
+const FOLIATE_FIXTURES: Record<string, { path: string; label: string }> = {
+  [EPUB_ID]: { path: "/demo/page-numbers.epub", label: "样书 EPUB" },
+  [KINDLE_ID]: { path: "/demo/kindle-pages.azw3", label: "样书 AZW3" },
+};
+
+/**
+ * The fixture bytes for a foliate book, for the reader's foliate path.
  *
  * In the app the book comes over IPC (or streams over the ColorReader
  * protocol); a browser has no backend to read a file from, so the fixture
@@ -217,10 +277,11 @@ export const demoBooks: BookSummary[] = [
  * falls through to the real load path, which in a browser is what it always
  * was.
  */
-export async function demoEpubBytes(bookId: string): Promise<ArrayBuffer | null> {
-  if (bookId !== EPUB_ID) return null;
-  const response = await fetch("/demo/page-numbers.epub");
-  if (!response.ok) throw new Error(`样书 EPUB 取不到：HTTP ${response.status}`);
+export async function demoBookBytes(bookId: string): Promise<ArrayBuffer | null> {
+  const fixture = FOLIATE_FIXTURES[bookId];
+  if (!fixture) return null;
+  const response = await fetch(fixture.path);
+  if (!response.ok) throw new Error(`${fixture.label} 取不到：HTTP ${response.status}`);
   return response.arrayBuffer();
 }
 

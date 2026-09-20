@@ -1,6 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { ipc, isDesktopRuntime } from "../../lib/ipc";
-import { demoEnabled, demoEpubBytes } from "../../lib/demo";
+import { demoBookBytes, demoEnabled } from "../../lib/demo";
 import { Overlayer } from "foliate-js/overlayer.js";
 import type { FoliateRelocate, View, makeBook } from "foliate-js/view.js";
 import type { Annotation } from "@/types/ipc";
@@ -253,6 +253,9 @@ const syncPageInvert = (view: View, style: FoliateStyle) => {
 /** Container name + MIME handed to `makeBook`, per format. */
 const CONTAINER: Record<string, { ext: string; type: string }> = {
   mobi: { ext: "mobi", type: "application/x-mobipocket-ebook" },
+  azw: { ext: "azw", type: "application/x-mobipocket-ebook" },
+  azw3: { ext: "azw3", type: "application/x-mobipocket-ebook" },
+  prc: { ext: "prc", type: "application/x-mobipocket-ebook" },
   epub: { ext: "epub", type: "application/epub+zip" },
 };
 
@@ -937,9 +940,10 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         const viewModule = import("foliate-js/view.js");
         let book: Awaited<ReturnType<typeof makeBook>>;
         // A browser has no backend to read a book file from; the fixture serves
-        // its EPUB itself (`?demo=1&epub=1`, see `lib/demo.ts`). `null` for
-        // every other book, so this drops through to the real path below.
-        const demoBytes = !isDesktopRuntime && demoEnabled() ? await demoEpubBytes(bookId) : null;
+        // its own container (`?demo=1&epub=1`, `?demo=1&kindle=1` — see
+        // `lib/demo.ts`). `null` for every other book, so this drops through to
+        // the real path below.
+        const demoBytes = !isDesktopRuntime && demoEnabled() ? await demoBookBytes(bookId) : null;
         if (demoBytes) {
           const container = CONTAINER[format] ?? CONTAINER.epub!;
           const { makeBook } = await viewModule;
