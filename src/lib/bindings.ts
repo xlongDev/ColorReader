@@ -473,12 +473,38 @@ export type BackupSummary = {
   bytes: number;
 };
 
-/**  Formats the library can hold today. */
+/**
+ *  Formats the library can hold today.
+ *
+ *  The four Kindle values — [`Mobi`], [`Azw`], [`Azw3`], [`Prc`] — are one PDB
+ *  container, one parser and one renderer. They are separate names because they
+ *  are separate names on the shelf: the importer used to fold all four into
+ *  `Mobi`, which is right about the bytes and wrong about the book. Someone who
+ *  imports `book.azw3` is looking at a card that says MOBI, and that is a false
+ *  statement about the file they handed over.
+ *
+ *  So a format here is a *name*, not a code path. Nothing downstream of
+ *  [`from_path`](BookFormat::from_path) tells the four apart, and the tests
+ *  below pin exactly that: the same bytes go in under all four extensions, and
+ *  only the label is allowed to move.
+ */
 export type BookFormat =
   | "epub"
   | "pdf"
-  /**  MOBI and its Kindle siblings (`.azw`, `.azw3` are the same container). */
+  /**
+   *  `.mobi`: the KF7 Mobipocket container, and the name every Mobipocket
+   *  file used to be shelved under.
+   */
   | "mobi"
+  /**  `.azw`: Amazon's own extension for that same KF7 container. */
+  | "azw"
+  /**
+   *  `.azw3`: the KF8 generation — the container one generation on, which
+   *  needs the skeleton + fragment reassembly [`mobi`] also handles.
+   */
+  | "azw3"
+  /**  `.prc`: the Palm Reader container Mobipocket grew out of. */
+  | "prc"
   | "fb2"
   /**  A comic book archive: a ZIP of page images. */
   | "cbz"

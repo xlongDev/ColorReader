@@ -3,6 +3,7 @@ import type { BookSummary } from "@/types/ipc";
 
 import {
   formatFileSize,
+  isFoliateFormat,
   pickContinueReading,
   sortOptions,
   titleForFilter,
@@ -43,6 +44,25 @@ describe("formatFileSize", () => {
 
   it("survives unknown sizes", () => {
     expect(formatFileSize(-1)).toBe("");
+  });
+});
+
+describe("isFoliateFormat", () => {
+  /**
+   * The set is the one place that decides which renderer draws a book, and the
+   * notes page names a highlight's position off it too (`节` vs `章`). Pinning
+   * the whole list makes a format joining it a deliberate two-file change —
+   * and, more to the point, stops one being *left out*: a Kindle container
+   * dropped from here falls back to the extracted-text renderer with no error
+   * anywhere.
+   */
+  it("covers exactly the containers foliate renders", () => {
+    for (const format of ["epub", "mobi", "azw", "azw3", "prc"] as const) {
+      expect(isFoliateFormat(format)).toBe(true);
+    }
+    for (const format of ["pdf", "fb2", "cbz", "markdown", "txt"] as const) {
+      expect(isFoliateFormat(format)).toBe(false);
+    }
   });
 });
 

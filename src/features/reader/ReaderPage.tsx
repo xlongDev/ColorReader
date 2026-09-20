@@ -21,6 +21,7 @@ import { AnimatePresence, useReducedMotion } from "motion/react";
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
+import { isFoliateFormat } from "@/features/library/format";
 import { useAssetUrl } from "@/features/reader/assets";
 import {
   IMAGE_PARAGRAPH_PREFIX,
@@ -317,14 +318,15 @@ function ReaderView({
   // "1 / 1 页" on every page of a PDF came from.
   const chapterIsPage = isPdf || format === "cbz";
   // Two renderers, one corpus. foliate keeps a book's own XHTML + CSS: for
-  // KF8 that is the only faithful rendering (wallpapers, part-title plates,
-  // inline art) and an EPUB asks for no less — so both containers go through
-  // it. Everything else renders the extracted text: FB2 / CBZ / TXT / MD gain
+  // MOBI and AZW3 that is the only faithful rendering (wallpapers, part-title
+  // plates, inline art) and an EPUB asks for no less — so all three go through
+  // it, off the one list the notes page reads too (`isFoliateFormat`).
+  // Everything else renders the extracted text: FB2 / CBZ / TXT / MD gain
   // nothing the text model cannot already do, and PDF renders through its own
   // pdf.js pipeline (foliate's PDF path is stubbed out). The chapters in the
   // database are the same either way, so search, TTS and AI never care which
   // renderer is on screen.
-  const useFoliate = format === "mobi" || format === "epub";
+  const useFoliate = isFoliateFormat(format);
   // A foliate position is a CFI, an opaque string our (chapter, fraction)
   // progress model cannot express. It rides in `books.location`; the
   // localStorage key it used to park in is read once as a fallback and

@@ -215,6 +215,9 @@ describe("unitLabel", () => {
     // A spine item, not the chapter a table of contents lists.
     expect(unitLabel("epub")).toBe("节");
     expect(unitLabel("mobi")).toBe("节");
+    expect(unitLabel("azw")).toBe("节");
+    expect(unitLabel("azw3")).toBe("节");
+    expect(unitLabel("prc")).toBe("节");
   });
 
   it("calls it a chapter everywhere else", () => {

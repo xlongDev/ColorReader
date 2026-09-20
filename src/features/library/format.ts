@@ -1,4 +1,4 @@
-import type { BookSummary, ImportOutcome, LibrarySort } from "@/types/ipc";
+import type { BookFormat, BookSummary, ImportOutcome, LibrarySort } from "@/types/ipc";
 
 /** Page-level shelf filter; `tags` is still a Phase 9 placeholder. */
 export type ShelfFilter = "all" | "recent" | "favorites" | "tags";
@@ -36,6 +36,30 @@ export function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * Formats foliate renders out of the book's own XHTML + CSS.
+ *
+ * The four Kindle containers are one container and one parser, so they share a
+ * renderer — and all four are named, because a format left out of this list
+ * does not fail loudly: it falls back to the extracted-text renderer and the
+ * book comes out as plain paragraphs. Two surfaces read this list and they have
+ * to agree: the reader picks its renderer from it, and the notes page names an
+ * annotation's position from it (`节` for a spine section, `章` for a chapter
+ * the importer extracted). Adding a format to one and not the other silently
+ * mislabels every highlight in it.
+ */
+const FOLIATE_FORMATS: ReadonlySet<BookFormat> = new Set<BookFormat>([
+  "epub",
+  "mobi",
+  "azw",
+  "azw3",
+  "prc",
+]);
+
+export function isFoliateFormat(format: BookFormat): boolean {
+  return FOLIATE_FORMATS.has(format);
 }
 
 export function authorLine(book: BookSummary): string {

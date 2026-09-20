@@ -48,7 +48,18 @@ const PROGRESS_SECTIONS = [
 ];
 
 /** The formats in the order the shelf lists them; anything else lands after. */
-const FORMAT_ORDER: BookFormat[] = ["epub", "pdf", "mobi", "fb2", "cbz", "markdown", "txt"];
+const FORMAT_ORDER: BookFormat[] = [
+  "epub",
+  "pdf",
+  "mobi",
+  "azw",
+  "azw3",
+  "prc",
+  "fb2",
+  "cbz",
+  "markdown",
+  "txt",
+];
 
 const NO_AUTHOR = "未知作者";
 

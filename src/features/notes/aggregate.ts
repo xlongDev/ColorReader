@@ -1,5 +1,7 @@
 import type { Annotation, BookFormat, BookSummary } from "@/types/ipc";
 
+import { isFoliateFormat } from "@/features/library/format";
+
 /**
  * The notes page's shape, as pure functions.
  *
@@ -157,12 +159,11 @@ export function inkColor(annotation: Annotation): string {
  * What a highlight's `chapterIdx` counts in a given book.
  *
  * A foliate-rendered book is a container of spine items, so the index is a
- * *section*, not the chapter a table of contents lists. `ReaderPage` draws the
- * same distinction for its own annotation list (`format === "mobi" ||
- * format === "epub"` picks the foliate path), and the two surfaces have to
+ * *section*, not the chapter a table of contents lists. `ReaderPage` picks its
+ * renderer off the same list (`isFoliateFormat`), and the two surfaces have to
  * name the same number the same way — a reader who sees 第 4 节 in the book
  * should not see 第 4 章 here.
  */
 export function unitLabel(format: BookFormat): string {
-  return format === "epub" || format === "mobi" ? "节" : "章";
+  return isFoliateFormat(format) ? "节" : "章";
 }
