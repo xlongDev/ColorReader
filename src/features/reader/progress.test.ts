@@ -50,6 +50,26 @@ describe("locateChapter", () => {
   it("handles an empty table gracefully", () => {
     expect(locateChapter([], 0.4)).toEqual({ idx: 0, fraction: 0 });
   });
+
+  describe("a book with no text to weigh", () => {
+    // A PDF whose extraction is still owed — or never succeeded. Chapter 0 for
+    // every position would lose the saved place and freeze it there, because
+    // `globalProgress` would answer 0 forever after.
+    const owed: ChapterMeta[] = [0, 1, 2, 3].map((idx) => ({ idx, title: "", chars: 0 }));
+
+    it("spreads the position across the chapters instead of collapsing it", () => {
+      expect(locateChapter(owed, 0)).toEqual({ idx: 0, fraction: 0 });
+      expect(locateChapter(owed, 0.5)).toEqual({ idx: 2, fraction: 0 });
+      expect(locateChapter(owed, 0.99)).toEqual({ idx: 3, fraction: 0 });
+      expect(locateChapter(owed, 1)).toEqual({ idx: 3, fraction: 0 });
+    });
+
+    it("still answers a progress the position can move by", () => {
+      expect(globalProgress(owed, 0, 0)).toBe(0);
+      expect(globalProgress(owed, 2, 0)).toBeCloseTo(0.5);
+      expect(globalProgress(owed, 3, 1)).toBe(1);
+    });
+  });
 });
 
 describe("globalProgress", () => {

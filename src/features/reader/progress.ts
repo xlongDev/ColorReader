@@ -15,10 +15,19 @@ export function locateChapter(
 ): { idx: number; fraction: number } {
   if (chapters.length === 0) return { idx: 0, fraction: 0 };
 
+  const at = Math.min(Math.max(progress, 0), 1);
   const total = totalChars(chapters);
-  if (total <= 0) return { idx: 0, fraction: 0 };
+  // Nothing to weigh by: a PDF whose text is still owed, or whose extraction
+  // never succeeded. Collapsing the book onto chapter 0 would lose the saved
+  // place *and* pin every later write at zero, because the inverse below would
+  // keep answering 0 — the position would never advance again. One unit per
+  // chapter keeps the mapping usable; for a PDF the chapter *is* the page, so
+  // this is the right model rather than a stopgap.
+  if (total <= 0) {
+    return { idx: Math.min(chapters.length - 1, Math.floor(at * chapters.length)), fraction: 0 };
+  }
 
-  const target = Math.min(Math.max(progress, 0), 1) * total;
+  const target = at * total;
   let before = 0;
   for (let i = 0; i < chapters.length; i++) {
     const chapter = chapters[i]!;
@@ -36,7 +45,12 @@ export function locateChapter(
 export function globalProgress(chapters: ChapterMeta[], idx: number, fraction: number): number {
   if (chapters.length === 0) return 0;
   const total = totalChars(chapters);
-  if (total <= 0) return 0;
+  // The inverse of the equal-weight branch above: see there for why a book with
+  // no text must not answer 0.
+  if (total <= 0) {
+    const clamped = Math.max(0, Math.min(idx, chapters.length - 1));
+    return (clamped + Math.min(Math.max(fraction, 0), 1)) / chapters.length;
+  }
 
   const clamped = Math.max(0, Math.min(idx, chapters.length - 1));
   let before = 0;

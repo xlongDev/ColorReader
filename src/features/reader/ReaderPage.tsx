@@ -2000,6 +2000,11 @@ function ReaderView({
     Math.round((chapters[chapterIdx]?.chars ?? 0) * (1 - fraction)),
   );
   const bookRemaining = remainingChars(chapters, chapterIdx, fraction);
+  // Nothing to weigh: a PDF whose text is still owed, or whose extraction never
+  // landed. Both estimates would answer "不到 1 分钟" for a 400-page book — a
+  // wrong number dressed as a precise one — so report the speed as unknown
+  // instead, which is what `estimateLabel` makes of it.
+  const weighedSpeed = totalChars(chapters) > 0 ? readingSpeed : 0;
 
   // Bookmark state is derived, not flashed: the icon stays filled while the
   // reading position sits on a bookmark (same chapter, within 1% of chapter
@@ -2261,7 +2266,7 @@ function ReaderView({
       total={total}
       chapterRemaining={chapterRemaining}
       bookRemaining={bookRemaining}
-      readingSpeed={readingSpeed}
+      readingSpeed={weighedSpeed}
       progress={displayProgress}
     />
   );
