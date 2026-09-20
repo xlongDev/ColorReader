@@ -23,10 +23,18 @@ care what the glyphs say.
 """
 
 import sys
+import zlib
 
 PAGES = 6
 WIDTH, HEIGHT = 420.0, 595.0
 HEAVY_PAGE = 6
+# One page carries a colour image. Night mode reads the paper at the top-left
+# corner, so the patch sits low on the page where nothing else is drawn.
+IMAGE_PAGE = 1
+IMAGE_X, IMAGE_Y = 40.0, 90.0
+IMAGE_W, IMAGE_H = 120.0, 80.0
+# A warm orange: red leads green leads blue by a wide margin.
+IMAGE_RGB = (240, 200, 170)
 
 BODY = [
     "A fixed-layout document is drawn, not laid out: the page arrives with its",
@@ -85,16 +93,30 @@ def page_stream(index: int) -> str:
         "ET",
     ]
     ops += body_ops((index - 1) * 3)
+    if index == IMAGE_PAGE:
+        ops.append(image_ops())
     if index == HEAVY_PAGE:
         ops += heavy_ops()
     return "\n".join(ops) + "\n"
 
 
+def image_ops() -> str:
+    """Places the colour swatch.
+
+    A warm, saturated patch: the whole point of it is that a per-channel
+    inversion turns it cyan, so a reader can tell the two image modes apart by
+    eye, and a test can tell them apart by whether red still leads blue.
+    """
+    return f"q {IMAGE_W} 0 0 {IMAGE_H} {IMAGE_X} {IMAGE_Y} cm /Im1 Do Q"
+
+
 def build() -> bytes:
     objects: list[bytes] = []
     # 1 catalog, 2 pages, 3..3+PAGES-1 page dicts, then the streams, then font.
+    # 1 catalog, 2 pages, 3..8 page dicts, 9..14 streams, 15 font, 16 image.
     first_page, first_stream = 3, 3 + PAGES
     font_id = first_stream + PAGES
+    image_id = font_id + 1
 
     kids = " ".join(f"{first_page + i} 0 R" for i in range(PAGES))
     objects.append(f"<< /Type /Catalog /Pages 2 0 R >>".encode())
@@ -102,11 +124,14 @@ def build() -> bytes:
 
     for i in range(PAGES):
         stream_id = first_stream + i
+        resources = f"/Font << /F1 {font_id} 0 R >>"
+        if i + 1 == IMAGE_PAGE:
+            resources += f" /XObject << /Im1 {image_id} 0 R >>"
         objects.append(
             (
                 f"<< /Type /Page /Parent 2 0 R "
                 f"/MediaBox [0 0 {WIDTH:.0f} {HEIGHT:.0f}] "
-                f"/Resources << /Font << /F1 {font_id} 0 R >> >> "
+                f"/Resources << {resources} >> "
                 f"/Contents {stream_id} 0 R >>"
             ).encode()
         )
@@ -116,6 +141,21 @@ def build() -> bytes:
         objects.append(b"<< /Length " + str(len(stream)).encode() + b" >>\nstream\n" + stream + b"endstream")
 
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+
+    # A 2x2 patch of one colour, stretched by the `cm` in `image_ops`. Solid on
+    # purpose: the image is there to be sampled, not to look like anything.
+    pixels = bytes(IMAGE_RGB) * 4
+    raw = zlib.compress(pixels)
+    objects.append(
+        (
+            f"<< /Type /XObject /Subtype /Image /Width 2 /Height 2 "
+            f"/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode "
+            f"/Length {len(raw)} >>"
+        ).encode()
+        + b"\nstream\n"
+        + raw
+        + b"\nendstream"
+    )
 
     out = bytearray(b"%PDF-1.4\n")
     offsets: list[int] = []

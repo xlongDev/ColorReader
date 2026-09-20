@@ -7,10 +7,14 @@
  * strings on assignment moves text and vector art onto the paper's bg<->fg
  * axis, while `drawImage` is left alone so photographs keep their colours.
  *
- * Why not pdf.js's own `pageColors`: it is an SVG-filter post pass
- * (`ctx.filter` + redraw of the finished bitmap) that greyscales and
- * quantises images too, and it silently does nothing on WebKit, where
- * `CanvasRenderingContext2D.filter` is undefined.
+ * Why not pdf.js's own `pageColors` — readest's night mode for PDF, and a
+ * better one than a plain invert: it greys the page first and then ramps the
+ * grey onto the theme's fg<->bg axis, so a photograph comes out a luminance
+ * negative instead of a colour complement. It is implemented as an SVG filter
+ * reached through `ctx.filter`, and `"filter" in ctx` is **false** on WebKit
+ * (measured on both engines: chromium true, webkit false), so on the engine
+ * this app ships pdf.js assigns the filter and nothing happens. The same
+ * mapping is rebuilt below out of compositing steps instead.
  */
 
 /** Endpoints of the remapping axis, both plain colours (never gradients). */
@@ -37,9 +41,13 @@ const GAMMA = 0.85;
 /** How much of a colour's original chroma survives. 0 is pure greyscale,
  *  1 leaves coloured headings and charts untouched (and low-contrast). */
 const CHROMA_KEEP = 0.35;
-/** Images bigger than this on a side skip inversion rather than allocate a
- *  huge scratch canvas; `ponytail:` a page-sized photo is the only real case. */
+/** Longest edge the scratch canvas will take. Past it the copy is made at this
+ *  size and blitted back out at full size — soft, but still inverted, and
+ *  without allocating a canvas big enough to matter. */
 const MAX_INVERT_EDGE = 4096;
+/** A neutral grey: zero saturation, so `saturation` blending with it keeps the
+ *  backdrop's luminance and throws its chroma away. */
+const NEUTRAL = "#808080";
 
 interface Rgba {
   r: number;
@@ -112,6 +120,21 @@ function linearLuma({ r, g, b }: Rgba): number {
   return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
 }
 
+/** The two fills that ramp a grey onto the fg<->bg axis, for compositing:
+ *  `multiply` by the fg-bg distance, then `lighter` (add) the bg. Both are
+ *  written as positive numbers — a night axis is always a light `fg` over a
+ *  dark `bg`, so the distance is too. */
+function axisLift(axis: NightAxis): { spread: string; floor: string } | null {
+  const fg = parseColor(axis.fg);
+  const bg = parseColor(axis.bg);
+  if (!fg || !bg) return null;
+  const spread = (from: number, to: number) => clamp255(Math.round(to - from));
+  return {
+    spread: `rgb(${spread(bg.r, fg.r)}, ${spread(bg.g, fg.g)}, ${spread(bg.b, fg.b)})`,
+    floor: `rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})`,
+  };
+}
+
 /** Maps one colour onto the bg<->fg axis: dark ink goes to `fg`, white paper
  *  to `bg`, and a share of the original chroma rides along so a red heading
  *  stays red instead of turning cyan. Unparseable input (gradients, patterns)
@@ -145,6 +168,7 @@ export function wrapNightContext(
   // pdf.js touches the context ~10^5 times per page, so bound methods are
   // memoised; a fresh `bind` per get would dominate the render.
   const bound = new Map<string | symbol, unknown>();
+  const lift = axisLift(axis);
   let scratch: HTMLCanvasElement | null = null;
 
   const remapGradient = (gradient: CanvasGradient): CanvasGradient =>
@@ -160,14 +184,21 @@ export function wrapNightContext(
     });
 
   const invertImage = (image: CanvasImageSource, args: number[]): boolean => {
-    // arg forms: (img,dx,dy) | (img,dx,dy,dw,dh) | (img,sx,sy,sw,sh,dx,dy,dw,dh)
-    const dest = args.length >= 9 ? args.slice(5) : args;
+    // Counting the numbers *after* `image`: 2 = (dx,dy), 4 = (dx,dy,dw,dh),
+    // 8 = (sx,sy,sw,sh,dx,dy,dw,dh). The source-cropping form is the one
+    // pdf.js always uses (`drawImageAtIntegerCoords`), and it is easy to get
+    // wrong: with `image` counted it looks like nine. Reading it as the
+    // four-number form takes `dw,dh` from the *source* rect, which on a
+    // 2x2 pixel bitmap stretched across the page shrinks the picture to a
+    // 2x2 dot in the corner.
+    const cropped = args.length === 8;
+    const dest = cropped ? args.slice(4) : args;
     const [dx, dy] = dest as [number, number];
     const dw = dest.length >= 4 ? dest[2]! : sourceWidth(image);
     const dh = dest.length >= 4 ? dest[3]! : sourceHeight(image);
+    if (!(Math.round(dw) > 0 && Math.round(dh) > 0)) return false;
     const w = Math.min(Math.round(dw), MAX_INVERT_EDGE);
     const h = Math.min(Math.round(dh), MAX_INVERT_EDGE);
-    if (!(w > 0 && h > 0)) return false;
 
     scratch ??= document.createElement("canvas");
     if (scratch.width !== w || scratch.height !== h) {
@@ -176,18 +207,40 @@ export function wrapNightContext(
     }
     const sctx = scratch.getContext("2d");
     if (!sctx) return false;
+    if (!lift) return false;
     sctx.clearRect(0, 0, w, h);
-    if (args.length >= 9) {
+    if (cropped) {
       sctx.drawImage(image, args[0]!, args[1]!, args[2]!, args[3]!, 0, 0, w, h);
     } else {
       sctx.drawImage(image, 0, 0, w, h);
     }
-    // No `ctx.filter` on WebKit, so invert the scratch with a difference pass.
+
+    // pdf.js's `pageColors` in four composited passes — see the module note for
+    // why it cannot be used directly. The order is load-bearing:
+    //
+    //   saturation+grey  keep the luminance, drop the chroma. A negative of a
+    //                    *colour* pixel is its complement, so inverting first
+    //                    is what turns skin cyan; on grey there is no chroma
+    //                    left to flip.
+    //   difference+white flip that luminance: paper goes dark, ink goes light.
+    //   multiply+spread  scale it to the fg-bg distance.
+    //   lighter+floor    lift it onto the axis. Result: white paper lands on
+    //                    `bg`, black ink on `fg`, and everything between stays
+    //                    a tone of the theme rather than a hue of the original.
+    sctx.globalCompositeOperation = "saturation";
+    sctx.fillStyle = NEUTRAL;
+    sctx.fillRect(0, 0, w, h);
     sctx.globalCompositeOperation = "difference";
     sctx.fillStyle = "#ffffff";
     sctx.fillRect(0, 0, w, h);
+    sctx.globalCompositeOperation = "multiply";
+    sctx.fillStyle = lift.spread;
+    sctx.fillRect(0, 0, w, h);
+    sctx.globalCompositeOperation = "lighter";
+    sctx.fillStyle = lift.floor;
+    sctx.fillRect(0, 0, w, h);
     sctx.globalCompositeOperation = "source-over";
-    ctx.drawImage(scratch, dx, dy, w, h);
+    ctx.drawImage(scratch, dx, dy, Math.round(dw), Math.round(dh));
     return true;
   };
 
