@@ -34,7 +34,7 @@
 
 | 能力                                       | 说明                                                                                                                  |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| 七种格式导入（SHA-256 去重）               | EPUB / PDF / MOBI / AZW3 / FB2 / CBZ / Markdown / TXT，拖进窗口或走选择器；同一份文件重复导入只留一本                 |
+| 七种格式导入（SHA-256 去重）               | EPUB / PDF / MOBI / AZW / AZW3 / PRC / FB2 / CBZ / Markdown / TXT，拖进窗口或走选择器；同一份文件重复导入只留一本     |
 | 阅读器（paged / scroll 双模式）            | 分页与滚动可切换，字号、行距、段距、缩进、页边距均可调；进度按字数定位，续读不加载整本书                              |
 | 自定义字体                                 | 导入 .ttf / .otf / .ttc / .woff / .woff2，经 `/font/{id}` 资源协议加载。**不内置字体**（体积与许可各自独立）          |
 | 主题（浅色 / 深色 / 跟随系统）             | 外加「减少透明度」；所有动效统一尊重 `prefers-reduced-motion`                                                         |
@@ -87,17 +87,17 @@
 
 ## 支持的格式
 
-| 格式        | 扩展名                        | 正文来源                                       | 元数据               | 内嵌图片 |
-| ----------- | ----------------------------- | ---------------------------------------------- | -------------------- | -------- |
-| EPUB        | `.epub`                       | OPF spine 顺序                                 | Dublin Core / OPF    | ✅       |
-| PDF         | `.pdf`                        | pdf.js 固定版式渲染 + 逐页文本（检索/朗读/AI） | Info 字典 + 书签目录 | ✅       |
-| MOBI / AZW3 | `.mobi` `.azw` `.azw3` `.prc` | 单篇 HTML，按标题切章                          | EXTH（含 KF8 回退）  | 封面     |
-| FB2         | `.fb2` `.fb2.zip`             | `<body>` 的 `<section>`                        | `<title-info>`       | ✅       |
-| CBZ 漫画    | `.cbz`                        | 每页一张图                                     | 文件名               | ✅       |
-| Markdown    | `.md` `.markdown`             | ATX 标题切分                                   | 首个标题             | ❌       |
-| TXT         | `.txt`                        | `第N章` 标记切分                               | 文件名               | ❌       |
+| 格式                    | 扩展名                        | 正文来源                                       | 元数据               | 内嵌图片 |
+| ----------------------- | ----------------------------- | ---------------------------------------------- | -------------------- | -------- |
+| EPUB                    | `.epub`                       | OPF spine 顺序                                 | Dublin Core / OPF    | ✅       |
+| PDF                     | `.pdf`                        | pdf.js 固定版式渲染 + 逐页文本（检索/朗读/AI） | Info 字典 + 书签目录 | ✅       |
+| MOBI / AZW / AZW3 / PRC | `.mobi` `.azw` `.azw3` `.prc` | 单篇 HTML，按标题切章                          | EXTH（含 KF8 回退）  | 封面     |
+| FB2                     | `.fb2` `.fb2.zip`             | `<body>` 的 `<section>`                        | `<title-info>`       | ✅       |
+| CBZ 漫画                | `.cbz`                        | 每页一张图                                     | 文件名               | ✅       |
+| Markdown                | `.md` `.markdown`             | ATX 标题切分                                   | 首个标题             | ❌       |
+| TXT                     | `.txt`                        | `第N章` 标记切分                               | 文件名               | ❌       |
 
-EPUB / MOBI / AZW3 走 vendored [foliate-js](./THIRD-PARTY-NOTICES.md) 渲染，其余由 Rust 纯文本管线处理，两侧共用同一份章节语料。PDF 按固定版式渲染（每一页所见即所得），封面取第 1 页，提取出的逐页文本供检索、朗读与 AI 使用——**纯扫描件仍只有图片页**，没有文字层可供检索。
+EPUB 与四种 Kindle 容器（MOBI / AZW / AZW3 / PRC）走 vendored [foliate-js](./THIRD-PARTY-NOTICES.md) 渲染，其余由 Rust 纯文本管线处理，两侧共用同一份章节语料。PDF 按固定版式渲染（每一页所见即所得），封面取第 1 页，提取出的逐页文本供检索、朗读与 AI 使用——**纯扫描件仍只有图片页**，没有文字层可供检索。
 
 ---
 
@@ -133,11 +133,13 @@ pnpm tauri dev
 
 # 4. 纯前端模式：只跑 Vite，IPC 降级为浏览器兜底数据
 pnpm dev        # 加 ?demo=1 得到一份样本书架（?demo=1&books=84 可放大到 84 本）
+                # 再挂真容器样书：&epub=1（EPUB / foliate）、&pdf=1（PDF / pdf.js）、
+                # &kindle=1（AZW3 / foliate）。三个夹具都由 scripts/generate-demo-*.py 生成
 ```
 
 要求：**Node 22+、pnpm 11+、Rust 1.88+**；macOS 另需 Xcode Command Line Tools，Linux 需要 webkit2gtk / gtk 等打包依赖（见 `.github/workflows/ci.yml`）。
 
-> 浏览器模式只是 UI 预览：没有后端，导入、foliate 渲染、PDF、搜索与书签都用不了。要看真东西请用 `pnpm tauri dev`。
+> 浏览器模式只是 UI 预览：没有后端，**导入**与持久化都用不了，书架内容全部来自 `?demo=1` 的夹具（参数见上）。要看完整功能请用 `pnpm tauri dev`。
 
 ---
 
