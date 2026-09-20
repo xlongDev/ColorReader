@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
   ArrowClockwise,
   CaretLeft,
@@ -18,6 +18,38 @@ import type { BookImage, ChapterMeta } from "@/types/ipc";
 const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
 const ZOOM_STEP = 1.25;
+
+const clampZoom = (value: number) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, value));
+
+/**
+ * The reader pane the lightbox lives over, in window coordinates. Centering
+ * on the window reads as off-centre once the sidebar takes its share of the
+ * width, so the viewer measures `[data-reading-viewport]` instead — the same
+ * element the selection toolbar clamps against.
+ */
+const useReadingViewportRect = () => {
+  const [rect, setRect] = useState({
+    left: 0,
+    top: 0,
+    width: window.innerWidth,
+    height: window.innerHeight,
+  });
+  useLayoutEffect(() => {
+    const el = document.querySelector("[data-reading-viewport]");
+    if (!el) return;
+    const measure = () => {
+      const box = el.getBoundingClientRect();
+      setRect({ left: box.left, top: box.top, width: box.width, height: box.height });
+    };
+    measure();
+    // The sidebar toggle and window resizes both land here as size changes
+    // on the viewport, which is all the states the rect can move in.
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return rect;
+};
 
 /**
  * Fullscreen image viewer over the whole book's pictures. The image scales to
@@ -67,13 +99,19 @@ export function ImageLightbox({
   }
 
   // Wheel zoom needs a non-passive listener to be able to preventDefault.
+  // A trackpad pinch arrives as wheel events with `ctrlKey` set (both engines
+  // do this), with small continuous deltas — so it gets an exponential factor
+  // instead of the discrete scroll step, and the preventDefault keeps the
+  // WebView's own page magnification out of the way.
   useEffect(() => {
     const el = rootRef.current;
     if (!el) return;
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       setZoom((z) =>
-        Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z * (event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP))),
+        event.ctrlKey || event.metaKey
+          ? clampZoom(z * Math.exp(-event.deltaY * 0.01))
+          : clampZoom(z * (event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP)),
       );
     };
     el.addEventListener("wheel", onWheel, { passive: false });
@@ -113,10 +151,18 @@ export function ImageLightbox({
   const arrowClass =
     "focus-visible:focus-ring glass-solid shadow-panel text-text-1 flex h-9 w-9 items-center justify-center rounded-full transition-opacity hover:opacity-90";
 
+  const area = useReadingViewportRect();
+
   return (
     <motion.div
       ref={rootRef}
-      className="fixed inset-0 z-[100] flex flex-col bg-black/85 p-8"
+      className="fixed z-[100] flex flex-col bg-black/85 p-8"
+      style={{
+        left: area.left,
+        top: area.top,
+        width: area.width,
+        height: area.height,
+      }}
       initial={{ opacity: 0 }}
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
@@ -150,8 +196,12 @@ export function ImageLightbox({
             key={path}
             src={src}
             alt=""
-            initial={{ opacity: 0, scale: reduce ? 1 : 0.97 }}
-            animate={{ opacity: 1, scale: 1 }}
+            /* Opacity only, never `scale`: any transform prop makes motion
+               build its own transform string, which would fight and override
+               the pan/zoom/rotation `style.transform` below — the zoom
+               buttons counted up while the picture never moved. */
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
             transition={reduce ? { duration: 0 } : SPRING.enter}
             className="shadow-panel pointer-events-auto max-h-full max-w-full rounded-xl object-contain"
             style={{

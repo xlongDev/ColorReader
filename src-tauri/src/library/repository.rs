@@ -911,7 +911,7 @@ mod tests {
     }
 
     #[test]
-    fn books_without_chapters_are_listed_until_they_are_extracted() {
+    fn books_needing_chapters_are_listed_until_their_text_lands() {
         let conn = seed();
         add(&conn, "b1", "三体", &[], "h1");
         add(&conn, "b2", "Dune", &[], "h2");

@@ -806,6 +806,11 @@ class MOBI6 {
     async replaceResources(doc) {
         for (const img of doc.querySelectorAll('img[recindex]')) {
             const recindex = img.getAttribute('recindex')
+            // local patch (same as epub.js): the `src` is a `blob:` URL by the
+            // time the section reaches the DOM; the reader's lightbox keys the
+            // book-wide image list by this `kindle:recindex:N` reference, which
+            // is what its chapter text stores for the same picture.
+            img.setAttribute('data-path', `kindle:recindex:${recindex}`)
             try {
                 img.src = await this.loadRecindex(recindex)
             } catch {
@@ -966,6 +971,9 @@ class KF8 {
     #rawQueue = Promise.resolve()
     #type = MIME.XHTML
     #inlineMap = new Map()
+    // local patch: blob URL -> the `kindle:` reference it was loaded from, so
+    // a section can stamp `data-path` on its pictures once it is parsed.
+    #pathMap = new Map()
     constructor(mobi) {
         this.mobi = mobi
     }
@@ -1117,6 +1125,7 @@ class KF8 {
         const [blob, inline] = await this.loadResourceBlob(str)
         const url = inline ? str : URL.createObjectURL(blob)
         if (inline) this.#inlineMap.set(url, inline)
+        if (!inline) this.#pathMap.set(url, str)
         this.#cache.set(str, url)
         return url
     }
@@ -1210,6 +1219,17 @@ class KF8 {
         for (const [url, node] of this.#inlineMap) {
             for (const el of doc.querySelectorAll(`img[src="${url}"]`))
                 el.replaceWith(node)
+        }
+        // local patch (same contract as epub.js and MOBI6): the reader's
+        // lightbox keys its book-wide image list by the `kindle:` reference
+        // the picture was loaded from (`kindle:embed:NNNN?mime=…`), and every
+        // `src` is a blob URL by now. Resources are replaced on the raw XHTML
+        // string above, so there is no element to stamp at that point — do it
+        // here, through the blob URL -> reference map.
+        for (const el of doc.querySelectorAll('img[src], image')) {
+            const src = el.getAttribute('src') ?? el.getAttribute('xlink:href')
+            const path = src && this.#pathMap.get(src)
+            if (path) el.setAttribute('data-path', path)
         }
         const url = URL.createObjectURL(
             new Blob([this.serializer.serializeToString(doc)], { type: this.#type }))
