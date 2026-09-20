@@ -278,16 +278,25 @@ export function ReaderFooterControls({
   readingSpeed: number;
   progress: number;
 }) {
+  /** Speech first, then the player, then auto-scroll — see the footer's own
+   *  note on why the scroll button is not available in every layout. */
+  const autoScrollLabel = paged
+    ? "自动滚动仅在滚动排版下可用"
+    : autoScrolling
+      ? "暂停自动滚动"
+      : "开始自动滚动";
+
+  const speechLabel =
+    speechStatus === "paused"
+      ? "继续朗读"
+      : speechStatus === "playing"
+        ? "暂停朗读"
+        : "从当前位置朗读";
+
   return (
     <>
       <GlassIconButton
-        label={
-          speechStatus === "paused"
-            ? "继续朗读"
-            : speechStatus === "playing"
-              ? "暂停朗读"
-              : "从当前位置朗读"
-        }
+        label={speechLabel}
         size="sm"
         className={CHROME_BTN}
         onClick={onToggleSpeech}
@@ -300,17 +309,15 @@ export function ReaderFooterControls({
         <span className="text-[11px] font-semibold tabular-nums">{speechRate}×</span>
       </GlassIconButton>
       <GlassIconButton
-        label={
-          paged
-            ? autoScrolling
-              ? "暂停自动翻页"
-              : "开始自动翻页"
-            : autoScrolling
-              ? "暂停自动滚动"
-              : "开始自动滚动"
-        }
+        // Auto-scroll is a rolling viewport; a paged one has no flow to roll,
+        // so the control is off there rather than re-pointed at page turns —
+        // two behaviours under one icon was how "自动滚动" came to mean
+        // "每隔几秒跳一屏" to readers who had picked the other layout.
+        label={autoScrollLabel}
+        title={paged ? autoScrollLabel : undefined}
         size="sm"
         className={CHROME_BTN}
+        disabled={paged}
         onClick={onToggleAutoScroll}
       >
         <IconSwap state={autoScrolling ? "on" : "off"}>

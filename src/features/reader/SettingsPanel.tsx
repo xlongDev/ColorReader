@@ -654,10 +654,10 @@ function SliderRow({
 
 /** Suggested auto-scroll speeds; the slider fine-tunes between them. */
 const AUTO_SCROLL_PRESETS = [
-  { speed: 40, label: "慢" },
-  { speed: 80, label: "适中" },
-  { speed: 160, label: "快" },
-  { speed: 320, label: "极快" },
+  { speed: 20, label: "慢" },
+  { speed: 40, label: "适中" },
+  { speed: 80, label: "快" },
+  { speed: 160, label: "极快" },
 ];
 
 /** The preset closest to `speed`, highlighted so fine-tuning keeps context. */

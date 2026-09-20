@@ -461,6 +461,15 @@ function ReaderView({
 
   /** Continuous scroll vs paged single/double spread. */
   const paged = layoutMode !== "scroll";
+  /**
+   * Auto-scroll, as the flow sees it.
+   *
+   * The flag is the reader's; this is what it can currently do. A paged
+   * layout has no rolling viewport, so the same flag is simply inert there
+   * and resumes when the reader comes back — the footer's button is disabled
+   * in that layout, so the one thing nobody can do is start it from there.
+   */
+  const autoScrollOn = autoScrolling && !paged;
   const scrollRef = useRef<HTMLDivElement>(null);
   // The foliate view, driven imperatively (see flip /
   // stepChapter): paging and sections never touch our chapter index.
@@ -1010,12 +1019,6 @@ function ReaderView({
     },
     [chapterIdx, goTo, isPdf, layoutModeRef, marginRef, useFoliate, pageTransition, reduce],
   );
-  // The auto page turn reads `flip` from a timer; a ref keeps that timer from
-  // restarting (and losing its place) every time `flip` is rebuilt.
-  const flipRef = useRef(flip);
-  useEffect(() => {
-    flipRef.current = flip;
-  }, [flip]);
 
   /** Chapter step; foliate's sections replace our chapter index for foliate books. */
   const stepChapter = useCallback(
@@ -1142,11 +1145,11 @@ function ReaderView({
   ]);
 
   // Auto-scroll, scroll layout: advances the viewport down the flow until it
-  // runs out. Sub-pixel per-frame steps are folded across frames (see
-  // `foldScrollDelta`), otherwise slow speeds on high-refresh displays round
-  // away to no movement. Paged layouts are handled by the auto page turn below.
+  // runs out. Read off `autoScrollOn` rather than the bare flag: a paged
+  // layout has no flow to roll, so switching there suspends it instead of
+  // leaving a flag that nothing is acting on.
   useEffect(() => {
-    if (!autoScrolling || layoutMode !== "scroll") return;
+    if (!autoScrollOn) return;
     let raf = 0;
     let last = performance.now();
     let carry = 0;
@@ -1157,11 +1160,11 @@ function ReaderView({
       }
       const dt = Math.min((now - last) / 1000, 0.25);
       last = now;
-      const fold = foldScrollDelta(autoScrollSpeed, dt, carry);
-      carry = fold.carry;
       if (useFoliate) {
         // foliate owns the scrollport; the sub-pixel remainder rides its
         // composited transform so slow speeds still creep forward.
+        const fold = foldScrollDelta(autoScrollSpeed, dt, carry);
+        carry = fold.carry;
         const handle = foliateRef.current;
         if (!handle) {
           setAutoScrolling(false);
@@ -1180,7 +1183,13 @@ function ReaderView({
         setAutoScrolling(false);
         return;
       }
-      if (fold.delta !== 0) el.scrollTop += fold.delta;
+      // The fractional step, not the whole pixel it folds to. Truncating to
+      // 1 px is what made 慢 stutter: at 20 px/s a frame advances a third of
+      // a pixel, so the folded version moves once every third frame — 27
+      // one-pixel hops a second instead of a glide. The engine snaps the
+      // offset to *device* pixels, which is half a CSS pixel on a 2× screen,
+      // and a sub-pixel assignment still lands there from every frame.
+      el.scrollTop += autoScrollSpeed * dt;
       const max = el.scrollHeight - el.clientHeight;
       if (el.scrollTop >= max - 1) {
         setAutoScrolling(false);
@@ -1190,30 +1199,7 @@ function ReaderView({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [autoScrolling, autoScrollSpeed, useFoliate, layoutMode, layoutModeRef]);
-
-  // Auto-scroll, paged layouts: there is no continuous scrollport to nudge, so
-  // the same control turns a page at a time — one screenful per interval at the
-  // chosen reading speed. Without this the button sat permanently disabled
-  // (the default layout is paged) and the feature read as broken.
-  useEffect(() => {
-    if (!autoScrolling || layoutMode === "scroll") return;
-    const span = scrollRef.current?.[useFoliate ? "clientHeight" : "clientWidth"] ?? 0;
-    const interval = Math.min(
-      20_000,
-      Math.max(900, ((span || 800) / Math.max(autoScrollSpeed, 1)) * 1000),
-    );
-    const id = window.setInterval(() => {
-      // foliate: stop at the last page of the last section instead of turning
-      // in place forever.
-      if (useFoliate && foliateRef.current?.bookEnd()) {
-        setAutoScrolling(false);
-        return;
-      }
-      flipRef.current(1);
-    }, interval);
-    return () => window.clearInterval(id);
-  }, [autoScrolling, autoScrollSpeed, useFoliate, layoutMode]);
+  }, [autoScrollOn, autoScrollSpeed, useFoliate, layoutModeRef]);
 
   // Both settings live in refs inside the hook, which is what lets the player
   // hand them over inside its own click and restart immediately (see
@@ -2266,7 +2252,7 @@ function ReaderView({
       onTogglePlayer={() => setPlayerOpen((open) => !open)}
       speechRate={speechRate}
       paged={paged}
-      autoScrolling={autoScrolling}
+      autoScrolling={autoScrollOn}
       onToggleAutoScroll={() => setAutoScrolling((on) => !on)}
       onStepChapter={stepChapter}
       chapterIdx={chapterIdx}

@@ -174,10 +174,17 @@ export const MAX_MARGIN_Y = 160;
 export const DEFAULT_MARGIN_X = 96;
 export const DEFAULT_MARGIN_Y = 64;
 
-/** Auto-scroll speed bounds in px per second, and the initial speed. */
+/**
+ * Auto-scroll speed bounds in px per second, and the initial speed.
+ *
+ * The scale was halved: at 300 CPM a reader covers roughly 40 px of a normal
+ * page per second, so the old 适中 (80) was already twice reading pace and
+ * 极快 (320) was a firehose. The presets below are the new scale; a stored
+ * speed from before is halved by the migration rather than left behind.
+ */
 export const MIN_AUTO_SCROLL_SPEED = 20;
-export const MAX_AUTO_SCROLL_SPEED = 480;
-export const DEFAULT_AUTO_SCROLL_SPEED = 80;
+export const MAX_AUTO_SCROLL_SPEED = 240;
+export const DEFAULT_AUTO_SCROLL_SPEED = 40;
 
 /** Ink palette of the selection toolbar, in display order. The first entry is
  *  the legacy marker yellow, so old highlights and new ones read alike. */
@@ -286,7 +293,7 @@ export const useReaderSettings = create<ReaderState>()(
       // Bump only when a stored value changes meaning; a newly added key needs
       // no bump — the default merge layers the persisted state over the
       // initial one.
-      version: 8,
+      version: 9,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are
       // continuous px now and the scale was rebased (old 特宽 = new 标准).
@@ -310,6 +317,9 @@ export const useReaderSettings = create<ReaderState>()(
       //   `null` so the snapshot happens on this launch. A stored `day` or
       //   `night` is a real choice and stays: pinning a page for someone who
       //   pinned it themselves is not a migration, it is a regression.
+      // v9: auto-scroll speeds were halved (see `MAX_AUTO_SCROLL_SPEED`). A
+      //   stored px/s is halved with them, so a reader who chose 适中 keeps
+      //   the speed they chose — only the number behind it changes.
       migrate: (persisted) => {
         const state = persisted as Partial<ReaderState> & {
           autoScrollIdx?: number;
@@ -318,8 +328,13 @@ export const useReaderSettings = create<ReaderState>()(
         };
         const next = { ...state } as ReaderState;
         if (typeof next.autoScrollSpeed !== "number") {
+          // v1's index into the *old* scale; the halving below finishes it.
           next.autoScrollSpeed = [40, 80, 160, 320][state.autoScrollIdx ?? 1] ?? 80;
         }
+        next.autoScrollSpeed = Math.min(
+          Math.max(Math.round(next.autoScrollSpeed / 2), MIN_AUTO_SCROLL_SPEED),
+          MAX_AUTO_SCROLL_SPEED,
+        );
         if (typeof next.marginX !== "number") {
           next.marginX = MARGIN_X_PRESETS[state.marginIdx ?? 1] ?? DEFAULT_MARGIN_X;
           next.marginY = DEFAULT_MARGIN_Y;
