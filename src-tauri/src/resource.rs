@@ -289,7 +289,9 @@ fn font_mime(path: &Path) -> &'static str {
 fn book_mime(format: BookFormat) -> &'static str {
     match format {
         BookFormat::Epub => "application/epub+zip",
-        BookFormat::Mobi => "application/x-mobipocket-ebook",
+        BookFormat::Mobi | BookFormat::Azw | BookFormat::Azw3 | BookFormat::Prc => {
+            "application/x-mobipocket-ebook"
+        }
         BookFormat::Cbz => "application/vnd.comicbook+zip",
         BookFormat::Fb2 => "application/x-fictionbook+xml",
         _ => "application/octet-stream",

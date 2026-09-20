@@ -41,13 +41,33 @@ pub const LINK_PARAGRAPH_PREFIX: &str = "\u{FFFB}";
 pub const LINK_FIELD_SEPARATOR: char = '\u{1F}';
 
 /// Formats the library can hold today.
+///
+/// The four Kindle values — [`Mobi`], [`Azw`], [`Azw3`], [`Prc`] — are one PDB
+/// container, one parser and one renderer. They are separate names because they
+/// are separate names on the shelf: the importer used to fold all four into
+/// `Mobi`, which is right about the bytes and wrong about the book. Someone who
+/// imports `book.azw3` is looking at a card that says MOBI, and that is a false
+/// statement about the file they handed over.
+///
+/// So a format here is a *name*, not a code path. Nothing downstream of
+/// [`from_path`](BookFormat::from_path) tells the four apart, and the tests
+/// below pin exactly that: the same bytes go in under all four extensions, and
+/// only the label is allowed to move.
 #[derive(specta::Type, Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BookFormat {
     Epub,
     Pdf,
-    /// MOBI and its Kindle siblings (`.azw`, `.azw3` are the same container).
+    /// `.mobi`: the KF7 Mobipocket container, and the name every Mobipocket
+    /// file used to be shelved under.
     Mobi,
+    /// `.azw`: Amazon's own extension for that same KF7 container.
+    Azw,
+    /// `.azw3`: the KF8 generation — the container one generation on, which
+    /// needs the skeleton + fragment reassembly [`mobi`] also handles.
+    Azw3,
+    /// `.prc`: the Palm Reader container Mobipocket grew out of.
+    Prc,
     Fb2,
     /// A comic book archive: a ZIP of page images.
     Cbz,
@@ -63,6 +83,9 @@ impl BookFormat {
             BookFormat::Epub => "epub",
             BookFormat::Pdf => "pdf",
             BookFormat::Mobi => "mobi",
+            BookFormat::Azw => "azw",
+            BookFormat::Azw3 => "azw3",
+            BookFormat::Prc => "prc",
             BookFormat::Fb2 => "fb2",
             BookFormat::Cbz => "cbz",
             BookFormat::Markdown => "markdown",
@@ -76,6 +99,9 @@ impl BookFormat {
             BookFormat::Epub => "epub",
             BookFormat::Pdf => "pdf",
             BookFormat::Mobi => "mobi",
+            BookFormat::Azw => "azw",
+            BookFormat::Azw3 => "azw3",
+            BookFormat::Prc => "prc",
             BookFormat::Fb2 => "fb2",
             BookFormat::Cbz => "cbz",
             BookFormat::Markdown => "md",
@@ -100,7 +126,12 @@ impl BookFormat {
         match ext.as_str() {
             "epub" => Some(BookFormat::Epub),
             "pdf" => Some(BookFormat::Pdf),
-            "mobi" | "azw" | "azw3" | "prc" => Some(BookFormat::Mobi),
+            // One container, four names, and the name is kept because it is
+            // what the file on disk is actually called.
+            "mobi" => Some(BookFormat::Mobi),
+            "azw" => Some(BookFormat::Azw),
+            "azw3" => Some(BookFormat::Azw3),
+            "prc" => Some(BookFormat::Prc),
             "fb2" => Some(BookFormat::Fb2),
             "cbz" => Some(BookFormat::Cbz),
             "md" | "markdown" => Some(BookFormat::Markdown),
@@ -149,7 +180,9 @@ pub fn read_metadata(path: &Path, format: BookFormat) -> AppResult<BookMetadata>
     let mut metadata = match format {
         BookFormat::Epub => epub::read_metadata(path)?,
         BookFormat::Pdf => pdf::read_metadata(path)?,
-        BookFormat::Mobi => mobi::read_metadata(path)?,
+        BookFormat::Mobi | BookFormat::Azw | BookFormat::Azw3 | BookFormat::Prc => {
+            mobi::read_metadata(path)?
+        }
         BookFormat::Fb2 => fb2::read_metadata(path)?,
         BookFormat::Cbz => cbz::read_metadata(path)?,
         BookFormat::Markdown | BookFormat::Text => plain::read_metadata(path, format)?,
@@ -170,7 +203,9 @@ pub fn read_chapters(path: &Path, format: BookFormat) -> AppResult<Vec<RawChapte
     match format {
         BookFormat::Epub => epub::read_chapters(path),
         BookFormat::Pdf => pdf::read_chapters(path),
-        BookFormat::Mobi => mobi::read_chapters(path),
+        BookFormat::Mobi | BookFormat::Azw | BookFormat::Azw3 | BookFormat::Prc => {
+            mobi::read_chapters(path)
+        }
         BookFormat::Fb2 => fb2::read_chapters(path),
         BookFormat::Cbz => cbz::read_chapters(path),
         BookFormat::Markdown | BookFormat::Text => plain::read_chapters(path, format),
@@ -180,14 +215,14 @@ pub fn read_chapters(path: &Path, format: BookFormat) -> AppResult<Vec<RawChapte
 /// Raw bytes of one in-book asset, addressed the way `read_chapters` named it.
 ///
 /// ZIP containers (EPUB, CBZ) are addressed by entry name; FB2 keeps its images
-/// inline as base64, so its payloads are binary ids prefixed with `#`; MOBI
-/// images are PDB records addressed by their `kindle:embed:` reference. Other
-/// formats have no in-book assets at all.
+/// inline as base64, so its payloads are binary ids prefixed with `#`; the
+/// Kindle containers' images are PDB records addressed by their `kindle:embed:`
+/// reference. Other formats have no in-book assets at all.
 pub fn read_asset(path: &Path, format: BookFormat, asset: &str) -> AppResult<Vec<u8>> {
     if let Some(id) = asset.strip_prefix('#') {
         return fb2::read_binary(path, id);
     }
-    if format == BookFormat::Mobi {
+    if matches!(format, BookFormat::Mobi | BookFormat::Azw | BookFormat::Azw3 | BookFormat::Prc) {
         return mobi::read_asset(path, asset);
     }
     if !format.is_zip_container() {
@@ -306,6 +341,9 @@ mod tests {
             BookFormat::Epub,
             BookFormat::Pdf,
             BookFormat::Mobi,
+            BookFormat::Azw,
+            BookFormat::Azw3,
+            BookFormat::Prc,
             BookFormat::Fb2,
             BookFormat::Cbz,
             BookFormat::Markdown,
@@ -322,8 +360,14 @@ mod tests {
     fn extension_matching_ignores_case_and_aliases() {
         assert_eq!(BookFormat::from_path(Path::new("a.EPUB")), Some(BookFormat::Epub));
         assert_eq!(BookFormat::from_path(Path::new("a.markdown")), Some(BookFormat::Markdown));
-        // Kindle and FictionBook aliases.
-        assert_eq!(BookFormat::from_path(Path::new("a.azw3")), Some(BookFormat::Mobi));
+        // Kindle and FictionBook aliases. Every Kindle extension names itself
+        // now, including the three that used to be folded into MOBI: the file
+        // on disk is called that, so the shelf says that.
+        assert_eq!(BookFormat::from_path(Path::new("a.azw3")), Some(BookFormat::Azw3));
+        assert_eq!(BookFormat::from_path(Path::new("a.AZW3")), Some(BookFormat::Azw3));
+        assert_eq!(BookFormat::from_path(Path::new("a.azw")), Some(BookFormat::Azw));
+        assert_eq!(BookFormat::from_path(Path::new("a.PRC")), Some(BookFormat::Prc));
+        assert_eq!(BookFormat::from_path(Path::new("a.mobi")), Some(BookFormat::Mobi));
         assert_eq!(BookFormat::from_path(Path::new("a.FB2")), Some(BookFormat::Fb2));
         assert_eq!(
             BookFormat::from_path(Path::new("a.fb2.zip")),

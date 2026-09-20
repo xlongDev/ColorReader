@@ -49,6 +49,9 @@ pub fn read_chapters(path: &Path, format: BookFormat) -> AppResult<Vec<RawChapte
             BookFormat::Epub
             | BookFormat::Pdf
             | BookFormat::Mobi
+            | BookFormat::Azw
+            | BookFormat::Azw3
+            | BookFormat::Prc
             | BookFormat::Fb2
             | BookFormat::Cbz => unreachable!("只有纯文本与 Markdown 走这条分章路径"),
         };
