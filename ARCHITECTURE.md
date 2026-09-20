@@ -286,6 +286,19 @@ PDF 走自己的 pdf.js 通路，foliate 的 `pdf.js` 已打桩禁用。
 这点正是我们没有照搬 readest 全量方案的原因——它把渲染全交给 foliate 后，
 不得不自建「每本书一个索引库 + 反抽正文」才拿回检索与 RAG；我们导入期就有。
 
+**PDF 是唯一例外，而且是刻意的**：它的「章节」就是页，页索引在导入期落好
+（页数来自元数据那次解析，白送），**正文**却推迟到导入之后。理由是量出来的——
+756 页 / 21 MB 的文档，全量逐页抽正文 974 ms，占整条导入路径的 98%，而书架和
+阅读器都不等它（渲染走 pdf.js，正文只喂检索 / 朗读 / AI）。`books.chapters_pending`
+记着这笔欠账，`chapters::backfill` 在导入后由后台任务补上——所以进程中途被杀也只是
+**晚一点**有正文，不会永远没有。
+
+还债的入口按「谁要文字」划分，这是有代价的：`ensure`（阅读器取目录）**只承诺索引，
+不还债**。它曾经顺手补正文，结果是点开刚导入的 PDF 要等一整次抽取——导入省下的时间
+原样挪到了第一次打开上。真正消费文字的路径才还债：`ensure_text`（检索 / RAG / 图谱）
+和 `content_ready`（读某一章，走阻塞线程池，不挡 UI）。其余格式的渲染器读的就是抽
+出来的文本，推迟等于没内容可显示，因此照旧在导入期抽完。
+
 - 入口：`src/features/reader/FoliateBookView.tsx`，路由级 lazy，仅上述书籍打开时加载。
 - 位置：CFI 存 `books.location`（`readerSetProgress` 的 `location` 参数）；
   旧的 `localStorage: colorreader:foliate:<bookId>` 只作一次性兜底读取。
