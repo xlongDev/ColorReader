@@ -14,11 +14,17 @@ use crate::error::{AppError, AppResult};
 
 pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
     let mut metadata = BookMetadata::default();
-    if let Ok(bytes) = std::fs::read(path) {
-        metadata.title = info_field(&bytes, b"Title").unwrap_or_default();
-        if let Some(author) = info_field(&bytes, b"Author") {
-            metadata.authors = vec![author];
-        }
+    if let Ok(bytes) = std::fs::read(path)
+        // One parse answers all three questions. `load_mem` is the expensive
+        // half of this module on a large file (327 ms for 21 MB) and it used to
+        // run once per field, so reading a title and an author cost 645 ms.
+        && let Ok(document) = pdf_extract::Document::load_mem(&bytes)
+    {
+        metadata.title = info_field(&document, b"Title").unwrap_or_default();
+        metadata.authors = info_field(&document, b"Author").into_iter().collect();
+        // Free from the same parse, and the importer needs it: for a PDF the
+        // page count *is* the chapter index.
+        metadata.page_count = Some(document.get_pages().len());
     }
     // Most PDFs carry no usable Info dictionary; the file name is the honest
     // fallback for this module's own contract (the shelf repeats the guard, but
@@ -27,6 +33,22 @@ pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
         metadata.title = plain::title_from_stem(path);
     }
     Ok(metadata)
+}
+
+/// The chapter index for a fixed-layout book: one empty chapter per page.
+///
+/// Titles and nothing else. This is what the importer stores, because the
+/// index is what the reader pages through and the page count is already in
+/// hand; the text is what [`read_chapters`] adds, and that is the one part of
+/// the import that is not cheap.
+pub fn page_index(pages: usize) -> Vec<RawChapter> {
+    (0..pages)
+        .map(|index| RawChapter { title: Some(page_title(index)), paragraphs: Vec::new() })
+        .collect()
+}
+
+fn page_title(index: usize) -> String {
+    format!("第 {} 页", index + 1)
 }
 
 /// Turns every page into a chapter, keeping page numbers honest.
@@ -41,6 +63,10 @@ pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
 /// page index: a PDF is fixed layout, so the reader draws the pages with
 /// pdf.js and only needs the count. The text, when there is any, feeds search
 /// and the assistant; when there is none the book still opens and reads.
+///
+/// This is the expensive half — a full decode of every content stream, 974 ms
+/// on a 756-page file — so the importer does not call it. It writes
+/// [`page_index`] instead and `chapters::backfill` comes back for the text.
 pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
     let bytes = std::fs::read(path)?;
     let pages = page_texts(&bytes);
@@ -52,7 +78,7 @@ pub fn read_chapters(path: &Path) -> AppResult<Vec<RawChapter>> {
         .into_iter()
         .enumerate()
         .map(|(index, page)| RawChapter {
-            title: Some(format!("第 {} 页", index + 1)),
+            title: Some(page_title(index)),
             paragraphs: paragraphs_of(&page),
         })
         .collect())
@@ -95,8 +121,10 @@ fn paragraphs_of(page: &str) -> Vec<String> {
 }
 
 /// Reads a field out of the PDF Info dictionary, when there is one.
-fn info_field(bytes: &[u8], key: &[u8]) -> Option<String> {
-    let document = pdf_extract::Document::load_mem(bytes).ok()?;
+///
+/// Takes the parsed document rather than its bytes: parsing is the caller's,
+/// and one document answers every field.
+fn info_field(document: &pdf_extract::Document, key: &[u8]) -> Option<String> {
     // `/Info` is almost always an indirect reference, which has to be followed
     // to reach the dictionary itself.
     let object = document.trailer.get(b"Info").ok()?;

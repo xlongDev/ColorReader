@@ -87,3 +87,9 @@ lto = true
 opt-level = "s"
 panic = "abort"
 strip = true
+
+[profile.release.package.pdf-extract]
+opt-level = 3
+
+[profile.release.package.lopdf]
+opt-level = 3

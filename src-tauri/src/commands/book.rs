@@ -9,9 +9,11 @@ use std::path::PathBuf;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::db::Library;
 use crate::error::{AppError, AppResult};
+use crate::library::chapters;
 use crate::library::import::{self, ImportOutcome};
-use crate::library::repository::{BookQuery, BookSummary, LibraryStats};
+use crate::library::repository::{self, BookQuery, BookSummary, LibraryStats};
 use crate::library::{self};
 use crate::state::AppState;
 
@@ -177,7 +179,35 @@ pub async fn book_import(
 
     let imported = outcomes.iter().filter(|outcome| outcome.is_success()).count();
     tracing::info!(imported, total = outcomes.len(), "导入批次完成");
+
+    backfill_deferred_chapters(state.library.clone());
     Ok(outcomes)
+}
+
+/// Extracts the chapter text of every book whose import deferred it — PDFs,
+/// whose index is written but whose per-page text is not.
+///
+/// Fire-and-forget on purpose: the import has already answered, and the point
+/// of deferring is that the shelf does not wait. Idempotent, and it clears the
+/// same flag `chapters::backfill` watches, so a reader or a search racing this
+/// pass is harmless and a pass that never finished simply runs again — the
+/// reader's own paths pay the debt inline when that happens.
+fn backfill_deferred_chapters(library: Library) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let pending = match library.with(repository::pending_chapters) {
+            Ok(pending) => pending,
+            Err(err) => {
+                tracing::warn!(error = %err, "查询待补章节的书失败");
+                return;
+            }
+        };
+        for id in pending {
+            match chapters::backfill(&library, &id) {
+                Ok(()) => tracing::debug!(book = %id, "章节正文补齐"),
+                Err(err) => tracing::warn!(book = %id, error = %err, "补齐章节正文失败"),
+            }
+        }
+    });
 }
 
 /// `pack.export` — writes one book to a `.ctz` or `.ctzx` file.

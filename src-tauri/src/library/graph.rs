@@ -211,7 +211,10 @@ pub async fn build(
             "还没有配置 AI 模型，先到设置里填写接口地址与模型名称".into(),
         ));
     }
-    crate::library::chapters::ensure(library, book_id)?;
+    // The graph extracts entities out of chapter *text*, so the deferred
+    // extraction has to be paid here: on a freshly imported PDF the chapters
+    // exist but are empty, and a graph over nothing is an empty graph.
+    crate::library::chapters::ensure_text(library, book_id)?;
 
     let chapters: Vec<(usize, String)> = library.with(|conn| {
         let mut stmt =

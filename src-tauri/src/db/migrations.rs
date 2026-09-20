@@ -438,6 +438,28 @@ CREATE TABLE bookmark_tombstones (
 );
 "#,
     },
+    Migration {
+        version: 16,
+        name: "books_chapters_pending",
+        // "This book's chapter index is written, its text is not yet."
+        //
+        // Only fixed-layout PDFs are ever set: their index is one row per page,
+        // exact and cheap, but the per-page *text* is a full decode of the
+        // document — measured at 974 ms for a 756-page / 21 MB file, 98% of the
+        // entire import. Nothing on the shelf needs that text (the reader
+        // paints pages with pdf.js; search, TTS and the assistant read it), so
+        // the text is filled in after the import has answered.
+        //
+        // The flag is what makes the deferral safe rather than merely fast: the
+        // background pass clears it, and `chapters::ensure` re-runs the
+        // extraction whenever it sees it still set — so a process killed
+        // mid-backfill heals the next time the book is opened or searched,
+        // instead of sitting there permanently unsearchable. Every other format
+        // extracts at import and stays at 0.
+        sql: r#"
+ALTER TABLE books ADD COLUMN chapters_pending INTEGER NOT NULL DEFAULT 0;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.

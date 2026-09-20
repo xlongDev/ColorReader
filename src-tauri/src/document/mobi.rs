@@ -840,6 +840,8 @@ impl Section {
             identifier: self.exth_text(EXTH_ISBN).or_else(|| self.exth_text(EXTH_ASIN)),
             authors: self.exth_text(EXTH_AUTHOR).map_or_else(Vec::new, |author| vec![author]),
             cover: None,
+            // A Mobipocket book reflows: its length is its text, not its pages.
+            page_count: None,
         }
     }
 

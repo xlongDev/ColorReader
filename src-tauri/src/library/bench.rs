@@ -114,3 +114,83 @@ fn large_book_pipeline_bench() -> Result<(), Box<dyn std::error::Error>> {
     println!("toc chapter list:           {toc_ms:.1} ms");
     Ok(())
 }
+
+/// 400 pages is enough for the per-page decode to dominate; the ratio, not the
+/// absolute number, is the thing this pins.
+const PDF_PAGES: usize = 400;
+
+/// The reference PDF. Latin text on purpose: the fixture's font has no
+/// ToUnicode map, so a CJK literal would come back as noise and make the
+/// "text is non-empty" assertion meaningless.
+fn write_reference_pdf(dir: &std::path::Path) -> PathBuf {
+    let pages: Vec<String> = (1..=PDF_PAGES)
+        .map(|page| {
+            format!("Page {page}: alpha beta gamma delta epsilon zeta eta theta iota kappa lambda.")
+        })
+        .collect();
+    let refs: Vec<&str> = pages.iter().map(String::as_str).collect();
+    crate::document::fixture::write_pdf(dir, "bench-book.pdf", &refs, Some("Bench PDF"))
+}
+
+/// What deferring a PDF's text extraction actually buys.
+///
+/// The two numbers are the point: `import` is what the shelf waits for, and it
+/// is the page index only. `backfill` is the per-page decode, and it happens
+/// after the import has already answered.
+///
+/// ⚠️ The ratio here understates the real one badly, and the fixture is why:
+/// it is hand-built with one font and no ToUnicode map, so the decode is nearly
+/// free. On a real 756-page / 21 MB file the split was 974 ms of 2.1 s — 98% of
+/// the import. Read this bench for the shape, not the magnitude.
+#[test]
+#[ignore = "benchmark: cargo test --release bench -- --ignored --nocapture"]
+fn pdf_import_bench() -> Result<(), Box<dyn std::error::Error>> {
+    let bench = Bench::new("bench-pdf");
+    let layout = Layout::create(bench.dir.join("data")).expect("layout");
+    let library = Library::open(&layout.data_dir).expect("open library");
+
+    let source = write_reference_pdf(&bench.dir);
+    println!("\nreference pdf: {PDF_PAGES} pages");
+
+    let started = Instant::now();
+    let outcomes = import::import_files(
+        &library,
+        &layout,
+        std::slice::from_ref(&source),
+        None,
+        &mut |_, _, _| {},
+    );
+    let import_ms = ms(started.elapsed());
+    let book_id = match &outcomes[0] {
+        import::ImportOutcome::Imported { id, .. } => id.clone(),
+        other => panic!("期望导入成功，实际 {other:?}"),
+    };
+
+    // The import owes the text, and says so; this is the assertion that would
+    // fail if the deferral silently turned into a loss.
+    let index = library.with(|conn| chapters::list(conn, &book_id))?;
+    assert_eq!(index.len(), PDF_PAGES, "导入必须落好页索引");
+    assert!(index.iter().all(|chapter| chapter.chars == 0), "导入不得抽正文");
+
+    // What the reader pays on a first open: the TOC of a book whose text is
+    // still owed. It has to be the index read and nothing more — routing the
+    // backfill through here once put a whole decode in front of "正在打开…".
+    let started = Instant::now();
+    let meta = chapters::ensure(&library, &book_id).expect("chapters");
+    let toc_ms = ms(started.elapsed());
+    assert_eq!(meta.len(), PDF_PAGES);
+    assert!(meta.iter().all(|chapter| chapter.chars == 0), "读目录不许顺手补正文");
+
+    let started = Instant::now();
+    chapters::backfill(&library, &book_id).expect("backfill");
+    let backfill_ms = ms(started.elapsed());
+
+    let meta = chapters::ensure(&library, &book_id).expect("chapters");
+    assert_eq!(meta.len(), PDF_PAGES);
+    assert!(meta.iter().all(|chapter| chapter.chars > 0), "正文必须补齐");
+
+    println!("import (page index only):  {import_ms:.1} ms");
+    println!("toc (first open, owes text): {toc_ms:.1} ms");
+    println!("backfill (text, deferred): {backfill_ms:.1} ms");
+    Ok(())
+}

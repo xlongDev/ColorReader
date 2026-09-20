@@ -6,7 +6,7 @@
 
 use std::path::PathBuf;
 
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Deserialize, Serialize};
 
 #[cfg(test)]
@@ -291,20 +291,56 @@ pub fn like_pattern(term: &str) -> String {
     format!("%{escaped}%")
 }
 
-/// Books whose chapters have not been extracted yet, oldest first.
+/// Books whose text is not searchable yet, oldest first.
 ///
-/// Books imported before the reader engine existed only get chapters when they
-/// are first opened, so a library-wide search has to back-fill them before it
-/// can see their text.
-pub fn books_without_chapters(conn: &Connection, book_id: Option<&str>) -> AppResult<Vec<String>> {
+/// Two ways to qualify. A book imported before the reader engine existed has no
+/// chapters at all until it is first opened, so a library-wide search has to
+/// back-fill it. A PDF has its chapter index (one row per page) but no text —
+/// that extraction is deferred past the import, and this is what puts it back
+/// on the search path if the background pass never finished.
+pub fn books_needing_chapters(conn: &Connection, book_id: Option<&str>) -> AppResult<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT b.id FROM books b
-          WHERE NOT EXISTS (SELECT 1 FROM chapters c WHERE c.book_id = b.id)
+          WHERE (b.chapters_pending = 1
+                 OR NOT EXISTS (SELECT 1 FROM chapters c WHERE c.book_id = b.id))
             AND (?1 IS NULL OR b.id = ?1)
           ORDER BY b.added_at, b.id",
     )?;
     let rows = stmt.query_map(params![book_id], |row| row.get(0))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Books whose chapter text was deferred past the import and is still missing.
+///
+/// The queue the importer hands to its background pass. Narrower than
+/// [`books_needing_chapters`] on purpose: a legacy book with no chapters is
+/// healed when someone opens or searches it, and dragging every one of them
+/// into an import-triggered job would be a surprise, not a fix.
+pub fn pending_chapters(conn: &Connection) -> AppResult<Vec<String>> {
+    let mut stmt =
+        conn.prepare("SELECT id FROM books WHERE chapters_pending = 1 ORDER BY added_at, id")?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Whether this book's chapter text still has to be extracted.
+pub fn chapters_pending(conn: &Connection, id: &str) -> AppResult<bool> {
+    let pending: Option<i64> = conn
+        .query_row("SELECT chapters_pending FROM books WHERE id = ?1", params![id], |row| {
+            row.get(0)
+        })
+        .optional()?;
+    Ok(pending.unwrap_or(0) != 0)
+}
+
+/// Sets or clears the deferred-extraction flag. `false` is what `backfill`
+/// writes once the text is in; `true` is what the importer writes.
+pub fn set_chapters_pending(conn: &Connection, id: &str, pending: bool) -> AppResult<()> {
+    conn.execute(
+        "UPDATE books SET chapters_pending = ?2 WHERE id = ?1",
+        params![id, i64::from(pending)],
+    )?;
+    Ok(())
 }
 
 fn attach_authors(conn: &Connection, books: &mut [BookSummary]) -> AppResult<()> {
@@ -879,15 +915,44 @@ mod tests {
         let conn = seed();
         add(&conn, "b1", "三体", &[], "h1");
         add(&conn, "b2", "Dune", &[], "h2");
-        assert_eq!(books_without_chapters(&conn, None).expect("query"), ["b1", "b2"]);
+        assert_eq!(books_needing_chapters(&conn, None).expect("query"), ["b1", "b2"]);
 
         let tx = conn.unchecked_transaction().expect("tx");
         chapters::insert(&tx, "b1", &[RawChapter { title: None, paragraphs: vec!["正文".into()] }])
             .expect("insert chapters");
         tx.commit().expect("commit");
 
-        assert_eq!(books_without_chapters(&conn, None).expect("query"), ["b2"]);
-        assert!(books_without_chapters(&conn, Some("b1")).expect("query").is_empty());
+        assert_eq!(books_needing_chapters(&conn, None).expect("query"), ["b2"]);
+        assert!(books_needing_chapters(&conn, Some("b1")).expect("query").is_empty());
+    }
+
+    #[test]
+    fn a_deferred_pdf_is_listed_even_though_its_page_index_exists() {
+        // The index is rows, so "has no chapters" cannot see a PDF whose text
+        // was deferred. Without the flag in this query a library-wide search
+        // would walk straight past such a book and report no hits for text that
+        // is sitting right there in the file.
+        let conn = seed();
+        add(&conn, "b1", "规范", &[], "h1");
+        add(&conn, "b2", "Dune", &[], "h2");
+        let tx = conn.unchecked_transaction().expect("tx");
+        chapters::insert(&tx, "b1", &[RawChapter { title: None, paragraphs: Vec::new() }])
+            .expect("insert chapters");
+        tx.commit().expect("commit");
+
+        assert_eq!(books_needing_chapters(&conn, None).expect("query"), ["b2"]);
+        assert!(pending_chapters(&conn).expect("query").is_empty());
+
+        set_chapters_pending(&conn, "b1", true).expect("flag");
+        assert!(chapters_pending(&conn, "b1").expect("query"));
+        assert_eq!(books_needing_chapters(&conn, None).expect("query"), ["b1", "b2"]);
+        assert_eq!(pending_chapters(&conn).expect("query"), ["b1"]);
+
+        // `pending_chapters` is the narrower queue: b2 has no chapters at all
+        // and is healed when someone opens it, not by the importer.
+        set_chapters_pending(&conn, "b1", false).expect("clear");
+        assert!(!chapters_pending(&conn, "b1").expect("query"));
+        assert!(pending_chapters(&conn).expect("query").is_empty());
     }
 
     #[test]

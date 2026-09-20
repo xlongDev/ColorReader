@@ -132,12 +132,65 @@ pub fn count(conn: &Connection, book_id: &str) -> AppResult<usize> {
     Ok(count as usize)
 }
 
-/// Chapter metadata, building the index from the source file when absent.
+/// Extracts a deferred book's chapter text, then clears the flag that asked
+/// for it. A no-op for every book that was not deferred, which is all of them
+/// except PDFs.
 ///
-/// Books imported before Phase 3 have no chapters; the reader and the search
-/// index both build them on first use rather than forcing a re-import. The
-/// re-check inside `with_tx` keeps two callers from double-inserting: the
-/// writer mutex serialises the check and the insert.
+/// The importer stores a PDF's page index but not its text, because the text is
+/// one full decode of the document (974 ms on a 756-page file, 98% of the
+/// import) and nothing on the shelf needs it yet. This is where it comes back:
+/// the importer runs it on a background thread so the book is searchable
+/// moments after it lands, and [`content_ready`] / [`ensure_text`] run it again
+/// whenever a *consumer of the words* touches a book whose backfill never
+/// finished — so the deferral is a delay, never a loss.
+///
+/// What deliberately does *not* call this: [`ensure`], the reader's TOC. The
+/// TOC is only the page index, and the reader asks for it and the first chapter
+/// in parallel on mount — routing the backfill through the TOC put a full
+/// decode in front of "正在打开…" on a freshly imported PDF, which is the
+/// import delay again, moved one click later rather than removed.
+pub fn backfill(library: &Library, book_id: &str) -> AppResult<()> {
+    if !library.with(|conn| repository::chapters_pending(conn, book_id))? {
+        return Ok(());
+    }
+
+    let (path, format) = library.with(|conn| repository::source(conn, book_id))?;
+    let raw = document::read_chapters(Path::new(&path), format)?;
+
+    library.with_tx(|tx| {
+        replace(tx, book_id, &raw)?;
+        repository::set_chapters_pending(tx, book_id, false)
+    })
+}
+
+/// The body of one chapter, with the text guaranteed to be there first.
+///
+/// `reader.chapter` goes through here rather than straight to [`content`],
+/// because the reader asks for the TOC and the current chapter *in parallel*:
+/// the TOC is what runs the backfill, so a chapter read can land first and be
+/// served the empty index. The reader then caches that blank body for a minute
+/// — long enough for TTS to find nothing to read and for a highlight made in
+/// the meantime to be anchored at offset 0, which is a wrong position rather
+/// than a missing one. Reading the chapter is the moment the text stops being
+/// optional, so that is where the debt gets paid.
+pub fn content_ready(
+    library: &Library,
+    book_id: &str,
+    idx: usize,
+) -> AppResult<Option<ChapterContent>> {
+    backfill(library, book_id)?;
+    library.with(|conn| content(conn, book_id, idx))
+}
+
+/// Chapter metadata for a book, building it from the source file when absent.
+///
+/// Two promise regimes. This one — the reader's — is the *light* promise:
+/// the index is there and the reader can page through it. The text is a
+/// separate debt (see [`ensure_text`]): the importer defers it past the import,
+/// and the search index is the path that pays it. The reader fetches the TOC
+/// and the current chapter in parallel on mount, so a TOC call that blocked on
+/// the extraction would put the whole reader behind a multi-second decode on
+/// a freshly imported PDF — the very delay the deferral was meant to spare.
 pub fn ensure(library: &Library, book_id: &str) -> AppResult<Vec<ChapterMeta>> {
     if library.with(|conn| count(conn, book_id))? > 0 {
         return library.with(|conn| list(conn, book_id));
@@ -159,6 +212,16 @@ pub fn ensure(library: &Library, book_id: &str) -> AppResult<Vec<ChapterMeta>> {
     })?;
 
     library.with(|conn| list(conn, book_id))
+}
+
+/// The same as [`ensure`], but pays off a deferred book's text first so the
+/// returned index carries the words search, TTS and the assistant read.
+///
+/// Racing the importer's background pass is harmless: `backfill` is idempotent
+/// and whichever call loses the flag simply finds nothing to do.
+pub fn ensure_text(library: &Library, book_id: &str) -> AppResult<Vec<ChapterMeta>> {
+    backfill(library, book_id)?;
+    ensure(library, book_id)
 }
 
 #[cfg(test)]

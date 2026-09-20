@@ -13,7 +13,7 @@ use sha2::{Digest, Sha256};
 use super::pack;
 use super::repository::{self, NewBook};
 use crate::db::{Layout, Library};
-use crate::document::{self, detect_format};
+use crate::document::{self, BookFormat, detect_format};
 use crate::error::{AppError, AppResult};
 
 /// What happened to one file in the batch.
@@ -148,10 +148,18 @@ fn import_book(library: &Library, layout: &Layout, path: &Path) -> AppResult<Imp
     // data, and a parser fix (e.g. keeping images) must reach old books when
     // the user re-imports the same file.
     if let Some((id, title)) = library.with(|conn| repository::find_by_hash(conn, &hash))? {
-        match document::read_chapters(path, format) {
-            Ok(raw) => library.with_tx(|tx| super::chapters::replace(tx, &id, &raw))?,
-            Err(err) => {
-                tracing::warn!(path = %path.display(), error = %err, "重复导入时刷新章节失败");
+        if format == BookFormat::Pdf {
+            // The same deferral as the fresh-import path below, for the same
+            // reason: re-extracting here would put the 974 ms back on the
+            // re-import. Marking it pending reaches the same place — the
+            // background pass replaces the text, so a parser fix still lands.
+            library.with(|conn| repository::set_chapters_pending(conn, &id, true))?;
+        } else {
+            match document::read_chapters(path, format) {
+                Ok(raw) => library.with_tx(|tx| super::chapters::replace(tx, &id, &raw))?,
+                Err(err) => {
+                    tracing::warn!(path = %path.display(), error = %err, "重复导入时刷新章节失败");
+                }
             }
         }
         // The format label is derived data too, and for the same reason: a
@@ -166,12 +174,25 @@ fn import_book(library: &Library, layout: &Layout, path: &Path) -> AppResult<Imp
     let file_size = i64::try_from(fs::metadata(path)?.len()).unwrap_or(i64::MAX);
     let id = uuid::Uuid::new_v4().to_string();
 
-    // Chapter extraction is best-effort: a book can sit on the shelf even if
-    // the spine is empty, and the reader will re-attempt lazily.
-    let chapters = document::read_chapters(path, format).unwrap_or_else(|err| {
-        tracing::warn!(path = %path.display(), error = %err, "章节提取失败，将以空章节入库");
-        Vec::new()
-    });
+    // A PDF's chapter index *is* its page count, and the metadata parse above
+    // already had the document open, so the index costs nothing. Its text is
+    // the opposite: one full per-page decode, 98% of the whole import path
+    // (measured — 974 ms of 2.1 s on a 756-page / 21 MB file), for something
+    // nothing on the shelf reads yet. The reader paints pages with pdf.js;
+    // only search, TTS and the assistant want the words. So the index goes in
+    // now, `chapters_pending` records that the text is owed, and
+    // `chapters::backfill` pays it after the import has answered.
+    let deferred = format == BookFormat::Pdf;
+    let chapters = if deferred {
+        document::pdf::page_index(metadata.page_count.unwrap_or(0))
+    } else {
+        // Chapter extraction is best-effort: a book can sit on the shelf even
+        // if the spine is empty, and the reader will re-attempt lazily.
+        document::read_chapters(path, format).unwrap_or_else(|err| {
+            tracing::warn!(path = %path.display(), error = %err, "章节提取失败，将以空章节入库");
+            Vec::new()
+        })
+    };
 
     // Files are copied into the library directory so deleting or moving the
     // original never breaks the shelf.
@@ -211,7 +232,11 @@ fn import_book(library: &Library, layout: &Layout, path: &Path) -> AppResult<Imp
                 authors: &metadata.authors,
             },
         )?;
-        super::chapters::insert(tx, &id, &chapters)
+        super::chapters::insert(tx, &id, &chapters)?;
+        if deferred {
+            repository::set_chapters_pending(tx, &id, true)?;
+        }
+        Ok(())
     });
 
     match inserted {
@@ -290,6 +315,15 @@ mod tests {
         fn shelve(&self) -> Vec<repository::BookSummary> {
             self.library.with(|conn| repository::list(conn, &BookQuery::default())).expect("list")
         }
+
+        fn chapters(&self, id: &str) -> Vec<crate::library::chapters::ChapterMeta> {
+            self.library.with(|conn| crate::library::chapters::list(conn, id)).expect("chapters")
+        }
+
+        /// Whether the book still owes its chapter text.
+        fn pending(&self, id: &str) -> bool {
+            self.library.with(|conn| repository::chapters_pending(conn, id)).expect("flag")
+        }
     }
 
     impl Drop for Harness {
@@ -309,6 +343,11 @@ mod tests {
             &fixture::full_opf(title, "刘慈欣"),
             &[("OEBPS/images/cover.png", &fixture::png_bytes())],
         )
+    }
+
+    /// A real, parseable PDF of `pages.len()` pages.
+    fn pdf(dir: &Path, name: &str, pages: &[&str]) -> PathBuf {
+        fixture::write_pdf(dir, name, pages, Some("规范"))
     }
 
     /// Synthetic MOBI bytes. The same bytes can be handed over under either
@@ -468,6 +507,183 @@ mod tests {
         assert_eq!(outcomes.len(), 2);
         assert!(outcomes.iter().all(ImportOutcome::is_success), "{outcomes:?}");
         assert_eq!(harness.shelve().len(), 2);
+    }
+
+    #[test]
+    fn a_pdf_lands_with_its_page_index_and_owes_its_text() {
+        // The regression this guards. Importing a PDF used to decode every
+        // page's content stream before the shelf heard about it — measured at
+        // 974 ms of a 2.1 s import for a 756-page file, 98% of the whole path.
+        // The index is all the reader needs to page through the book, so that
+        // is what the import stores; the words are owed, and paid after.
+        let harness = Harness::new("import-pdf-defer");
+        let source = pdf(&harness.dir, "book.pdf", &["Text of page one", "Text of page two"]);
+
+        let outcomes = harness.import(&[source]);
+        let id = match &outcomes[0] {
+            ImportOutcome::Imported { id, .. } => id.clone(),
+            other => panic!("期望导入成功，实际 {other:?}"),
+        };
+
+        // The index is exact — one numbered chapter per page — and empty.
+        let index = harness.chapters(&id);
+        assert_eq!(index.len(), 2, "{index:?}");
+        assert_eq!(index[0].title, "第 1 页");
+        assert!(index.iter().all(|chapter| chapter.chars == 0), "导入期不得抽正文：{index:?}");
+        assert!(harness.pending(&id), "PDF 导入后必须标记待补正文");
+
+        // `ensure_text` is the path the search index takes, and it is the one
+        // that has to heal a book whose background pass never ran.
+        let meta = crate::library::chapters::ensure_text(&harness.library, &id).expect("ensure");
+        assert_eq!(meta.len(), 2);
+        assert!(meta.iter().all(|chapter| chapter.chars > 0), "{meta:?}");
+        assert!(!harness.pending(&id), "补完正文必须清掉标记");
+
+        let body = harness
+            .library
+            .with(|conn| crate::library::chapters::content(conn, &id, 0))
+            .expect("content")
+            .expect("some");
+        assert!(
+            body.paragraphs.iter().any(|line| line.contains("page one")),
+            "{:?}",
+            body.paragraphs
+        );
+    }
+
+    #[test]
+    fn backfilling_a_deferred_pdf_fills_the_index_in_place() {
+        // The path the importer's background task takes, without `ensure` in
+        // front of it: same rows, same numbering, text added.
+        let harness = Harness::new("import-pdf-backfill");
+        let source = pdf(&harness.dir, "book.pdf", &["Alpha", "Beta"]);
+        let outcomes = harness.import(&[source]);
+        let ImportOutcome::Imported { id, .. } = &outcomes[0] else {
+            panic!("期望导入成功，实际 {:?}", outcomes[0]);
+        };
+
+        crate::library::chapters::backfill(&harness.library, id).expect("backfill");
+
+        let index = harness.chapters(id);
+        assert_eq!(index.len(), 2, "{index:?}");
+        assert_eq!(index[0].title, "第 1 页", "补齐正文不得改动页码");
+        assert!(index.iter().all(|chapter| chapter.chars > 0), "{index:?}");
+        assert!(!harness.pending(id));
+
+        // Running it twice must not duplicate rows.
+        crate::library::chapters::backfill(&harness.library, id).expect("backfill again");
+        assert_eq!(harness.chapters(id).len(), 2);
+    }
+
+    #[test]
+    fn re_importing_a_pdf_asks_for_its_text_again() {
+        // A parser fix has to reach books already on the shelf, and for a
+        // deferred book that means asking for the text once more — the re-import
+        // itself stays cheap.
+        let harness = Harness::new("import-pdf-reimport");
+        let source = pdf(&harness.dir, "book.pdf", &["Alpha"]);
+        let outcomes = harness.import(&[source]);
+        let ImportOutcome::Imported { id, .. } = &outcomes[0] else {
+            panic!("期望导入成功，实际 {:?}", outcomes[0]);
+        };
+        crate::library::chapters::backfill(&harness.library, id).expect("backfill");
+        assert!(!harness.pending(id));
+
+        let again = harness.import(&[harness.dir.join("book.pdf")]);
+        assert!(matches!(&again[0], ImportOutcome::Duplicate { .. }), "{:?}", again[0]);
+        assert!(harness.pending(id), "重复导入 PDF 必须重新排队补正文");
+        assert_eq!(harness.shelve().len(), 1);
+    }
+
+    #[test]
+    fn the_readers_toc_does_not_pay_the_debt() {
+        // The regression. `ensure` once ran `backfill`, so opening a freshly
+        // imported PDF did the whole 974 ms extraction in front of "正在打开…"
+        // — the import delay moved one click later rather than removed, and
+        // the reader got slower the moment the import got faster.
+        //
+        // The TOC is the page index and nothing else. A deferred book's index
+        // is already complete, so `ensure` must answer from the rows it has.
+        let harness = Harness::new("import-pdf-toc-cheap");
+        let source = pdf(&harness.dir, "book.pdf", &["Alpha", "Beta"]);
+        let outcomes = harness.import(&[source]);
+        let ImportOutcome::Imported { id, .. } = &outcomes[0] else {
+            panic!("期望导入成功，实际 {:?}", outcomes[0]);
+        };
+        assert!(harness.pending(id), "前提：导入确实把正文欠着");
+
+        let meta = crate::library::chapters::ensure(&harness.library, id).expect("ensure");
+        assert_eq!(meta.len(), 2, "目录照样是完整的：{meta:?}");
+        assert!(harness.pending(id), "读目录不许顺手补正文 —— 那会把整次抽取挡在打开之前");
+
+        // The chapter read is still the one that pays it.
+        crate::library::chapters::content_ready(&harness.library, id, 0)
+            .expect("chapter")
+            .expect("some");
+        assert!(!harness.pending(id));
+    }
+
+    #[test]
+    fn reading_a_chapter_pays_the_debt_before_serving_it() {
+        // The race this guards. The reader asks for the TOC and the current
+        // chapter *in parallel*, and the chapter read is the faster of the two
+        // — so it arrives while the text is still owed. Handing it the empty
+        // index would give the reader a blank body it caches for a minute:
+        // nothing for TTS to read, and a highlight made in the meantime
+        // anchored at offset 0, which is a wrong position rather than a
+        // missing one. The chapter read is where the debt gets paid.
+        let harness = Harness::new("import-pdf-chapter-ready");
+        let source = pdf(&harness.dir, "book.pdf", &["Alpha", "Beta"]);
+        let outcomes = harness.import(&[source]);
+        let ImportOutcome::Imported { id, .. } = &outcomes[0] else {
+            panic!("期望导入成功，实际 {:?}", outcomes[0]);
+        };
+        assert!(harness.pending(id), "前提：导入确实把正文欠着");
+
+        // No `ensure`, no `backfill` — straight at the chapter, as the reader does.
+        let body = crate::library::chapters::content_ready(&harness.library, id, 0)
+            .expect("chapter")
+            .expect("some");
+        assert!(
+            body.paragraphs.iter().any(|line| line.contains("Alpha")),
+            "读章节必须先还清正文：{:?}",
+            body.paragraphs
+        );
+        assert!(!harness.pending(id), "还清了就得把标记清掉");
+
+        // An index that has no such page is still `None` — paying the debt must
+        // not invent rows.
+        assert!(
+            crate::library::chapters::content_ready(&harness.library, id, 99)
+                .expect("chapter")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn an_epub_still_extracts_its_chapters_at_import() {
+        // The deferral is PDF-only on purpose: every other format's renderer
+        // reads the extracted text, so there would be nothing to show.
+        let harness = Harness::new("import-epub-eager");
+        let source = fixture::write_epub(
+            &harness.dir,
+            "source.epub",
+            &fixture::full_opf("三体", "刘慈欣"),
+            &[
+                ("OEBPS/images/cover.png", &fixture::png_bytes()),
+                (
+                    "OEBPS/text/ch1.xhtml",
+                    "<html><body><h1>Chapter One</h1><p>Body text.</p></body></html>".as_bytes(),
+                ),
+            ],
+        );
+        let outcomes = harness.import(&[source]);
+        let ImportOutcome::Imported { id, .. } = &outcomes[0] else {
+            panic!("期望导入成功，实际 {:?}", outcomes[0]);
+        };
+
+        assert!(harness.chapters(id).iter().any(|chapter| chapter.chars > 0));
+        assert!(!harness.pending(id), "非 PDF 不该被标记待补");
     }
 
     #[test]

@@ -112,8 +112,10 @@ pub async fn reindex(
         return Err(AppError::InvalidArgument("先到设置里填写向量模型，才能建立检索索引".into()));
     }
     // Chapters are lazily built for pre-Phase-3 books; indexing goes through
-    // the same path so every book is indexable, whatever its age.
-    crate::library::chapters::ensure(library, book_id)?;
+    // the same path so every book is indexable, whatever its age. Embedding
+    // *text*, so this pays the deferred extraction too — an index built from
+    // empty chapters would be a valid, searchable, useless index.
+    crate::library::chapters::ensure_text(library, book_id)?;
 
     let planned: Vec<(usize, String, usize, usize)> = library.with(|conn| {
         let mut out = Vec::new();

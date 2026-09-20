@@ -170,6 +170,15 @@ pub struct BookMetadata {
     pub identifier: Option<String>,
     pub authors: Vec<String>,
     pub cover: Option<CoverImage>,
+    /// Page count, for formats that have a fixed one (PDF). `None` everywhere
+    /// else — a reflowable book's length is its text, not its pages.
+    ///
+    /// It lives here rather than behind its own call because the PDF Info
+    /// dictionary and the page tree come out of the same parse: `load_mem` on a
+    /// 21 MB document costs 327 ms, and asking twice for two answers the one
+    /// parse already holds is how the importer used to spend 645 ms on a title
+    /// and an author.
+    pub page_count: Option<usize>,
 }
 
 /// Reads metadata for any supported file without loading the whole book.

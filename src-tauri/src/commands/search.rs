@@ -34,9 +34,13 @@ pub async fn search_query(
 }
 
 /// Extracts chapters for every book that has none, so their text is searchable.
+///
+/// For a PDF whose text was deferred at import this runs the full per-page
+/// decode — the same cost the importer moved off the import path. Search is
+/// the right place for it: the user is asking the question, the shelf isn't.
 fn index_missing(library: &Library, book_id: Option<&str>) -> AppResult<()> {
-    for id in library.with(|conn| repository::books_without_chapters(conn, book_id))? {
-        chapters::ensure(library, &id)?;
+    for id in library.with(|conn| repository::books_needing_chapters(conn, book_id))? {
+        chapters::ensure_text(library, &id)?;
     }
     Ok(())
 }
