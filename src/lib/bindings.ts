@@ -291,7 +291,12 @@ export const commands = {
     __TAURI_INVOKE<null>("rag_chat", { requestId, question, bookId }),
   /**  `reader.toc` — chapter metadata in reading order. */
   readerToc: (bookId: string) => __TAURI_INVOKE<ChapterMeta[]>("reader_toc", { bookId }),
-  /**  `reader.chapter` — the body of one chapter. */
+  /**
+   *  `reader.chapter` — the body of one chapter.
+   *
+   *  Async despite being a row lookup: a book whose text was deferred (PDF) has
+   *  its extraction run here on first read, and that decodes the whole document.
+   */
   readerChapter: (bookId: string, idx: number) =>
     __TAURI_INVOKE<ChapterContent>("reader_chapter", { bookId, idx }),
   /**

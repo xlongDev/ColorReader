@@ -1,8 +1,9 @@
 //! `reader.*` commands: chapter index, chapter bodies and progress.
 //!
 //! Building a chapter index for a book imported before the reader engine
-//! existed touches the source file, so that path runs on a blocking task; the
-//! per-chapter body query is a single indexed row and stays synchronous.
+//! existed touches the source file, and so does paying off a PDF's deferred
+//! text, so both of those paths run on a blocking task. The progress write is
+//! a single indexed row and stays synchronous.
 
 use tauri::State;
 
@@ -25,15 +26,23 @@ pub async fn reader_toc(
 }
 
 /// `reader.chapter` — the body of one chapter.
+///
+/// Async despite being a row lookup: a book whose text was deferred (PDF) has
+/// its extraction run here on first read, and that decodes the whole document.
 #[tauri::command]
 #[specta::specta]
-pub fn reader_chapter(
+pub async fn reader_chapter(
     state: State<'_, AppState>,
     book_id: String,
     idx: usize,
 ) -> AppResult<ChapterContent> {
-    let found = state.library.with(|conn| chapters::content(conn, &book_id, idx))?;
-    found.ok_or_else(|| AppError::NotFound(format!("第 {} 章", idx + 1)))
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let found = chapters::content_ready(&library, &book_id, idx)?;
+        found.ok_or_else(|| AppError::NotFound(format!("第 {} 章", idx + 1)))
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("章节加载被中断：{err}")))?
 }
 
 /// `reader.setProgress` — records a 0..1 reading position.
