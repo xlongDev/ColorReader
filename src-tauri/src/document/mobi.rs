@@ -1235,8 +1235,80 @@ fn be_u32(data: &[u8], at: usize) -> u32 {
     }
 }
 
+/// Synthetic MOBI bytes for tests outside this module.
+///
+/// `library::import` needs a file the real pipeline can actually parse, and the
+/// byte layout is spelled down exactly once — here, next to the parser that
+/// reads it — rather than re-derived in the test that wants one.
+#[cfg(test)]
+pub(crate) mod synth {
+    use super::*;
+
+    /// Builds a Palm database with the given records and no valid book inside.
+    pub fn build_pdb(records: &[&[u8]]) -> Vec<u8> {
+        let mut out = vec![0u8; PDB_HEADER_LEN];
+        let count = records.len() as u16;
+        out[76..78].copy_from_slice(&count.to_be_bytes());
+        let mut at = PDB_HEADER_LEN + records.len() * RECORD_INFO_LEN;
+        let mut offsets = Vec::new();
+        for record in records {
+            offsets.push(at as u32);
+            at += record.len();
+        }
+        for offset in offsets {
+            out.extend_from_slice(&offset.to_be_bytes());
+            out.extend_from_slice(&[0u8; 4]);
+        }
+        for record in records {
+            out.extend_from_slice(record);
+        }
+        out
+    }
+
+    /// Record 0 of an uncompressed, unencrypted MOBI with an EXTH block:
+    /// PalmDOC header, MOBI header, then the metadata records.
+    pub fn mobi_header(exth: &[(u32, &str)]) -> Vec<u8> {
+        let body: Vec<Vec<u8>> = exth
+            .iter()
+            .map(|(kind, value)| {
+                let mut entry = (kind.to_be_bytes()).to_vec();
+                entry.extend_from_slice(&((value.len() + 8) as u32).to_be_bytes());
+                entry.extend_from_slice(value.as_bytes());
+                entry
+            })
+            .collect();
+        let body_len: usize = body.iter().map(Vec::len).sum();
+
+        let mut block = b"EXTH".to_vec();
+        block.extend_from_slice(&((body_len + 12) as u32).to_be_bytes());
+        block.extend_from_slice(&(exth.len() as u32).to_be_bytes());
+        for entry in body {
+            block.extend_from_slice(&entry);
+        }
+
+        let mut out = vec![0u8; 16 + 232];
+        out[OFFSET_COMPRESSION..OFFSET_COMPRESSION + 2]
+            .copy_from_slice(&COMPRESSION_NONE.to_be_bytes());
+        out[OFFSET_TEXT_RECORDS..OFFSET_TEXT_RECORDS + 2].copy_from_slice(&1u16.to_be_bytes());
+        out[OFFSET_MOBI_MAGIC..OFFSET_MOBI_MAGIC + 4].copy_from_slice(b"MOBI");
+        out[OFFSET_MOBI_LENGTH..OFFSET_MOBI_LENGTH + 4].copy_from_slice(&232u32.to_be_bytes());
+        out[OFFSET_ENCODING..OFFSET_ENCODING + 4].copy_from_slice(&ENCODING_UTF8.to_be_bytes());
+        // No Huffman table and no image records: both indices are "absent".
+        out[OFFSET_HUFFMAN_INDEX..OFFSET_HUFFMAN_COUNT + 4].copy_from_slice(&[0xff; 8]);
+        out[OFFSET_EXTH_FLAGS..OFFSET_EXTH_FLAGS + 4].copy_from_slice(&0x40u32.to_be_bytes());
+        out.extend_from_slice(&block);
+        out
+    }
+
+    /// A whole one-chapter book: metadata record plus the HTML text record.
+    pub fn book_bytes(title: &str, author: &str, html: &str) -> Vec<u8> {
+        build_pdb(&[&mobi_header(&[(EXTH_TITLE, title), (EXTH_AUTHOR, author)]), html.as_bytes()])
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::synth::{build_pdb, mobi_header};
     use super::*;
     use crate::document::fixture;
 
@@ -1306,27 +1378,6 @@ mod tests {
         assert_eq!(chapters[0].title.as_deref(), Some("甲"));
     }
 
-    /// Builds a Palm database with the given records and no valid book inside.
-    fn build_pdb(records: &[&[u8]]) -> Vec<u8> {
-        let mut out = vec![0u8; PDB_HEADER_LEN];
-        let count = records.len() as u16;
-        out[76..78].copy_from_slice(&count.to_be_bytes());
-        let mut at = PDB_HEADER_LEN + records.len() * RECORD_INFO_LEN;
-        let mut offsets = Vec::new();
-        for record in records {
-            offsets.push(at as u32);
-            at += record.len();
-        }
-        for offset in offsets {
-            out.extend_from_slice(&offset.to_be_bytes());
-            out.extend_from_slice(&[0u8; 4]);
-        }
-        for record in records {
-            out.extend_from_slice(record);
-        }
-        out
-    }
-
     #[test]
     fn records_are_split_at_the_declared_offsets() {
         let dir = fixture::temp_dir("mobi-records");
@@ -1347,41 +1398,6 @@ mod tests {
         assert!(read_chapters(&path).is_err());
         assert!(read_metadata(&path).is_err());
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// Record 0 of an uncompressed, unencrypted MOBI with an EXTH block:
-    /// PalmDOC header, MOBI header, then the metadata records.
-    fn mobi_header(exth: &[(u32, &str)]) -> Vec<u8> {
-        let body: Vec<Vec<u8>> = exth
-            .iter()
-            .map(|(kind, value)| {
-                let mut entry = (kind.to_be_bytes()).to_vec();
-                entry.extend_from_slice(&((value.len() + 8) as u32).to_be_bytes());
-                entry.extend_from_slice(value.as_bytes());
-                entry
-            })
-            .collect();
-        let body_len: usize = body.iter().map(Vec::len).sum();
-
-        let mut block = b"EXTH".to_vec();
-        block.extend_from_slice(&((body_len + 12) as u32).to_be_bytes());
-        block.extend_from_slice(&(exth.len() as u32).to_be_bytes());
-        for entry in body {
-            block.extend_from_slice(&entry);
-        }
-
-        let mut out = vec![0u8; 16 + 232];
-        out[OFFSET_COMPRESSION..OFFSET_COMPRESSION + 2]
-            .copy_from_slice(&COMPRESSION_NONE.to_be_bytes());
-        out[OFFSET_TEXT_RECORDS..OFFSET_TEXT_RECORDS + 2].copy_from_slice(&1u16.to_be_bytes());
-        out[OFFSET_MOBI_MAGIC..OFFSET_MOBI_MAGIC + 4].copy_from_slice(b"MOBI");
-        out[OFFSET_MOBI_LENGTH..OFFSET_MOBI_LENGTH + 4].copy_from_slice(&232u32.to_be_bytes());
-        out[OFFSET_ENCODING..OFFSET_ENCODING + 4].copy_from_slice(&ENCODING_UTF8.to_be_bytes());
-        // No Huffman table and no image records: both indices are "absent".
-        out[OFFSET_HUFFMAN_INDEX..OFFSET_HUFFMAN_COUNT + 4].copy_from_slice(&[0xff; 8]);
-        out[OFFSET_EXTH_FLAGS..OFFSET_EXTH_FLAGS + 4].copy_from_slice(&0x40u32.to_be_bytes());
-        out.extend_from_slice(&block);
-        out
     }
 
     #[test]

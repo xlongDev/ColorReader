@@ -456,6 +456,28 @@ pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> AppResult<()
     Ok(())
 }
 
+/// Re-labels a book that is already on the shelf.
+///
+/// Only the label moves: `.mobi` and `.azw3` are the same container and the
+/// same parser, so no byte on disk changes. The importer calls this when a
+/// duplicate is re-imported as a format that has since been given its own
+/// name — without it, a book imported under the old label would keep it for
+/// good, since the copy in the library directory is never rewritten.
+///
+/// ponytail: the stored file keeps the name it was copied under (`{id}.mobi`),
+/// so the column and the file name disagree until it is re-imported from
+/// scratch. Rename it when something starts reading the extension back.
+pub fn set_format(conn: &Connection, id: &str, format: BookFormat) -> AppResult<()> {
+    let changed = conn.execute(
+        "UPDATE books SET format = ?1, updated_at = ?2 WHERE id = ?3",
+        params![format.as_str(), super::now_seconds(), id],
+    )?;
+    if changed == 0 {
+        return Err(AppError::NotFound(id.to_string()));
+    }
+    Ok(())
+}
+
 /// The editable half of a book's metadata, as the edit sheet sends it.
 ///
 /// The whole form travels, not a diff: the sheet opens pre-filled from the book

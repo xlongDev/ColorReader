@@ -154,6 +154,11 @@ fn import_book(library: &Library, layout: &Layout, path: &Path) -> AppResult<Imp
                 tracing::warn!(path = %path.display(), error = %err, "重复导入时刷新章节失败");
             }
         }
+        // The format label is derived data too, and for the same reason: a
+        // book imported before `.azw3` was named separately sits on the shelf
+        // as MOBI, and re-importing the file is the only way the user has to
+        // fix it. Cheap enough to do on every duplicate.
+        library.with(|conn| repository::set_format(conn, &id, format))?;
         return Ok(Imported::AlreadyPresent(id, title));
     }
 
@@ -306,6 +311,16 @@ mod tests {
         )
     }
 
+    /// Synthetic MOBI bytes. The same bytes can be handed over under either
+    /// Kindle extension, which is what makes the re-label path testable.
+    fn mobi_bytes(title: &str) -> Vec<u8> {
+        crate::document::mobi::synth::book_bytes(
+            title,
+            "某作者",
+            "<html><body><h1>第一章</h1><p>第一段</p></body></html>",
+        )
+    }
+
     #[test]
     fn an_epub_lands_on_the_shelf_with_metadata_and_cover() {
         let harness = Harness::new("import-epub");
@@ -359,6 +374,83 @@ mod tests {
 
         assert!(matches!(&outcomes[0], ImportOutcome::Duplicate { .. }), "{:?}", outcomes[0]);
         assert_eq!(harness.shelve().len(), 1, "重复导入不得产生第二行记录");
+    }
+
+    #[test]
+    fn every_kindle_extension_is_shelved_under_its_own_name() {
+        // One container, one parser, four names. The bytes are identical in
+        // every case — only the extension differs — so this pins exactly the
+        // property the split is for: the label follows the file's name, and
+        // nothing downstream of `from_path` is allowed to notice.
+        for (ext, format) in [
+            ("mobi", crate::document::BookFormat::Mobi),
+            ("azw", crate::document::BookFormat::Azw),
+            ("azw3", crate::document::BookFormat::Azw3),
+            ("prc", crate::document::BookFormat::Prc),
+        ] {
+            let harness = Harness::new(&format!("import-{ext}"));
+            let source = harness.dir.join(format!("source.{ext}"));
+            std::fs::write(&source, mobi_bytes("长日将尽")).expect("write");
+
+            let outcomes = harness.import(&[source]);
+            assert!(outcomes[0].is_success(), "{ext}: {:?}", outcomes[0]);
+
+            let books = harness.shelve();
+            assert_eq!(books.len(), 1, "{ext}");
+            assert_eq!(books[0].title, "长日将尽", "{ext}");
+            // The shelf card prints `format.to_uppercase()`, so this value is
+            // the string a reader actually sees.
+            assert_eq!(books[0].format, format, "{ext} 的货架标签");
+
+            let (stored, _) =
+                crate::library::book_files(&harness.library, &books[0].id).expect("files");
+            let stored = stored.expect("书籍文件必须存在");
+            assert_eq!(
+                stored.extension().and_then(|e| e.to_str()),
+                Some(ext),
+                "{ext} 的落盘扩展名"
+            );
+        }
+    }
+
+    #[test]
+    fn re_importing_the_same_bytes_under_a_new_extension_relabels_the_book() {
+        // The same bytes, so the pipeline reports a duplicate and keeps the copy
+        // it already has — but the label follows the name it was handed this
+        // time. A book imported before these extensions had labels of their own
+        // has to be able to catch up without being deleted, since deleting it
+        // takes the reading progress and every highlight with it.
+        let bytes = mobi_bytes("长日将尽");
+
+        for (ext, format) in [
+            ("azw", crate::document::BookFormat::Azw),
+            ("azw3", crate::document::BookFormat::Azw3),
+            ("prc", crate::document::BookFormat::Prc),
+        ] {
+            let harness = Harness::new(&format!("import-relabel-{ext}"));
+            let as_mobi = harness.dir.join("source.mobi");
+            let renamed = harness.dir.join(format!("source.{ext}"));
+            std::fs::write(&as_mobi, &bytes).expect("write");
+            std::fs::write(&renamed, &bytes).expect("write");
+
+            harness.import(&[as_mobi]);
+            assert_eq!(
+                harness.shelve()[0].format,
+                crate::document::BookFormat::Mobi,
+                "{ext}：先按 .mobi 导入"
+            );
+
+            let outcomes = harness.import(&[renamed]);
+            assert!(
+                matches!(&outcomes[0], ImportOutcome::Duplicate { .. }),
+                "{ext}: {:?}",
+                outcomes[0]
+            );
+
+            let books = harness.shelve();
+            assert_eq!(books.len(), 1, "{ext}：重新导入不得产生第二行记录");
+            assert_eq!(books[0].format, format, "{ext}：重贴标签后的格式");
+        }
     }
 
     #[test]
