@@ -1,9 +1,10 @@
 import type { RefObject } from "react";
-import { BookOpen, Sparkle } from "@phosphor-icons/react";
+import { BookOpen, CaretDown, Sparkle } from "@phosphor-icons/react";
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton } from "@/components/glass/button";
 import { BookCard } from "@/features/library/BookCard";
+import { SECTION_HEADER_H, type BookSection } from "@/features/library/group";
 import type { useShelfWindow } from "@/hooks/useShelfWindow";
 import { staggerDelay, useMotion } from "@/lib/motion";
 import { cn } from "@/lib/cn";
@@ -24,6 +25,8 @@ export function ShelfGrid({
   gridRef,
   layout,
   tagRow,
+  collapsed,
+  onToggleSection,
   managing,
   selected,
   busy,
@@ -44,6 +47,8 @@ export function ShelfGrid({
   gridRef: RefObject<HTMLDivElement | null>;
   layout: "grid" | "list";
   tagRow: boolean;
+  collapsed: ReadonlySet<string>;
+  onToggleSection: (key: string) => void;
   managing: boolean;
   selected: ReadonlySet<string>;
   busy: boolean;
@@ -101,6 +106,7 @@ export function ShelfGrid({
       {shelf.top > 0 && <div style={{ height: shelf.top }} aria-hidden />}
       <div
         ref={gridRef}
+        data-shelf-grid
         // The track list is pinned from the window's count as soon as
         // there is one, and pinning it is what makes a column change
         // animate (see `ShelfWindow.columns`). Left to `auto-fill` alone,
@@ -147,32 +153,102 @@ export function ShelfGrid({
             stands for and pushed the scroll position around under the
             reader). Tiles leaving the window therefore stop being rendered,
             and what is left of the filter-change motion is the survivors'
-            FLIP below plus the arriving cards' stagger. */}
-        {list.slice(shelf.start, shelf.end).map((book, index) => (
-          <BookCard
-            key={book.id}
-            book={book}
-            // The stagger is a position in the *list* — the window's own
-            // order would restart it at every scroll.
-            delay={staggerDelay(shelf.start + index, m.stagger)}
-            entering={!shelf.sliding}
-            reserveTags={tagRow && layout === "grid"}
-            busy={busy}
-            selecting={managing}
-            selected={selected.has(book.id)}
-            onToggleSelect={onToggleSelect}
-            onOpen={onOpen}
-            variant={layout}
-            onToggleFavorite={onToggleFavorite}
-            onAskDelete={onAskDelete}
-            onAskExport={onAskExport}
-            onEditTags={onEditTags}
-            onEditMeta={onEditMeta}
-          />
-        ))}
+            FLIP below plus the arriving cards' stagger.
+
+            Flattened rather than wrapped: a row is a *group* of cards for the
+            window's arithmetic, but it is nothing at all to the DOM. Wrapping
+            one in an element would put a box between the grid and its tracks;
+            wrapping one in a keyed fragment would re-key every card in the row
+            the moment the column count changed — and it is the *unchanged* key
+            that lets motion see a card cross the grid and glide to its new
+            slot instead of mounting somewhere else (see `ShelfWindow.columns`).
+            So each card still answers to its own book id, and a heading is the
+            one line that is an element of its own. */}
+        {shelf.items.slice(shelf.start, shelf.end).flatMap((item) =>
+          item.kind === "header" ? (
+            <SectionHeading
+              key={`heading:${item.section.key}`}
+              section={item.section}
+              collapsed={collapsed.has(item.section.key)}
+              onToggle={onToggleSection}
+            />
+          ) : (
+            list.slice(item.from, item.to).map((book, offset) => (
+              <BookCard
+                key={book.id}
+                book={book}
+                // The stagger is a position in the *list* — the window's own
+                // order would restart it at every scroll.
+                delay={staggerDelay(item.from + offset, m.stagger)}
+                entering={!shelf.sliding}
+                reserveTags={tagRow && layout === "grid"}
+                busy={busy}
+                selecting={managing}
+                selected={selected.has(book.id)}
+                onToggleSelect={onToggleSelect}
+                onOpen={onOpen}
+                variant={layout}
+                onToggleFavorite={onToggleFavorite}
+                onAskDelete={onAskDelete}
+                onAskExport={onAskExport}
+                onEditTags={onEditTags}
+                onEditMeta={onEditMeta}
+              />
+            ))
+          ),
+        )}
       </div>
       {shelf.bottom > 0 && <div style={{ height: shelf.bottom }} aria-hidden />}
     </>
+  );
+}
+
+/**
+ * A pile's heading, in the flow between the rows.
+ *
+ * A line of the list rather than a label floating over it: it takes room, and
+ * the window has to be told exactly how much — `SECTION_HEADER_H` is the number
+ * the arithmetic walks *and* the height this renders at, so the two cannot
+ * drift apart. A heading a few pixels taller than the arithmetic believes would
+ * put every card below it out by that much, and the error would compound down
+ * the list, pile after pile.
+ *
+ * The whole line is the toggle: one target rather than a label with a chevron
+ * beside it, which is also what lets the chevron be a *state* instead of a
+ * control.
+ */
+function SectionHeading({
+  section,
+  collapsed,
+  onToggle,
+}: {
+  section: BookSection;
+  collapsed: boolean;
+  onToggle: (key: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      data-shelf-header={section.key}
+      aria-expanded={!collapsed}
+      onClick={() => onToggle(section.key)}
+      // Height and span are inline because both are read back: the window walks
+      // the list at `SECTION_HEADER_H`, and the heading has to take a line of
+      // its own whatever the column count happens to be.
+      style={{ height: SECTION_HEADER_H, gridColumn: "1 / -1" }}
+      className="focus-visible:focus-ring flex cursor-pointer items-end gap-1.5 pb-1 text-left"
+    >
+      <CaretDown
+        size={10}
+        weight="bold"
+        className={cn(
+          "text-text-3 mb-0.5 shrink-0 transition-transform duration-200",
+          collapsed && "-rotate-90",
+        )}
+      />
+      <span className="text-text-1 text-xs font-medium">{section.label}</span>
+      <span className="text-text-3 text-xs">{section.count} 本</span>
+    </button>
   );
 }
 

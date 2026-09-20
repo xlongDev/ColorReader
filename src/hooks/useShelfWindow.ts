@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { flushSync } from "react-dom";
 
+import {
+  SECTION_HEADER_H,
+  shelfItems,
+  type BookSection,
+  type ShelfItem,
+} from "@/features/library/group";
 import { useBookHandoff } from "@/stores/book-handoff";
 
 /**
- * Which cards the shelf actually renders.
+ * Which lines of the shelf actually render.
  *
  * A 500-book shelf mounted all 500 tiles — 500 motion trees, 500 covers, 500
  * layout projections — and the shelf's cost is linear in that number (measured
@@ -12,14 +18,23 @@ import { useBookHandoff } from "@/stores/book-handoff";
  * at 4× CPU throttle). Nothing about the page needs the other 476: the scroller
  * is 614px tall and shows twelve cards.
  *
- * So the grid renders the rows the viewport can reach, plus `OVERSCAN_ROWS`
+ * So the grid renders the lines the viewport can reach, plus `OVERSCAN_ROWS`
  * either side, and holds the rest of the list open with two spacers of exactly
- * the height it would have had anyway. Slicing by *whole rows* — never mid-row —
- * leaves the CSS grid in charge of the columns: no absolute positioning, no
- * transforms, and the responsive breakpoints stay where they are declared.
+ * the height it would have had anyway. Slicing by *whole lines* — never
+ * mid-row — leaves the CSS grid in charge of the columns: no absolute
+ * positioning, no transforms, and the responsive breakpoints stay where they
+ * are declared.
+ *
+ * A line is a section heading or a row of cards (`ShelfItem`), and that is what
+ * separates this from the plain division it started as: two kinds of line mean
+ * two heights, so there is no longer a single pitch to multiply a row number
+ * by. Positions come from a running offset over the items — cheap, exact, and
+ * computed from the list rather than read back out of the DOM. The row pitch is
+ * still measured (a card's height follows the column width, which follows the
+ * pane), but it is now the only measurement left in here.
  */
 
-/** Rows rendered beyond the viewport, on each side. */
+/** Lines rendered beyond the viewport, on each side. */
 const OVERSCAN_ROWS = 2;
 
 /** A viewport to hold open before one has been measured. Only ever seen on the
@@ -40,7 +55,9 @@ const FALLBACK_VIEWPORT = 800;
 const FALLBACK_PITCH = 280;
 
 interface ShelfWindow {
-  /** First card rendered, and one past the last. */
+  /** The lines to draw, and which of them to draw. */
+  items: ShelfItem[];
+  /** First line rendered, and one past the last. */
   start: number;
   end: number;
   /** Room held open above and below them, in px. */
@@ -80,15 +97,68 @@ interface ShelfWindow {
    * a window drag cannot start a FLIP storm across the tree. The sidebar
    * moving does not change the window, so it is not blocked — which is the
    * whole of the difference between the two gestures.
+   *
+   * It also decides where every row break falls, so the item list is only ever
+   * as good as this number: it is read before the items are cut.
    */
   columns: number;
 }
 
+/** The last item that starts at or before `offset`. */
+function itemAt(off: number[], offset: number): number {
+  let low = 0;
+  let high = off.length - 1;
+  let found = 0;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if ((off[mid] ?? 0) <= offset) {
+      found = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+  // `off` has one more entry than there are items; the last of them is the
+  // list's own height and never an item.
+  return Math.min(found, off.length - 2);
+}
+
 /**
+ * Whether two item lists describe the same shelf.
+ *
+ * Compared line by line rather than by reference: the list is rebuilt on every
+ * read — it has to be, since it is cut by a column count that is measured — so
+ * a reference check would report a change on every scrolling frame and
+ * re-render the shelf under the reader's hand.
+ *
+ * Sections are compared by reference, which is sound because they come from the
+ * caller's own memo: an unchanged shelf hands back the same objects.
+ */
+function sameItems(a: ShelfItem[], b: ShelfItem[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    const next = a[i];
+    const now = b[i];
+    if (next === undefined || now === undefined || next.kind !== now.kind) return false;
+    if (next.kind === "row" && now.kind === "row") {
+      if (next.from !== now.from || next.to !== now.to) return false;
+    } else if (next.kind === "header" && now.kind === "header" && next.section !== now.section) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * @param sections the piles the shelf is in, in card order and with the index
+ * each one starts at; empty when the shelf is not grouped.
  * @param total how many books the current view has.
- * @param contentKey what the list *is* — filter, sort, search, label. A change
- * means the tiles arriving from here on are the shelf showing something else,
- * and should animate in; a change of window is scrolling, and should not.
+ * @param collapsed the piles whose cards are folded away.
+ * @param contentKey what the list *is* — filter, sort, search, label, grouping.
+ * A change means the tiles arriving from here on are the shelf showing something
+ * else, and should animate in; a change of window is scrolling, and should not.
+ * Note that folding a pile is *not* in the key: the shelf is showing the same
+ * books either way, so nothing should replay its entrance.
  * @param initialScroll where the shelf is about to be scrolled to, from the
  * place the caller remembers. The first frame has no geometry to derive a window
  * from, and a scroller whose content is too short **clamps** the scroll being
@@ -103,14 +173,20 @@ interface ShelfWindow {
 export function useShelfWindow(
   scrollerRef: RefObject<HTMLElement | null>,
   gridRef: RefObject<HTMLElement | null>,
+  sections: BookSection[],
   total: number,
+  collapsed: ReadonlySet<string>,
   contentKey: string,
   initialScroll: number,
   layout: "grid" | "list",
 ) {
   const [range, setRange] = useState<ShelfWindow>(() => ({
+    // Cut at one column: nothing has been measured yet, and one column is the
+    // arrangement that puts the most cards in the probe's two lines — which is
+    // the only thing the first frame is for.
+    items: shelfItems(sections, total, 1, collapsed),
     start: 0,
-    end: Math.min(1, total),
+    end: 2,
     top: 0,
     bottom: initialScroll + FALLBACK_VIEWPORT,
     columns: 0,
@@ -136,7 +212,6 @@ export function useShelfWindow(
     const scroller = scrollerRef.current;
     const grid = gridRef.current;
     if (!scroller || !grid) return null;
-    const card = grid.firstElementChild as HTMLElement | null;
     const style = getComputedStyle(grid);
     const columnGap = Number.parseFloat(style.columnGap) || 0;
     // The track as the stylesheet *declares* it, not as the grid resolved it.
@@ -155,41 +230,69 @@ export function useShelfWindow(
     // count cannot feed back into it. This is `auto-fill`'s own arithmetic,
     // done here so the result can be handed back to React.
     const available = grid.getBoundingClientRect().width;
-    const count =
+    const columns =
       layout === "list"
         ? 1
         : Math.max(1, Math.floor((available + columnGap) / (track + columnGap)));
     const gap = Number.parseFloat(style.rowGap) || 0;
+    // The first *card*, not the first child: a heading may be the first thing in
+    // the grid now, and a heading is not what a row pitch is made of.
     // `offsetHeight`, not a rectangle: a card is scaled while it enters, and a
-    // rectangle would report the scaled height as the row pitch. A lone card is
-    // still as wide as its column, so one row is enough to measure with.
+    // rectangle would report the scaled height as the row pitch.
+    let card: HTMLElement | null = null;
+    for (const child of grid.children) {
+      if (!child.hasAttribute("data-shelf-header")) {
+        card = child as HTMLElement;
+        break;
+      }
+    }
     const pitch = card ? card.offsetHeight + gap : FALLBACK_PITCH;
     if (!(pitch > 0)) return null;
-    const totalRows = Math.ceil(total / count);
-    // Anchored on the *first row of the list*: the grid sits below the rows the
-    // window is holding open, so the spacer that is actually in the DOM is taken
-    // back out of its position. What is left is a property of the page — how much
-    // sits above the list's first row — so every read is derived from the DOM
-    // rather than compounded from the last one, and a row measured a frame late
-    // (or a tile leaving a frame late) cannot make it drift.
-    const gridTop =
-      grid.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
-    const rowZero = gridTop - shown.current.top;
-    const firstRow = Math.round((scroller.scrollTop - rowZero) / pitch);
-    const onScreen = Math.max(1, Math.ceil(scroller.clientHeight / pitch));
-    const startRow = Math.max(0, firstRow - OVERSCAN_ROWS);
-    const endRow = Math.min(
-      totalRows,
-      Math.max(startRow + 1, firstRow + onScreen + OVERSCAN_ROWS + 1),
-    );
+
+    const items = shelfItems(sections, total, columns, collapsed);
+    if (items.length === 0) {
+      return { items, start: 0, end: 0, top: 0, bottom: 0, columns };
+    }
+    // `off[i]` is where line `i` begins, and the one extra entry is the end of
+    // the list. A row's step is the pitch, which already carries the gap below
+    // it; a heading is the one line whose height arrives *without* a gap, so it
+    // takes one — the grid puts a gap after it exactly as it does between two
+    // rows of cards. Counting that gap twice for rows is not a rounding error:
+    // measured over 84 lines it put the list 2 KB taller than it draws, which
+    // clamped every scroll to the bottom short of the end.
+    const off: number[] = [0];
+    for (let i = 0; i < items.length; i += 1) {
+      const item = items[i];
+      const step = item?.kind === "header" ? SECTION_HEADER_H + gap : pitch;
+      off.push((off[i] ?? 0) + step);
+    }
+    const height = off[items.length] ?? 0;
+
+    // Where the list's first line sits in the scroller's own content. Taken
+    // back out of the DOM rather than compounded from the last read — the
+    // spacer that is in there right now is subtracted — so a line measured a
+    // frame late, or a tile leaving a frame late, cannot make it drift.
+    const listTop =
+      grid.getBoundingClientRect().top -
+      scroller.getBoundingClientRect().top +
+      scroller.scrollTop -
+      shown.current.top;
+    const at = scroller.scrollTop - listTop;
+    const slack = OVERSCAN_ROWS * pitch;
+    const viewport = scroller.clientHeight || FALLBACK_VIEWPORT;
+    const start = itemAt(off, Math.max(0, at - slack));
+    let end = start;
+    while (end < items.length && (off[end] ?? 0) < at + viewport + slack) end += 1;
+    if (end <= start) end = Math.min(items.length, start + 1);
     return {
-      start: startRow * count,
-      end: Math.min(total, endRow * count),
-      top: startRow * pitch,
-      bottom: (totalRows - endRow) * pitch,
-      columns: count,
+      items,
+      start,
+      end,
+      top: off[start] ?? 0,
+      bottom: height - (off[end] ?? 0),
+      columns,
     };
-  }, [scrollerRef, gridRef, total, layout]);
+  }, [scrollerRef, gridRef, sections, total, collapsed, layout]);
 
   const sync = useCallback(() => {
     const next = read();
@@ -200,10 +303,11 @@ export function useShelfWindow(
       next.end === now.end &&
       next.top === now.top &&
       next.bottom === now.bottom &&
-      // See `ShelfWindow.columns`: the count is *rendered from*, not just
-      // compared, so a change here has to reach the DOM even when the window
-      // range it produces is identical.
-      next.columns === now.columns
+      next.columns === now.columns &&
+      // Folding a pile changes the lines without necessarily moving the window
+      // into them — measured, `start` and `end` both stay put when a pile is
+      // folded out from under the fold.
+      sameItems(next.items, now.items)
     ) {
       return;
     }
@@ -213,7 +317,7 @@ export function useShelfWindow(
 
   /**
    * Before paint, so the first frame a reader sees already has the window and
-   * the height the geometry implies, and not the single-card probe that stood in
+   * the height the geometry implies, and not the two-line probe that stood in
    * for them. The caller must restore the shelf's scroll position in a layout
    * effect written *before* this hook is called: effects run in the order they
    * are written, and a window measured before that restore is the top of the
@@ -249,9 +353,9 @@ export function useShelfWindow(
     // — which is also the signal that there is a card to measure at last (the
     // window can only be read once something is rendered). Reading is cheap and
     // the state update is skipped when nothing changed, which is what keeps
-    // this from looping on its own re-render. This effect is rebuilt when
-    // `total` or `layout` changes, which is the only way the grid can come, go
-    // or change shape.
+    // this from looping on its own re-render. This effect is rebuilt when the
+    // list or its shape changes, which is the only way the grid can come, go or
+    // change height.
     const observer = new ResizeObserver(() => sync());
     observer.observe(scroller);
     if (gridRef.current) observer.observe(gridRef.current);
@@ -267,6 +371,7 @@ export function useShelfWindow(
   }, [flying, sync]);
 
   return {
+    items: range.items,
     start: range.start,
     end: range.end,
     top: range.top,

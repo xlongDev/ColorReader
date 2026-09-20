@@ -23,6 +23,7 @@ import { ShelfToolbar } from "@/features/library/ShelfToolbar";
 import { TagBar } from "@/features/library/TagBar";
 import { DeleteBookDialog } from "@/features/library/BookCard";
 import { pickContinueReading, sortOptions, titleForFilter } from "@/features/library/format";
+import { shelfSections, type ShelfGroup } from "@/features/library/group";
 import { batchNeedsPassword } from "@/features/library/pack";
 import { buildBookQuery, type LibraryFilter } from "@/features/library/shelfQuery";
 import { useShelfSelection } from "@/features/library/useShelfSelection";
@@ -173,6 +174,25 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
    *  changed. Reversing the array gives all seven both directions for free,
    *  with no second `ORDER BY` per option. */
   const [reversed, setReversed] = useState(false);
+  /** The piles the shelf is shown in, if any; see `group.ts` for the
+   *  dimensions. Kept beside the order rather than in the settings store: like
+   *  the order, it is how this visit is reading the shelf, not a preference. */
+  const [group, setGroup] = useState<ShelfGroup>("none");
+  /** The piles whose cards are folded away, by section key. Beside the grouping
+   *  rather than in the settings store, for the same reason: which piles a
+   *  reader has folded shut is how this visit is reading the shelf.
+   *
+   *  Not cleared when the grouping changes: keys from another dimension simply
+   *  match nothing, and coming back to this one finds the piles as they were. */
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const toggleSection = useCallback((key: string) => {
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
   const defaultDesc = sortOptions.find((option) => option.value === sort)?.desc ?? false;
   const descending = defaultDesc !== reversed;
   const [deleteTarget, setDeleteTarget] = useState<BookSummary | null>(null);
@@ -218,24 +238,44 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     () => (reversed ? (books.data ?? NO_BOOKS).toReversed() : (books.data ?? NO_BOOKS)),
     [books.data, reversed],
   );
+  /**
+   * The shelf as piles.
+   *
+   * `cards` is the same books in a different order — every dimension is
+   * exclusive, so nothing is counted twice and the grid keeps rendering one
+   * card per book, keyed by book id. `sections` is where each pile begins, and
+   * that is what the window cuts the list into lines with: a heading takes a
+   * line of its own and the cards of a pile are cut *within* it, so a pile
+   * always starts on a fresh line.
+   *
+   * The order is chosen first (`list`) and grouping reorders the piles, never
+   * the books inside them — the two controls answer different questions.
+   */
+  const { cards, sections } = useMemo(() => shelfSections(list, group), [list, group]);
   const shelfLayout = useSettings((s) => s.shelfLayout);
   const setShelfLayout = useSettings((s) => s.setShelfLayout);
   const continueReading = filter === "all" ? pickContinueReading(list) : undefined;
 
   /**
-   * Only the cards the viewport can reach are rendered (see `useShelfWindow`);
+   * Only the lines the viewport can reach are rendered (see `useShelfWindow`);
    * the rest of the list is held open by the two spacers in `ShelfGrid`.
    *
    * Declared *here*, after the scroll restore above: the window has to be
    * measured from the restored position. Effects run in the order they are
    * written, and a window measured before the restore would be the top of the
    * list — which is where the cover flying home would then fail to find a tile.
+   *
+   * The grouping is *not* part of the content key: folding a pile changes what
+   * is drawn but not which books are on the shelf, so nothing should replay its
+   * entrance over it.
    */
   const shelf = useShelfWindow(
     scrollerRef,
     gridRef,
-    list.length,
-    `${filter}|${sort}|${reversed}|${search}|${tag ?? ""}`,
+    sections,
+    cards.length,
+    collapsed,
+    `${filter}|${sort}|${reversed}|${group}|${search}|${tag ?? ""}`,
     shelfScroll.get(filter) ?? 0,
     shelfLayout,
   );
@@ -246,10 +286,10 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
    * the whole list rather than the window, because a window that scrolls into
    * tagged books would otherwise change the row height under the reader.
    */
-  const tagRow = useMemo(() => list.some((book) => book.tags.length > 0), [list]);
+  const tagRow = useMemo(() => cards.some((book) => book.tags.length > 0), [cards]);
 
   const selection = useShelfSelection({
-    list,
+    list: cards,
     onFavorite: (ids, favorite) => {
       for (const id of ids) setFavorite.mutate({ id, favorite });
     },
@@ -318,6 +358,8 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           onSort={setSort}
           descending={descending}
           onDescending={(next) => setReversed(next !== defaultDesc)}
+          group={group}
+          onGroup={setGroup}
           layout={shelfLayout}
           onLayout={setShelfLayout}
           managing={selection.managing}
@@ -325,15 +367,25 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           stats={stats.data}
         />
 
+        {/* The headings live inside the grid, as lines of it — see
+            `ShelfGrid`. This used to be a sticky bar floating over the top,
+            which cost the window nothing but could only ever name one pile at
+            a time: the boundary had to go past before the reader learned what
+            was under it. A heading in the flow shows the pile *and* where the
+            next one starts, which is the thing a reader is actually looking
+            for, and it was worth rewriting the window's arithmetic for. */}
+
         <ShelfGrid
           pending={books.isPending}
           error={books.error}
           search={search}
-          list={list}
+          list={cards}
           shelf={shelf}
           gridRef={gridRef}
           layout={shelfLayout}
           tagRow={tagRow}
+          collapsed={collapsed}
+          onToggleSection={toggleSection}
           managing={selection.managing}
           selected={selection.selected}
           busy={setFavorite.isPending || deleteBook.isPending}

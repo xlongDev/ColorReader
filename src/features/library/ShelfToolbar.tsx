@@ -7,12 +7,14 @@ import {
   MagnifyingGlass,
   Rows,
   SquaresFour,
+  StackSimple,
   X,
 } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { sortOptions } from "@/features/library/format";
+import { groupOptions, type ShelfGroup } from "@/features/library/group";
 import { SPRING } from "@/lib/motion";
 import { cn } from "@/lib/cn";
 import type { useLibraryStats } from "@/hooks/useLibrary";
@@ -29,6 +31,8 @@ export function ShelfToolbar({
   onSort,
   descending,
   onDescending,
+  group,
+  onGroup,
   layout,
   onLayout,
   managing,
@@ -42,6 +46,8 @@ export function ShelfToolbar({
   /** True while the shelf is pointing the way `descending` says. */
   descending: boolean;
   onDescending: (value: boolean) => void;
+  group: ShelfGroup;
+  onGroup: (value: ShelfGroup) => void;
   layout: "grid" | "list";
   onLayout: (value: "grid" | "list") => void;
   managing: boolean;
@@ -116,6 +122,37 @@ export function ShelfToolbar({
         {descending ? <ArrowDown size={13} /> : <ArrowUp size={13} />}
         {descending ? "降序" : "升序"}
       </button>
+
+      {/* Grouping. Sections, not order: with a group chosen the shelf is cut
+          into piles and each pile keeps the current order inside it, so the two
+          controls answer different questions and combine.
+
+          A plain `<select>` beside the sort one rather than a segmented
+          control — four options, each two to four characters, which is more
+          than a stadium holds. The icon is what tells the two dropdowns apart
+          at a glance, since they read the same otherwise. */}
+      <div className="border-hairline bg-surface-1 relative inline-flex h-9 items-center rounded-md border">
+        <StackSimple
+          size={13}
+          className="text-text-3 pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
+        />
+        <select
+          aria-label="分组方式"
+          value={group}
+          onChange={(event) => onGroup(event.target.value as ShelfGroup)}
+          className="text-text-1 appearance-none bg-transparent pr-7 pl-7 text-sm outline-none [&>option]:text-black"
+        >
+          {groupOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <CaretDown
+          size={12}
+          className="text-text-3 pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2"
+        />
+      </div>
 
       {/* Shelf layout: grid tiles (cover-on-top) or single-column rows.
           Same `layoutId` highlight as the sidebar's theme pill: one
