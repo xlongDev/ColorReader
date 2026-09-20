@@ -14,13 +14,21 @@ export function titleForFilter(filter: ShelfFilter): { title: string; subtitle: 
   return TITLES[filter];
 }
 
-export const sortOptions: { value: LibrarySort; label: string }[] = [
-  { value: "recentlyAdded", label: "最近添加" },
-  { value: "recentlyRead", label: "最近阅读" },
-  { value: "titleAsc", label: "书名" },
-  { value: "authorAsc", label: "作者" },
-  { value: "formatAsc", label: "文件格式" },
-  { value: "sizeDesc", label: "文件大小" },
+/**
+ * The shelf's orders, and the direction each one comes back in.
+ *
+ * `desc` is what the button reads to say which way the shelf is currently
+ * pointing: 最近添加 and 文件大小 are already descending, so a toggle that
+ * called the untouched order "升序" would be lying about the list on screen.
+ */
+export const sortOptions: { value: LibrarySort; label: string; desc: boolean }[] = [
+  { value: "recentlyAdded", label: "最近添加", desc: true },
+  { value: "recentlyRead", label: "最近阅读", desc: true },
+  { value: "progressDesc", label: "阅读进度", desc: true },
+  { value: "titleAsc", label: "书名", desc: false },
+  { value: "authorAsc", label: "作者", desc: false },
+  { value: "formatAsc", label: "文件格式", desc: false },
+  { value: "sizeDesc", label: "文件大小", desc: true },
 ];
 
 export function formatFileSize(bytes: number): string {

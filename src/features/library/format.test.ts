@@ -74,6 +74,7 @@ describe("sortOptions", () => {
     expect(sortOptions.map((option) => option.value)).toEqual([
       "recentlyAdded",
       "recentlyRead",
+      "progressDesc",
       "titleAsc",
       "authorAsc",
       "formatAsc",

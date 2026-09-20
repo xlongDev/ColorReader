@@ -22,7 +22,7 @@ import { ShelfHeader } from "@/features/library/ShelfHeader";
 import { ShelfToolbar } from "@/features/library/ShelfToolbar";
 import { TagBar } from "@/features/library/TagBar";
 import { DeleteBookDialog } from "@/features/library/BookCard";
-import { pickContinueReading, titleForFilter } from "@/features/library/format";
+import { pickContinueReading, sortOptions, titleForFilter } from "@/features/library/format";
 import { batchNeedsPassword } from "@/features/library/pack";
 import { buildBookQuery, type LibraryFilter } from "@/features/library/shelfQuery";
 import { useShelfSelection } from "@/features/library/useShelfSelection";
@@ -166,6 +166,15 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const [now, setNow] = useState(() => new Date());
   const [search, setSearch] = useState("");
   const [sort, setSort] = useState<LibrarySort>("recentlyAdded");
+  /** True while the shelf reads the backend's order backwards. Kept as the
+   *  flip rather than as a direction because every order arrives in its own
+   *  one — 最近添加 is already descending, 书名 already ascending — and a
+   *  stored "descending" would have to be recomputed whenever the order
+   *  changed. Reversing the array gives all seven both directions for free,
+   *  with no second `ORDER BY` per option. */
+  const [reversed, setReversed] = useState(false);
+  const defaultDesc = sortOptions.find((option) => option.value === sort)?.desc ?? false;
+  const descending = defaultDesc !== reversed;
   const [deleteTarget, setDeleteTarget] = useState<BookSummary | null>(null);
   const [exportTarget, setExportTarget] = useState<BookSummary | null>(null);
   const [lockedBatch, setLockedBatch] = useState<string[] | null>(null);
@@ -205,7 +214,10 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const progress = useImportProgress();
   usePdfCovers(books.data ?? []);
 
-  const list = books.data ?? NO_BOOKS;
+  const list = useMemo(
+    () => (reversed ? (books.data ?? NO_BOOKS).toReversed() : (books.data ?? NO_BOOKS)),
+    [books.data, reversed],
+  );
   const shelfLayout = useSettings((s) => s.shelfLayout);
   const setShelfLayout = useSettings((s) => s.setShelfLayout);
   const continueReading = filter === "all" ? pickContinueReading(list) : undefined;
@@ -223,7 +235,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     scrollerRef,
     gridRef,
     list.length,
-    `${filter}|${sort}|${search}|${tag ?? ""}`,
+    `${filter}|${sort}|${reversed}|${search}|${tag ?? ""}`,
     shelfScroll.get(filter) ?? 0,
     shelfLayout,
   );
@@ -304,6 +316,8 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           onSearch={setSearch}
           sort={sort}
           onSort={setSort}
+          descending={descending}
+          onDescending={(next) => setReversed(next !== defaultDesc)}
           layout={shelfLayout}
           onLayout={setShelfLayout}
           managing={selection.managing}

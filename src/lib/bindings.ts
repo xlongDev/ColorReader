@@ -797,6 +797,7 @@ export type LibraryFilter = "all" | "recent" | "favorites";
 export type LibrarySort =
   | "recentlyAdded"
   | "recentlyRead"
+  | "progressDesc"
   | "titleAsc"
   | "authorAsc"
   | "oldestAdded"

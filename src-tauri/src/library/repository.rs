@@ -89,6 +89,7 @@ pub enum LibrarySort {
     #[default]
     RecentlyAdded,
     RecentlyRead,
+    ProgressDesc,
     TitleAsc,
     AuthorAsc,
     OldestAdded,
@@ -103,6 +104,12 @@ impl LibrarySort {
         match self {
             LibrarySort::RecentlyAdded => "b.added_at DESC, b.sort_title ASC",
             LibrarySort::RecentlyRead => "b.last_read_at DESC, b.added_at DESC, b.sort_title ASC",
+            // Furthest along first: the question this order answers is which
+            // book is closest to the end (or, reversed, which has barely been
+            // started). Unread books sink to the bottom in both directions.
+            LibrarySort::ProgressDesc => {
+                "b.progress DESC, b.last_read_at DESC, b.sort_title COLLATE NOCASE ASC"
+            }
             LibrarySort::TitleAsc => "b.sort_title COLLATE NOCASE ASC",
             LibrarySort::AuthorAsc => {
                 "(SELECT a.sort_name FROM book_authors ba
@@ -731,6 +738,27 @@ mod tests {
             let ids: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
             assert_eq!(ids, ["b2", "b1"], "{sort:?} 同键时按书名");
         }
+    }
+
+    /// 进度排序：进度高的在前，没读过的（进度相同）沉底并按阅读时间回退。
+    #[test]
+    fn progress_sort_puts_the_furthest_along_first() {
+        let conn = seed();
+        add(&conn, "b1", "刚开始", &[], "h1");
+        add(&conn, "b2", "快读完", &[], "h2");
+        add(&conn, "b3", "读完了", &[], "h3");
+        add(&conn, "b4", "没动过", &[], "h4");
+        conn.execute("UPDATE books SET progress = 0.1, last_read_at = 100 WHERE id = 'b1'", [])
+            .expect("touch");
+        conn.execute("UPDATE books SET progress = 0.8, last_read_at = 200 WHERE id = 'b2'", [])
+            .expect("touch");
+        conn.execute("UPDATE books SET progress = 1.0 WHERE id = 'b3'", []).expect("touch");
+
+        let books =
+            list(&conn, &BookQuery { sort: LibrarySort::ProgressDesc, ..Default::default() })
+                .expect("list");
+        let ids: Vec<&str> = books.iter().map(|b| b.id.as_str()).collect();
+        assert_eq!(ids, ["b3", "b2", "b1", "b4"], "进度从高到低，未读沉底");
     }
 
     #[test]

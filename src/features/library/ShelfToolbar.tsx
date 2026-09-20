@@ -1,6 +1,14 @@
 import { useReducedMotion } from "motion/react";
 import { motion } from "motion/react";
-import { CaretDown, MagnifyingGlass, Rows, SquaresFour, X } from "@phosphor-icons/react";
+import {
+  ArrowDown,
+  ArrowUp,
+  CaretDown,
+  MagnifyingGlass,
+  Rows,
+  SquaresFour,
+  X,
+} from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
@@ -19,6 +27,8 @@ export function ShelfToolbar({
   onSearch,
   sort,
   onSort,
+  descending,
+  onDescending,
   layout,
   onLayout,
   managing,
@@ -29,6 +39,9 @@ export function ShelfToolbar({
   onSearch: (value: string) => void;
   sort: LibrarySort;
   onSort: (value: LibrarySort) => void;
+  /** True while the shelf is pointing the way `descending` says. */
+  descending: boolean;
+  onDescending: (value: boolean) => void;
   layout: "grid" | "list";
   onLayout: (value: "grid" | "list") => void;
   managing: boolean;
@@ -80,6 +93,29 @@ export function ShelfToolbar({
           className="text-text-3 pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2"
         />
       </div>
+
+      {/* Direction. Flipping the whole array rather than asking SQL for a
+          second order per option: every order gains an ascending and a
+          descending side from one button, and no variant has to know which
+          way round it is.
+
+          The label reads the *effective* direction, not the flip — 最近添加
+          and 文件大小 already come back descending, so a toggle that called
+          the untouched order "升序" would be lying about the shelf. */}
+      <button
+        type="button"
+        aria-label={descending ? "当前降序，改为升序" : "当前升序，改为降序"}
+        title={descending ? "当前降序，点击改为升序" : "当前升序，点击改为降序"}
+        aria-pressed={descending}
+        onClick={() => onDescending(!descending)}
+        className={cn(
+          "border-hairline bg-surface-1 text-text-2 hover:text-text-1 focus-visible:focus-ring inline-flex h-9 items-center gap-1 rounded-md border px-2.5 text-sm transition-colors",
+          descending && "text-text-1",
+        )}
+      >
+        {descending ? <ArrowDown size={13} /> : <ArrowUp size={13} />}
+        {descending ? "降序" : "升序"}
+      </button>
 
       {/* Shelf layout: grid tiles (cover-on-top) or single-column rows.
           Same `layoutId` highlight as the sidebar's theme pill: one
