@@ -76,8 +76,28 @@ specta-typescript = "=0.0.12"
 # only, because DictionaryServices is macOS only. `core-foundation-sys` is
 # already in the tree (Tauri pulls it in), so this adds no new download — it just
 # makes the CFString calls in `dictionary.rs` nameable from here.
+#
+# The objc2 set below is the same story: Tauri/wry's whole macOS half is built on
+# them, so every crate here is already resolved in `Cargo.lock` — naming them
+# directly only buys visibility of the two frameworks the region snapshot needs
+# (`WKWebView.takeSnapshotWithConfiguration:`, `NSBitmapImageRep`), not new code.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation-sys = "0.8"
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", features = [
+  "NSData",
+  "NSDictionary",
+  "NSError",
+  "NSGeometry",
+  "NSString",
+] }
+objc2-app-kit = { version = "0.3.2", features = ["NSBitmapImageRep", "NSImage"] }
+objc2-web-kit = { version = "0.3.2", features = [
+  "WKWebView",
+  "WKSnapshotConfiguration",
+  "block2",
+] }
+block2 = "0.6.2"
 
 [dev-dependencies]
 

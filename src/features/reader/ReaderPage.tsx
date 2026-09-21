@@ -1921,6 +1921,20 @@ function ReaderView({
     background: surface.background,
     ...readerGlassVars(surface),
   } as CSSProperties;
+  // The paper colour the foliate turn's View Transition snapshots are backed
+  // with. It has to sit on the document root, not on the pane: `::view-transition`
+  // hangs off `html` and inherits from there, so a var on a descendant never
+  // reaches it — and only the night palette gives a section its own background
+  // to snapshot, which is why a light surface used to flash white (globals.css
+  // `--foliate-vt-bg`). `tint` rather than `background`: the latter may be a
+  // gradient or a photo, and this is a colour slot.
+  useEffect(() => {
+    const root = document.documentElement;
+    root.style.setProperty("--reader-page", surface.tint);
+    return () => {
+      root.style.removeProperty("--reader-page");
+    };
+  }, [surface.tint]);
   // The night switch is independent of the paper surface: colours always come
   // from the night palette, so a light theme can ask for a dark PDF too. On a
   // dark surface this resolves to the active surface itself. `tint` is the
@@ -2042,7 +2056,7 @@ function ReaderView({
   const transitionClass =
     pageTransition === "fade"
       ? "chapter-fade"
-      : pageTransition === "paper"
+      : pageTransition === "paper" || pageTransition === "flip"
         ? nav === 1
           ? "chapter-paper-fwd"
           : "chapter-paper-back"
@@ -2461,6 +2475,10 @@ function ReaderView({
             <button
               type="button"
               aria-label="上一页"
+              // Hovering chrome sitting on top of the pane, so a native
+              // snapshot of the pane would capture it: masked while one is
+              // taken (see `data-turn-mask` in globals.css).
+              data-turn-overlay
               onClick={() => flip(-1)}
               className={cn(
                 "focus-visible:focus-ring glass-solid shadow-panel text-text-2 hover:text-text-1 absolute top-1/2 left-3 z-20",
@@ -2474,6 +2492,7 @@ function ReaderView({
             <button
               type="button"
               aria-label="下一页"
+              data-turn-overlay
               onClick={() => flip(1)}
               className={cn(
                 "focus-visible:focus-ring glass-solid shadow-panel text-text-2 hover:text-text-1 absolute top-1/2 right-3 z-20",

@@ -166,12 +166,12 @@ describe("flipPage", () => {
     // A forward turn arrives from the right; a backward one from the left.
     expect(node.animate).toHaveBeenCalledWith(
       [{ transform: "translateX(100%)" }, { transform: "none" }],
-      expect.objectContaining({ duration: 300 }),
+      expect.objectContaining({ duration: 450 }),
     );
     flipPage(node, 0, "slide", -1, false);
     expect(node.animate).toHaveBeenLastCalledWith(
       [{ transform: "translateX(-100%)" }, { transform: "none" }],
-      expect.objectContaining({ duration: 300 }),
+      expect.objectContaining({ duration: 450 }),
     );
   });
 
@@ -182,16 +182,19 @@ describe("flipPage", () => {
     expect(node.animate).not.toHaveBeenCalled();
   });
 
-  it("swings the incoming page about the spine for the paper transition", () => {
-    const node = animated();
-    flipPage(node, 960, "paper", 1, false);
-    const frames = (node.animate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Keyframe[];
-    // A forward turn hinges on the left edge, and swings in from -10deg.
-    expect(frames[0]!.transformOrigin).toBe("left center");
-    expect(String(frames[0]!.transform)).toContain("rotateY(-10deg)");
-    expect(node.animate).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.objectContaining({ duration: 400 }),
-    );
-  });
+  it.each(["paper", "flip"] as const)(
+    "swings the incoming page about the spine for the %s transition",
+    (mode) => {
+      const node = animated();
+      flipPage(node, 960, mode, 1, false);
+      const frames = (node.animate as ReturnType<typeof vi.fn>).mock.calls[0]![0] as Keyframe[];
+      // A forward turn hinges on the left edge, and swings in from -10deg.
+      expect(frames[0]!.transformOrigin).toBe("left center");
+      expect(String(frames[0]!.transform)).toContain("rotateY(-10deg)");
+      expect(node.animate).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({ duration: 400 }),
+      );
+    },
+  );
 });

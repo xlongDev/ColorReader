@@ -147,6 +147,11 @@ declare module "foliate-js/view.js" {
     subpixelOffset: number;
     /** True parked on the very end of the book. */
     readonly atEnd: boolean;
+    /** True parked on the very beginning of the book. */
+    readonly atStart: boolean;
+    /** Page columns on screen: 2 under a double-page layout, and 1 on the
+     *  fixed-layout renderer, which has no columns to report. */
+    readonly columnCount?: number;
     /** Index of the section filling the viewport; drives TTS and selection. */
     readonly primaryIndex: number;
     /** Brings an anchor (Range or element) into view. */

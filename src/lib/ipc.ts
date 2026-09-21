@@ -15,10 +15,10 @@ import type {
  * from the Rust signature (`cargo test export_bindings`) — there is no
  * hand-written mirror left to drift out of step with the backend.
  *
- * Two are hand-written because they cannot be generated: `book_asset` and
+ * Three are hand-written because they cannot be generated: `book_asset` and
  * `book_source_file` return raw bytes over the binary channel (Rust returns
- * `tauri::ipc::Response`), a shape Specta cannot describe. They are therefore
- * excluded from codegen and typed here.
+ * `tauri::ipc::Response`), a shape Specta cannot describe, and the webview
+ * snapshot does too. They are therefore excluded from codegen and typed here.
  */
 export const ipc = {
   ...commands,
@@ -31,6 +31,19 @@ export const ipc = {
   /** The whole stored source file (binary channel); powers pdf.js rendering. */
   bookFile(id: string): Promise<ArrayBuffer> {
     return invoke<ArrayBuffer>("book_source_file", { id });
+  },
+
+  /**
+   * PNG snapshot of one region of the running webview, in viewport CSS px —
+   * the texture the 「仿真」page curl is drawn from (binary channel).
+   */
+  webviewCaptureRegion(region: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): Promise<ArrayBuffer> {
+    return invoke<ArrayBuffer>("webview_capture_region", { region });
   },
 };
 

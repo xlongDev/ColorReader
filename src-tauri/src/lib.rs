@@ -82,6 +82,7 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             commands::system::system_info,
+            commands::webview::webview_capture_region,
             commands::book::book_list,
             commands::book::book_get,
             commands::book::book_asset,

@@ -89,10 +89,15 @@ export function alignTail(
 /**
  * Performs one in-chapter page flip, honouring the page-transition setting:
  * "pan" keeps the native smooth scroll (the same clipped horizontal slide the
- * MOBI path uses via foliate's native pan); "slide", "fade" and "paper" jump
- * to the target page instantly and animate the new page in via WAAPI —
- * imperative, so a flip never re-renders or remounts the chapter — and "none"
- * jumps with no animation. Reduced motion always jumps instantly.
+ * MOBI path uses via foliate's native pan); "slide", "fade", "flip" and
+ * "paper" jump to the target page instantly and animate the new page in via
+ * WAAPI — imperative, so a flip never re-renders or remounts the chapter — and
+ * "none" jumps with no animation. Reduced motion always jumps instantly.
+ *
+ * There is nothing to snapshot here, so prose cannot tell「翻牌」from「仿真」:
+ * both swing the incoming page in about the spine (the foliate path turns the
+ * outgoing one). The slide length matches the foliate path's, so one setting
+ * reads the same in either renderer.
  */
 export function flipPage(
   el: HTMLElement,
@@ -114,12 +119,12 @@ export function flipPage(
   if (mode === "slide") {
     el.animate(
       [{ transform: `translateX(${dir === 1 ? "100%" : "-100%"})` }, { transform: "none" }],
-      { duration: 300, easing: SLIDE_EASING },
+      { duration: 450, easing: SLIDE_EASING },
     );
     return;
   }
-  // "fade" cross-dissolves the incoming page, "paper" swings it in about the
-  // spine.
+  // "fade" cross-dissolves the incoming page; "flip" and "paper" swing it in
+  // about the spine.
   const frames: Keyframe[] =
     mode === "fade"
       ? [{ opacity: 0 }, { opacity: 1 }]
@@ -132,7 +137,7 @@ export function flipPage(
           { opacity: 1, transform: "perspective(1200px) rotateY(0deg)" },
         ];
   el.animate(frames, {
-    duration: mode === "paper" ? 400 : 300,
+    duration: mode === "fade" ? 300 : 400,
     easing: "cubic-bezier(0.22, 1, 0.36, 1)",
   });
 }

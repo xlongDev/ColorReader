@@ -713,6 +713,92 @@ foliate-view[data-fxl-night]::part(filter) {
   filter: invert(1) hue-rotate(180deg);
 }
 
+/* -- foliate 的分层翻页动画 ------------------------------------------
+   「覆盖 / 淡入淡出 / 翻牌 / 仿真」（paginator 的 layered View Transition，
+   readest#555）把旧页快照画在 `::view-transition` 顶层里。顶层由文档根持有、
+   固定在视口上，**不受任何祖先 `overflow: hidden` 约束** —— 于是滑动出场的那
+   一页会越过阅读区，压住侧边栏、顶到窗口边缘（实测：阅读区 273..1267，快照滑
+   到 -224）。
+
+   裁剪只能落在它自己那一层上：`::view-transition-group(foliate-turn)` 的盒子
+   就是被快照的那个元素（我们的 foliate 宿主，正好等于阅读区），给它
+   `overflow: hidden` 就把这一组的三层（group / image-pair / old&new）一起裁
+   到阅读区里。翻页期间才会出现这个名字，所以不会碰到别的视图过渡。
+
+   顺带修掉一个同源问题：`翻牌` 的 `perspective` 会把书页朝读者一侧放大，同样
+   会鼓出阅读区（peel 那两种风格 fork 自己就是这么裁的）。 */
+html.foliate-vt::view-transition-group(foliate-turn) {
+  overflow: hidden;
+}
+
+/* 🔴 快照的底衬色。
+   快照只拍 foliate 宿主这一个元素，所以**书页没画到的地方在快照里是透明的**，
+   透出什么全靠 fork 给 `::view-transition-old/new` 铺的
+   `background: var(--foliate-vt-bg, Canvas)`。而这个变量由 `#vtSetup` 从
+   书页自己的 `--theme-bg-color` 读来 —— `foliateStyle.ts` **只在夜间配色下**
+   发布它（浅色页故意留在书自己的纸上，让透明 section 透出阅读表面，见该文件
+   顶部注释）。于是浅色表面上这个变量落到 `Canvas` 系统色 = **白**：翻页时那
+   张纸在浅色/纸质主题上白闪一下。
+
+   `--reader-page` 是 ReaderPage 按当前 surface 写在 `html` 上的那个色
+   （`surface.tint`，与 PDF night 用的是同一个「纯色代表」）。`!important`
+   用来压过 fork 写在 `html` 内联上的 `--foliate-vt-bg: Canvas`；fork 的
+   `#vtCleanup` 只 `removeProperty` 自己那个内联值，所以这条规则每回合都在。 */
+html.foliate-vt {
+  --foliate-vt-bg: var(--reader-page, Canvas) !important;
+}
+
+/* 时长。fork 自带的 300ms（slide）/ 420ms（curl）是给浏览器看的，对着 readest
+   桌面版（截屏翻页，默认 450ms）明显偏快 —— 翻完最后一帧还有余量，观感就是
+   「一顿就过去了」。这里按 readest 的量级放慢：覆盖与 readest 的截屏 slide 同
+   500ms，翻牌多给一点（它要多转 96 度）。
+   `!important` 同样是因为 fork 的样式表是运行时注入到 `head` 末尾的，同特异度
+   下它会赢。 */
+html.foliate-vt-slide.foliate-vt-forward::view-transition-old(foliate-turn),
+html.foliate-vt-slide.foliate-vt-backward::view-transition-new(foliate-turn) {
+  animation-duration: 500ms !important;
+}
+
+/* 「覆盖」= 新页盖上来，不是旧页滑走。
+   fork 的 slide 让**旧页**向左滑出：它半途被阅读区左缘裁掉，露出的其实是它自
+   己的右半张，看着就像「从中间往左走」—— 移动的是旧页的**右边界**，而读者期
+   待的是「从阅读区最右到最左」，那要由新页的**左边界**扫过。所以这里把两个方
+   向都改成：旧页原地不动（整个可见区域自始至终是完整的旧页），新页从进页方向
+   滑进来把它盖住 —— 前翻从右（下一页面朝右），后翻从左。
+   三个 `!important` 是必需的：fork 给 forward 的 old 定了 `animation` / `z-index`
+   / `box-shadow` 三件套（特异性 (0,2,1)），我们的规则 (0,3,2) 本就更高，但 fork
+   的样式表是运行时注入的，写 `!important` 才不受注入顺序摆布。 */
+html.foliate-vt-slide.foliate-vt-forward::view-transition-old(foliate-turn) {
+  z-index: auto !important;
+  animation: none !important;
+  box-shadow: none !important;
+}
+html.foliate-vt-slide.foliate-vt-forward::view-transition-new(foliate-turn) {
+  z-index: 1 !important;
+  animation: foliate-turn-slide-in-right 500ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both !important;
+  box-shadow: 0 0 24px rgba(0, 0, 0, 0.35) !important;
+}
+/* Right-to-left books page the other way: forward still means the next page,
+   which now arrives from the left. */
+html.foliate-vt-slide.foliate-vt-forward.foliate-vt-right::view-transition-new(foliate-turn) {
+  animation-name: foliate-turn-slide-in-left !important;
+}
+html.foliate-vt-curl.foliate-vt-forward::view-transition-old(foliate-turn),
+html.foliate-vt-curl.foliate-vt-backward::view-transition-new(foliate-turn) {
+  animation-duration: 500ms !important;
+}
+
+/* -- 原生截屏翻页的「屏蔽层」 ----------------------------------------
+   `仿真` 在桌面端走 `CapturedPageTurn`：阅读区被原生截屏成一张位图再卷走。
+   截屏拿的是**合成后的像素**，所以任何浮在阅读区上方的控件（翻页箭头就悬在
+   书页上）都会被烤进那张纸里，跟留在原地的真控件叠成两份。
+   `maskChrome` 给 `[data-reading-viewport]` 打上 `data-turn-mask`，截屏前
+   `visibility: hidden` 一帧、截完立刻撤掉 —— 只有这几百毫秒里会看不见。
+   （没东西要遮时 `maskChrome` 返回 `null`，那两帧的等待也一并省掉。） */
+[data-turn-mask] [data-turn-overlay] {
+  visibility: hidden;
+}
+
 /* Same opt-in on the prose path (FB2 / CBZ / TXT / MD), which paints its own
    paper and so never had the inversion — the switch has to mean the same
    thing whichever renderer is on screen. */

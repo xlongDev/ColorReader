@@ -8,6 +8,7 @@ import type { LayoutMode, PageTransition } from "./theme";
 import { speechUnits, unitsFromOffset, TTS_WASH_BOOK } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
 import { buildStyleSheet } from "./foliateStyle";
+import { CapturedPageTurn } from "./capturedTurn";
 import { markLoneFigures } from "./loneFigure";
 import type { FoliateStyle } from "./foliateStyle";
 import { inkWash, selectionBottom } from "./selection";
@@ -311,6 +312,17 @@ type Props = {
 };
 
 /**
+ * Whether this element still paints anything. The flip arrows fade themselves
+ * out two seconds after the last pointer event, and a turn that finds them gone
+ * has nothing to mask. An engine without `checkVisibility` says "paints" — a
+ * wasted paint wait beats arrows baked into the turning sheet.
+ */
+const paints = (node: HTMLElement) =>
+  typeof node.checkVisibility === "function"
+    ? node.checkVisibility({ opacityProperty: true })
+    : true;
+
+/**
  * Our page transitions onto foliate's turn pipeline.
  *
  * **`pan`** — foliate's native scroll pan (the default turn in stock foliate,
@@ -321,14 +333,27 @@ type Props = {
  * `overflow:hidden`, so the animation never bleeds into the sidebar — exactly
  * the EPUB prose path's `scrollTo({behavior:"smooth"})`.
  *
- * **`slide`（覆盖）/ `fade` / `paper`（仿真）** — the fork's layered View
- * Transition styles (readest#555): the outgoing page is snapshotted and
- * animated over the live incoming one. These paint in the viewport-fixed top
- * layer (escaping ancestor `overflow:hidden`), so the host is marked
- * `data-view-transition-root` and foliate's `#vtSetup` names that element
- * `foliate-turn`. The paginator gates them on `document.startViewTransition`
- * on its own (`#layeredTurn`); an engine without it falls back to the native
- * pan by itself.
+ * **`slide`（覆盖）/ `fade`** — the fork's layered View Transition styles
+ * (readest#555): the outgoing page is snapshotted and animated over the live
+ * incoming one. These paint in the viewport-fixed top layer (escaping ancestor
+ * `overflow:hidden`), so the host is marked `data-view-transition-root` and
+ * foliate's `#vtSetup` names that element `foliate-turn`; globals.css then
+ * clips that group back to the reading pane. The paginator gates them on
+ * `document.startViewTransition` on its own (`#layeredTurn`); an engine without
+ * it falls back to the native pan by itself.
+ *
+ * **`flip`（翻牌）** — `curl` in the table below, and *always* the View
+ * Transition: the sheet swings about the spine with perspective. A card flip,
+ * not a curl — a CSS transform cannot bend a sheet. This is what「仿真」was
+ * before it grew a real paper curl, kept as its own option under the name that
+ * describes what it actually does.
+ *
+ * **`paper`（仿真）** — the same View Transition, but here it is only the
+ * *browser* fallback: on the desktop build `CapturedPageTurn` takes the turn
+ * first — a native snapshot of the pane bent around a cylinder mesh in WebGL,
+ * which is what readest's desktop does. `turn-style` stays set so any turn that
+ * slips past the captured path (a partial step, a book boundary, a snapshot
+ * failure) still animates rather than jumping.
  *
  * `animated` is the master switch; without it (`none`) every turn is instant.
  */
@@ -337,6 +362,7 @@ const ANIMATED: Record<PageTransition, boolean> = {
   pan: true,
   slide: true,
   fade: true,
+  flip: true,
   paper: true,
 };
 const TURN_STYLE: Record<PageTransition, string | null> = {
@@ -344,6 +370,7 @@ const TURN_STYLE: Record<PageTransition, string | null> = {
   pan: null,
   slide: "slide",
   fade: "fade",
+  flip: "curl",
   paper: "curl",
 };
 
@@ -651,6 +678,10 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   const styleRef = useRef(style);
   const transitionRef = useRef(transition);
   const marginsRef = useRef({ x: marginX, y: marginY });
+  // Owned by the open effect but reached from the layout one: 「仿真」 is the
+  // only transition that parks a GPU surface, and it has to hand it back the
+  // moment the reader picks another.
+  const capturedRef = useRef<CapturedPageTurn | null>(null);
   const tocRef = useRef<FoliateTocEntry[]>([]);
   // Same reason as `report`: the TOC is announced from inside the open
   // effect, which must not re-run because a parent handed us a new closure.
@@ -925,9 +956,20 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     if (!host) return;
     let cancelled = false;
     let view: View | null = null;
+    // The captured-turn controller, created with the view (it needs its
+    // renderer) but disposed from the effect's own cleanup — an in-flight curl
+    // still holds a rAF and an overlay canvas over the pane. It also outlives
+    // the effect that applies layout, which is what turns it off again when
+    // 「仿真」 stops being the transition.
+    let captured: CapturedPageTurn | null = null;
+    // The page foliate last reported, half of what decides whether the
+    // controller's idle snapshot is still a picture of this page (it adds the
+    // typography and the pane's geometry itself).
+    const located = { current: "" };
 
     const onRelocate = (event: Event) => {
       const detail = (event as CustomEvent<FoliateRelocate>).detail;
+      located.current = detail.cfi ?? "";
       report.current?.({
         cfi: detail.cfi ?? "",
         fraction: detail.fraction ?? 0,
@@ -986,6 +1028,9 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         }
         if (cancelled) return;
         view = document.createElement("foliate-view") as View;
+        // A `const` for the callbacks below: TypeScript cannot narrow a `let`
+        // captured by a closure, and every one of them outlives this block.
+        const live = view;
         // Custom elements default to `display: inline`, which collapses the
         // paginator's size chain; the host box must be the viewport.
         view.style.cssText = "display:block;width:100%;height:100%";
@@ -1030,6 +1075,98 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         // The style effect predates the view, so a book opened straight into
         // the night palette needs the fixed-layout tint applied here too.
         syncPageInvert(view, styleRef.current);
+
+        // 「仿真」on the desktop build: instead of letting the paginator animate
+        // a View Transition, snapshot the reading pane natively and curl that
+        // bitmap away over the page the live view has already turned to
+        // (readest#555 — see `capturedTurn.ts`). Wrapping `next`/`prev` is what
+        // puts every turn on this path: the flip handle and the keyboard both
+        // arrive here, and so does foliate's own internal navigation.
+        //
+        // Read through `originals`, never through `view.next` — the two are
+        // about to be replaced by the wrappers below.
+        const originals: { next: () => Promise<void>; prev: () => Promise<void> } = {
+          next: view.next.bind(view),
+          prev: view.prev.bind(view),
+        };
+        const controller = new CapturedPageTurn({
+          pane: () => hostRef.current?.closest<HTMLElement>("[data-reading-content]") ?? null,
+          capture: (region) => ipc.webviewCaptureRegion(region),
+          columns: () => live.renderer?.columnCount ?? 1,
+          rtl: () => live.book?.dir === "rtl",
+          // The tint the paginator paints its page fill with — the paper every
+          // page is cut from, so the sheet's back reads as the same stock.
+          // Reading it here rather than off the pane's computed background
+          // covers the custom-image surface, which is a gradient and a photo
+          // with no colour layer of its own.
+          paper: () => styleRef.current.bg,
+          // What the pane is showing: foliate's own anchor for the page, plus
+          // the style the section was laid out in (`JSON.stringify` because the
+          // payload is all primitives and this runs once per turn). An empty
+          // anchor — foliate has not reported yet — disables the warm path.
+          key: () =>
+            located.current ? `${located.current}|${JSON.stringify(styleRef.current)}` : "",
+          maskChrome: () => {
+            const viewport = hostRef.current?.closest<HTMLElement>("[data-reading-viewport]");
+            if (!viewport) return null;
+            // Only what actually paints: the arrows fade themselves out two
+            // seconds after the last pointer event, so a turn from the keyboard
+            // (or after the reader has been still) finds them gone, and hiding
+            // them would buy nothing at the cost of a painted frame.
+            const overlays = [...viewport.querySelectorAll<HTMLElement>("[data-turn-overlay]")];
+            if (!overlays.some(paints)) return null;
+            viewport.setAttribute("data-turn-mask", "");
+            return () => viewport.removeAttribute("data-turn-mask");
+          },
+          navigate: async (forward) => {
+            // The paginator's animated paths (the push slide and the layered VT
+            // turns) all gate on the `animated` attribute; dropping it makes the
+            // underlying turn an instant jump, which is the point — the overlay
+            // hides it.
+            const pager = live.renderer;
+            if (!pager) return;
+            const wasAnimated = pager.hasAttribute("animated");
+            pager.removeAttribute("animated");
+            try {
+              await (forward ? originals.next() : originals.prev());
+            } finally {
+              if (wasAnimated) pager.setAttribute("animated", "");
+            }
+          },
+        });
+        captured = controller;
+        capturedRef.current = controller;
+        controller.setEnabled(transitionRef.current === "paper");
+        // Snapshot the page the book opened on, so the first tap is as quick as
+        // the ones after it (`capturedTurn.ts` also re-arms this once a turn
+        // has settled). Desktop only: a browser has no capture command, and
+        // asking for one there would retire the whole effect on a warning.
+        if (isDesktopRuntime) controller.warm();
+        const capturedTurn = async (forward: boolean, distance?: number) => {
+          if (cancelled) return;
+          const pager = live.renderer;
+          // An explicit `distance` is a partial step, not a page edge, and a
+          // book boundary has no page left to turn: both stay on the renderer's
+          // own animation.
+          const boundary = forward ? pager?.atEnd : pager?.atStart;
+          if (
+            distance === undefined &&
+            !boundary &&
+            transitionRef.current === "paper" &&
+            layoutRef.current !== "scroll" &&
+            isDesktopRuntime &&
+            (await controller.turn(forward)) === "turned"
+          ) {
+            return;
+          }
+          // Reached when the capture was refused or failed — never because
+          // another turn is still playing: the controller supersedes that one
+          // instead of dropping this one (`capturedTurn.ts`).
+          await (forward ? originals.next() : originals.prev());
+        };
+        live.next = (distance?: number) => capturedTurn(true, distance);
+        live.prev = (distance?: number) => capturedTurn(false, distance);
+
         tocRef.current = flattenToc(view.book.toc);
         tocReport.current?.(tocRef.current);
         syncAnnotations();
@@ -1040,6 +1177,9 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
 
     return () => {
       cancelled = true;
+      captured?.dispose();
+      captured = null;
+      capturedRef.current = null;
       viewRef.current = null;
       paintedRef.current = new Map();
       searchedRef.current = new Set();
@@ -1072,6 +1212,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     layoutRef.current = layout;
     transitionRef.current = transition;
     marginsRef.current = { x: marginX, y: marginY };
+    capturedRef.current?.setEnabled(transition === "paper");
     const view = viewRef.current;
     if (view) applyLayout(view, layout, transition, { x: marginX, y: marginY });
   }, [layout, transition, marginX, marginY]);
