@@ -347,6 +347,8 @@ export const commands = {
    *  the trailing days for the heat map.
    */
   statsReading: () => __TAURI_INVOKE<ReadingStats>("stats_reading"),
+  /**  `stats.clear` — drops every reading-time row, leaving the shelf alone. */
+  statsClear: () => __TAURI_INVOKE<null>("stats_clear"),
   /**  `sync.getConfig` */
   syncGetConfig: () => __TAURI_INVOKE<SyncConfig>("sync_get_config"),
   /**  `sync.setConfig` — returns the stored, normalized form. */

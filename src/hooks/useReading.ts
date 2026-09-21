@@ -61,6 +61,20 @@ function useRecordSession() {
 }
 
 /**
+ * Drops every reading-time row.
+ *
+ * The page asks first; this is the doing. Not silent-failing like the recorder:
+ * a reader who asked to clear and did not has to be told.
+ */
+export function useClearReadingStats() {
+  const invalidate = useInvalidateReading();
+  return useMutation({
+    mutationFn: () => (isDesktopRuntime ? ipc.statsClear() : Promise.resolve()),
+    onSuccess: invalidate,
+  });
+}
+
+/**
  * Reports reading time while `bookId` is open.
  *
  * Time counts only while the document is visible, and the residual batch is

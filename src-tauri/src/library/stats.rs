@@ -65,6 +65,17 @@ pub fn local_day() -> String {
     Local::now().format("%Y-%m-%d").to_string()
 }
 
+/// Drops every reading-time row.
+///
+/// The reader's way to start the counters over. Nothing but this module reads
+/// the table — books, progress, annotations and notes live elsewhere — so the
+/// delete has no fallout to weigh; it is still irreversible, and the UI says so
+/// before asking.
+pub fn clear(conn: &Connection) -> AppResult<()> {
+    conn.execute_batch("DELETE FROM reading_sessions")?;
+    Ok(())
+}
+
 /// Adds `seconds` to today's row for `book_id`.
 ///
 /// Non-positive amounts are ignored rather than rejected: the reader's flush
@@ -343,5 +354,24 @@ mod tests {
         assert_eq!(stats.top_books[0].book_id, "b");
         assert_eq!(stats.top_books[0].seconds, 660);
         assert_eq!(stats.top_books[0].title, "T");
+    }
+
+    #[test]
+    fn clear_empties_the_counters_and_keeps_the_books() {
+        let conn = seed();
+        record_on(&conn, 0, 60);
+        record_on(&conn, 1, 60);
+        clear(&conn).expect("clear");
+        let stats = reading_stats(&conn, WINDOW).expect("stats");
+        assert_eq!(stats.total_seconds, 0);
+        assert_eq!(stats.streak, 0);
+        assert_eq!(stats.best_streak, 0);
+        assert_eq!(stats.top_books.len(), 0);
+        // The book itself is someone else's table to delete.
+        assert_eq!(
+            conn.query_row("SELECT COUNT(*) FROM books", [], |r| r.get::<_, i64>(0))
+                .expect("count"),
+            1
+        );
     }
 }

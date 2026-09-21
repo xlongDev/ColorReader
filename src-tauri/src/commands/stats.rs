@@ -27,3 +27,10 @@ pub fn stats_record_session(
 pub fn stats_reading(state: State<'_, AppState>) -> AppResult<ReadingStats> {
     state.library.with(|conn| stats::reading_stats(conn, WINDOW_DAYS))
 }
+
+/// `stats.clear` — drops every reading-time row, leaving the shelf alone.
+#[tauri::command]
+#[specta::specta]
+pub fn stats_clear(state: State<'_, AppState>) -> AppResult<()> {
+    state.library.with(stats::clear)
+}

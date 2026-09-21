@@ -1,13 +1,16 @@
 import { Clock, Fire, CalendarBlank, TrendUp, BookOpen } from "@phosphor-icons/react";
 import { motion } from "motion/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { EmptyState } from "@/components/common/EmptyState";
+import { GlassButton } from "@/components/glass/button";
+import { GlassDialog } from "@/components/glass/overlay";
 import { GlassPanel } from "@/components/glass/panel";
 import { Reveal } from "@/components/motion/Reveal";
 import { useLibraryStats } from "@/hooks/useLibrary";
-import { useReadingStats } from "@/hooks/useReading";
+import { useClearReadingStats, useReadingStats } from "@/hooks/useReading";
+import { useToasts } from "@/stores/toasts";
 import type { DayTotal, TopBook } from "@/types/ipc";
 import { staggerDelay, useMotion } from "@/lib/motion";
 
@@ -245,6 +248,9 @@ export function StatsPage() {
   const navigate = useNavigate();
   const { data, isPending } = useReadingStats();
   const library = useLibraryStats();
+  const clear = useClearReadingStats();
+  const toast = useToasts((state) => state.push);
+  const [clearOpen, setClearOpen] = useState(false);
 
   const stats = data;
   const tracked = (stats?.totalSeconds ?? 0) > 0;
@@ -256,6 +262,17 @@ export function StatsPage() {
     null,
   );
   const openBook = (bookId: string) => navigate(`/reader?book=${bookId}`);
+
+  /** Irreversible, so it asks; the toast is the only feedback after the fact
+   *  because what it wiped is no longer on screen to show. */
+  const confirmClear = () => {
+    clear.mutate(undefined, {
+      onSuccess: () => {
+        setClearOpen(false);
+        toast({ tone: "success", message: "阅读时长已清除，书和笔记都还在" });
+      },
+    });
+  };
 
   return (
     <div className="flex h-full flex-col">
@@ -368,7 +385,45 @@ export function StatsPage() {
             </Reveal>
           </div>
         )}
+
+        {tracked && (
+          <div className="flex justify-end pt-1">
+            <button
+              type="button"
+              onClick={() => setClearOpen(true)}
+              className="focus-visible:focus-ring text-text-3 hover:text-danger rounded-lg px-2 py-1 text-[11px] transition-colors"
+            >
+              清除阅读数据
+            </button>
+          </div>
+        )}
       </div>
+
+      <GlassDialog
+        open={clearOpen}
+        onOpenChange={setClearOpen}
+        title="清除全部阅读时长？"
+        description="热力图、连续天数和最近在读都会归零，此操作无法撤销。书籍、进度、标注和笔记不受影响。"
+        widthClass="w-[min(92vw,420px)]"
+      >
+        <div className="flex justify-end gap-2">
+          <GlassButton
+            variant="subtle"
+            onClick={() => setClearOpen(false)}
+            disabled={clear.isPending}
+          >
+            取消
+          </GlassButton>
+          <GlassButton
+            variant="ghost"
+            className="text-danger"
+            onClick={confirmClear}
+            disabled={clear.isPending}
+          >
+            清除
+          </GlassButton>
+        </div>
+      </GlassDialog>
     </div>
   );
 }
