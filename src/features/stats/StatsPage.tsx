@@ -1,21 +1,23 @@
-import { Clock, Fire, CalendarBlank, TrendUp } from "@phosphor-icons/react";
+import { Clock, Fire, CalendarBlank, TrendUp, BookOpen } from "@phosphor-icons/react";
 import { motion } from "motion/react";
 import type { ReactNode } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassPanel } from "@/components/glass/panel";
 import { Reveal } from "@/components/motion/Reveal";
 import { useLibraryStats } from "@/hooks/useLibrary";
 import { useReadingStats } from "@/hooks/useReading";
-import type { DayTotal } from "@/types/ipc";
+import type { DayTotal, TopBook } from "@/types/ipc";
 import { staggerDelay, useMotion } from "@/lib/motion";
 
 /**
- * Reading stats: how much time went into reading, and when.
+ * Reading stats: how much time went into reading, and where it went.
  *
- * The heat map is the point of the page. Four numbers alone are a scoreboard
- * nobody acts on; a half year of squares shows rhythm, and rhythm is what
- * makes a reader come back tomorrow.
+ * The heat map is the anchor — half a year of squares shows the rhythm that
+ * brings a reader back tomorrow. Around it: the same rhythm at day scale
+ * (trailing month as bars) and at book scale (the trailing-month ranking),
+ * so the page answers "how am I doing" and "what was I reading" together.
  */
 
 /** Cell size and gap of the heat map, in px. */
@@ -36,6 +38,11 @@ function duration(seconds: number): string {
 function dayLabel(day: string): string {
   const [, month, date] = day.split("-");
   return `${Number(month)} 月 ${Number(date)} 日`;
+}
+
+function shortDay(day: string): string {
+  const [, month, date] = day.split("-");
+  return `${Number(month)}/${Number(date)}`;
 }
 
 interface MetricProps {
@@ -59,7 +66,7 @@ function Metric({ icon, label, value, hint, delay = 0 }: MetricProps) {
       <span className="text-text-3 mt-0.5 flex">{icon}</span>
       <div className="min-w-0">
         <p className="text-text-2 text-xs">{label}</p>
-        <p className="text-text-1 mt-0.5 text-xl font-semibold tabular-nums">{value}</p>
+        <p className="text-text-1 mt-0.5 text-lg font-semibold tabular-nums md:text-xl">{value}</p>
         {hint && <p className="text-text-3 mt-0.5 text-[11px]">{hint}</p>}
       </div>
     </motion.div>
@@ -172,13 +179,83 @@ function Legend() {
   );
 }
 
+/**
+ * One bar per day for the trailing month, oldest left.
+ *
+ * Height is relative to the month's own busiest day; quiet days stay visible
+ * as a stub so gaps read as gaps, not as missing markup.
+ */
+function TrendBars({ days }: { days: DayTotal[] }) {
+  const peak = Math.max(...days.map((day) => day.seconds), 1);
+  return (
+    <div className="flex h-28 items-end gap-[3px]">
+      {days.map((day, index) => (
+        <span key={day.day} className="group relative flex h-full min-w-0 flex-1 items-end">
+          <span
+            className="bg-accent w-full rounded-t-[3px] transition-opacity group-hover:opacity-100!"
+            style={{
+              height: day.seconds > 0 ? `${Math.max((day.seconds / peak) * 100, 6)}%` : "3%",
+              opacity: day.seconds > 0 ? 0.7 : 0.15,
+              animationDelay: `${index * 10}ms`,
+            }}
+            title={`${dayLabel(day.day)}：${duration(day.seconds)}`}
+          />
+        </span>
+      ))}
+    </div>
+  );
+}
+
+/** The trailing-month ranking. Tapping a row opens that book. */
+function TopBooks({ books, onOpen }: { books: TopBook[]; onOpen: (bookId: string) => void }) {
+  const busiest = Math.max(...books.map((book) => book.seconds), 1);
+  return (
+    <ul className="-mx-2 flex flex-col">
+      {books.map((book, index) => (
+        <li key={book.bookId}>
+          <button
+            type="button"
+            onClick={() => onOpen(book.bookId)}
+            className="focus-visible:focus-ring hover:bg-surface-1 group w-full rounded-xl px-2 py-2 text-left transition-colors"
+            aria-label={`打开《${book.title}》`}
+          >
+            <span className="flex items-baseline gap-2">
+              <span className="text-text-3 w-4 text-xs tabular-nums">{index + 1}</span>
+              <span className="text-text-1 min-w-0 flex-1 truncate text-sm">{book.title}</span>
+              <span className="text-text-2 text-xs tabular-nums">{duration(book.seconds)}</span>
+            </span>
+            <span className="bg-surface-1 mt-1.5 ml-6 flex h-[3px] overflow-hidden rounded-full">
+              <span
+                className="bg-accent block h-full rounded-full transition-[width]"
+                style={{
+                  width: `${Math.max((book.seconds / busiest) * 100, 4)}%`,
+                  opacity: 1 - index * 0.16,
+                }}
+              />
+            </span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function StatsPage() {
   const m = useMotion();
+  const navigate = useNavigate();
   const { data, isPending } = useReadingStats();
   const library = useLibraryStats();
 
   const stats = data;
   const tracked = (stats?.totalSeconds ?? 0) > 0;
+  const days = stats?.days ?? [];
+  const yesterday = days.at(-2);
+  const month = days.slice(-30);
+  const bestDay = month.reduce<DayTotal | null>(
+    (top, day) => (!top || day.seconds > top.seconds ? day : top),
+    null,
+  );
+  const openBook = (bookId: string) => navigate(`/reader?book=${bookId}`);
 
   return (
     <div className="flex h-full flex-col">
@@ -198,19 +275,25 @@ export function StatsPage() {
               icon={<Clock size={18} />}
               label="今日阅读"
               value={duration(stats?.todaySeconds ?? 0)}
+              hint={yesterday ? `昨天 ${duration(yesterday.seconds)}` : undefined}
               delay={staggerDelay(0, m.stagger)}
             />
             <Metric
               icon={<Fire size={18} />}
               label="连续天数"
               value={`${stats?.streak ?? 0} 天`}
-              hint={stats?.streak ? "别断在今天" : "今天开一本就续上"}
+              hint={stats?.streak ? `历史最长 ${stats.bestStreak} 天` : "今天开一本就续上"}
               delay={staggerDelay(1, m.stagger)}
             />
             <Metric
               icon={<TrendUp size={18} />}
               label="最近七天"
               value={duration(stats?.weekSeconds ?? 0)}
+              hint={
+                (stats?.weekSeconds ?? 0) > 0
+                  ? `日均 ${duration(Math.round((stats?.weekSeconds ?? 0) / 7))}`
+                  : undefined
+              }
               delay={staggerDelay(2, m.stagger)}
             />
             <Metric
@@ -247,6 +330,44 @@ export function StatsPage() {
             )}
           </GlassPanel>
         </Reveal>
+
+        {tracked && stats && (
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-5">
+            <Reveal delay={staggerDelay(5, m.stagger)} className="lg:col-span-2">
+              <GlassPanel className="h-full px-5 py-4">
+                <div className="mb-3 flex items-baseline justify-between">
+                  <h2 className="text-text-1 text-sm font-medium">最近 30 天</h2>
+                  <span className="text-text-3 text-[11px] tabular-nums">
+                    {shortDay(month[0]?.day ?? "")} – {shortDay(month.at(-1)?.day ?? "")}
+                  </span>
+                </div>
+                <TrendBars days={month} />
+                {bestDay && bestDay.seconds > 0 && (
+                  <p className="text-text-3 mt-3 text-[11px]">
+                    最投入的一天：{dayLabel(bestDay.day)} · {duration(bestDay.seconds)}
+                  </p>
+                )}
+              </GlassPanel>
+            </Reveal>
+
+            <Reveal delay={staggerDelay(6, m.stagger)} className="lg:col-span-3">
+              <GlassPanel className="h-full px-5 py-4">
+                <div className="mb-3 flex items-baseline justify-between">
+                  <h2 className="text-text-1 text-sm font-medium">最近在读</h2>
+                  <span className="text-text-3 text-[11px]">近 30 天 · 点击回到书里</span>
+                </div>
+                {stats.topBooks.length > 0 ? (
+                  <TopBooks books={stats.topBooks} onOpen={openBook} />
+                ) : (
+                  <p className="text-text-3 flex items-center gap-2 py-6 text-xs">
+                    <BookOpen size={14} className="shrink-0" />
+                    最近 30 天还没有翻开过书。
+                  </p>
+                )}
+              </GlassPanel>
+            </Reveal>
+          </div>
+        )}
       </div>
     </div>
   );

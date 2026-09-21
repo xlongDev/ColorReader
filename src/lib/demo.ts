@@ -3,7 +3,9 @@ import type {
   BookSummary,
   ChapterContent,
   ChapterMeta,
+  DayTotal,
   LibraryStats,
+  ReadingStats,
 } from "@/types/ipc";
 
 /**
@@ -291,6 +293,41 @@ export const demoLibraryStats: LibraryStats = {
   reading: 2,
   finished: 0,
 } as unknown as LibraryStats;
+
+/**
+ * Reading time for `?demo=1`: a half year with a life in it — busier weekends,
+ * stretches of momentum followed by quieter ones, no perfectly even grid.
+ * Top books borrow the shelf's own titles so the ranking can link into the
+ * reader just like it does on the desktop side.
+ */
+export const demoReadingStats: ReadingStats = (() => {
+  const days: DayTotal[] = [];
+  const today = new Date();
+  for (let back = 181; back >= 0; back--) {
+    const date = new Date(today);
+    date.setDate(date.getDate() - back);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const weekend = date.getDay() === 0 || date.getDay() === 6;
+    const wave = Math.sin(back / 9) > 0.35 ? 1.7 : 1;
+    const jitter = 0.5 + ((back * 7919) % 97) / 97;
+    days.push({ day: key, seconds: Math.round((weekend ? 2300 : 800) * wave * jitter) });
+  }
+  const topSeconds = [8400, 5100, 3200, 1800];
+  return {
+    todaySeconds: days.at(-1)?.seconds ?? 0,
+    weekSeconds: days.slice(-7).reduce((sum, day) => sum + day.seconds, 0),
+    totalSeconds: 152_000,
+    streak: 6,
+    bestStreak: 14,
+    daysRead: 151,
+    days,
+    topBooks: demoBooks.slice(0, topSeconds.length).map((book, index) => ({
+      bookId: book.id,
+      title: book.title,
+      seconds: topSeconds[index] ?? 1200,
+    })),
+  };
+})();
 
 /**
  * Sample highlights, so the notes surface has something to aggregate.

@@ -1,7 +1,8 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { desktopQuery, ipc, isDesktopRuntime } from "@/lib/ipc";
+import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { demoEnabled, demoReadingStats } from "@/lib/demo";
 import type { ReadingStats } from "@/types/ipc";
 
 /**
@@ -20,6 +21,8 @@ const EMPTY: ReadingStats = {
   streak: 0,
   daysRead: 0,
   days: [],
+  bestStreak: 0,
+  topBooks: [],
 };
 
 /** How often accumulated time is handed to the backend. */
@@ -31,7 +34,12 @@ const MIN_BATCH_SECONDS = 5;
 export function useReadingStats() {
   return useQuery({
     queryKey: ["reading", "stats"],
-    queryFn: desktopQuery(EMPTY, () => ipc.statsReading()),
+    queryFn: () => {
+      if (!isDesktopRuntime) {
+        return Promise.resolve(demoEnabled() ? demoReadingStats : EMPTY);
+      }
+      return ipc.statsReading();
+    },
     staleTime: 30_000,
   });
 }

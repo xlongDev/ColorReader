@@ -945,6 +945,10 @@ export type ReadingStats = {
    *  heat map never has to do date arithmetic.
    */
   days: DayTotal[];
+  /**  Longest run of consecutive reading days, all time. */
+  bestStreak: number;
+  /**  Most-read books over the trailing `top_window` days, busiest first. */
+  topBooks: TopBook[];
 };
 
 export type Role = "system" | "user" | "assistant";
@@ -1065,6 +1069,17 @@ export type Tally = {
   uploaded: number;
   downloaded: number;
   deleted: number;
+};
+
+/**
+ *  One book's reading time inside a recent window, for the "recently reading"
+ *  ranking. The shelf already knows covers and authors; the page only needs
+ *  the name and the number to rank by.
+ */
+export type TopBook = {
+  bookId: string;
+  title: string;
+  seconds: number;
 };
 
 /**

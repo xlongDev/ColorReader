@@ -26,6 +26,17 @@ pub struct DayTotal {
     pub seconds: i64,
 }
 
+/// One book's reading time inside a recent window, for the "recently reading"
+/// ranking. The shelf already knows covers and authors; the page only needs
+/// the name and the number to rank by.
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopBook {
+    pub book_id: String,
+    pub title: String,
+    pub seconds: i64,
+}
+
 /// Everything the stats page draws.
 #[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -43,6 +54,10 @@ pub struct ReadingStats {
     /// The trailing `window` days, oldest first, gaps filled with zeroes so the
     /// heat map never has to do date arithmetic.
     pub days: Vec<DayTotal>,
+    /// Longest run of consecutive reading days, all time.
+    pub best_streak: i64,
+    /// Most-read books over the trailing `top_window` days, busiest first.
+    pub top_books: Vec<TopBook>,
 }
 
 /// Today in the machine's timezone, `YYYY-MM-DD`.
@@ -68,6 +83,9 @@ pub fn record_session(conn: &Connection, book_id: &str, seconds: i64) -> AppResu
 }
 
 /// Rolls the table up into [`ReadingStats`] over the trailing `window` days.
+///
+/// The "recently reading" ranking covers the trailing 30 days: long enough to
+/// survive a quiet week, short enough that last winter's novel stays out.
 pub fn reading_stats(conn: &Connection, window: usize) -> AppResult<ReadingStats> {
     let per_day = totals_by_day(conn)?;
     let today = Local::now().date_naive();
@@ -86,6 +104,8 @@ pub fn reading_stats(conn: &Connection, window: usize) -> AppResult<ReadingStats
         streak,
         days_read: per_day.len() as i64,
         days,
+        best_streak: best_streak(&per_day),
+        top_books: top_books(conn, today, 30, 5)?,
     })
 }
 
@@ -135,6 +155,56 @@ fn streak(totals: &HashMap<String, i64>, today: chrono::NaiveDate) -> i64 {
         };
     }
     count
+}
+
+/// Longest run of consecutive reading days over the whole table. The day keys
+/// sort as dates, so one ordered scan is enough.
+fn best_streak(totals: &HashMap<String, i64>) -> i64 {
+    let mut keys: Vec<&String> = totals.keys().collect();
+    keys.sort();
+    let mut best = 0;
+    let mut run = 0;
+    let mut previous: Option<chrono::NaiveDate> = None;
+    for key in keys {
+        let day = match chrono::NaiveDate::parse_from_str(key, "%Y-%m-%d") {
+            Ok(day) => day,
+            Err(_) => continue,
+        };
+        run = match previous {
+            Some(previous) if previous.succ_opt() == Some(day) => run + 1,
+            _ => 1,
+        };
+        best = best.max(run);
+        previous = Some(day);
+    }
+    best
+}
+
+/// The most-read books inside the trailing `days` window, busiest first.
+fn top_books(
+    conn: &Connection,
+    today: chrono::NaiveDate,
+    days: i64,
+    limit: i64,
+) -> AppResult<Vec<TopBook>> {
+    let since = today
+        .checked_sub_signed(Duration::days(days - 1))
+        .map(|day| day.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+    let mut stmt = conn.prepare(
+        "SELECT rs.book_id, b.title, SUM(rs.seconds) AS seconds
+         FROM reading_sessions rs JOIN books b ON b.id = rs.book_id
+         WHERE rs.day >= ?1
+         GROUP BY rs.book_id ORDER BY seconds DESC LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![since, limit], |row| {
+        Ok(TopBook { book_id: row.get(0)?, title: row.get(1)?, seconds: row.get(2)? })
+    })?;
+    let mut books = Vec::new();
+    for row in rows {
+        books.push(row?);
+    }
+    Ok(books)
 }
 
 #[cfg(test)]
@@ -235,5 +305,43 @@ mod tests {
         assert_eq!(stats.total_seconds, 120);
         assert_eq!(stats.week_seconds, 60);
         assert_eq!(stats.days_read, 2);
+    }
+
+    #[test]
+    fn best_streak_survives_later_gaps() {
+        let conn = seed();
+        // A three-day run, then a gap, then today alone: the best is three.
+        for back in [900, 899, 898] {
+            record_on(&conn, back, 60);
+        }
+        record_on(&conn, 0, 60);
+        let stats = reading_stats(&conn, WINDOW).expect("stats");
+        assert_eq!(stats.streak, 1);
+        assert_eq!(stats.best_streak, 3);
+    }
+
+    #[test]
+    fn top_books_rank_inside_the_window_only() {
+        let conn = seed();
+        conn.execute(
+            "INSERT INTO books (id, title, sort_title, format, content_hash, file_path, file_size, \
+             added_at, updated_at) VALUES ('c', 'Old', 'old', 'txt', 'h2', 'p', 1, 1, 1)",
+            [],
+        )
+        .expect("insert second book");
+        record_on(&conn, 0, 60); // book b, today
+        record_on(&conn, 1, 600); // book b, yesterday
+        // Older than the 30-day ranking window: must stay out of the list.
+        conn.execute(
+            "INSERT INTO reading_sessions (day, book_id, seconds) \
+             VALUES ('2000-01-01', 'c', 99999)",
+            [],
+        )
+        .expect("ancient session");
+        let stats = reading_stats(&conn, WINDOW).expect("stats");
+        assert_eq!(stats.top_books.len(), 1);
+        assert_eq!(stats.top_books[0].book_id, "b");
+        assert_eq!(stats.top_books[0].seconds, 660);
+        assert_eq!(stats.top_books[0].title, "T");
     }
 }
