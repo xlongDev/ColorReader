@@ -544,9 +544,27 @@ Liquid Glass 的代价是 `backdrop-filter`：**嵌套的玻璃会把模糊一�
 
 ### P0（发布门槛）
 
-| 主题     | 阻塞点                          | 补齐路径                                                                                                                                                                                                                                                                    |
-| -------- | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 代码签名 | Apple 开发者证书 / Windows 证书 | 证书进 GitHub Secrets，`release.yml` 注入 `APPLE_CERTIFICATE` 等环境变量。**无证书不阻塞功能**：本地 ad-hoc 签名已实测可打包运行；代价只是他人首次打开要绕过一次 Gatekeeper（右键「打开」，或 `xattr -dr com.apple.quarantine`），Windows 侧是 SmartScreen 的「未知发布者」 |
+| 主题     | 阻塞点                          | 补齐路径                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| -------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 代码签名 | Apple 开发者证书 / Windows 证书 | **管线已就绪**（2026-09-22）：`release.yml` 的「Export macOS signing secrets」步骤在证书存在时把 5 个 `APPLE_*` 注入作业环境，其余由 Tauri CLI 自己走完（临时钥匙串 → `security import` → `codesign --options runtime` → `notarytool submit` + staple）。**只差证书**，步骤见下。**无证书不阻塞功能**：产物仍是 ad-hoc 签名，本地已实测可打包运行；代价只是他人首次打开要绕过一次 Gatekeeper（右键「打开」，或 `xattr -dr com.apple.quarantine`），Windows 侧是 SmartScreen 的「未知发布者」 |
+
+#### 代码签名：接线细节
+
+拿到 Apple 开发者证书（Developer ID Application）后，往仓库 Secrets 里填 5 个值即生效，无需再改工作流：
+
+| Secret                       | 值                                                        |
+| ---------------------------- | --------------------------------------------------------- |
+| `APPLE_CERTIFICATE`          | `.p12` 的 base64：`openssl base64 -in cert.p12 \| pbcopy` |
+| `APPLE_CERTIFICATE_PASSWORD` | 导出 `.p12` 时设的密码                                    |
+| `APPLE_ID`                   | 开发者账号邮箱                                            |
+| `APPLE_PASSWORD`             | **App 专用密码**（appleid.apple.com 生成，不是登录密码）  |
+| `APPLE_TEAM_ID`              | Membership 页的 Team ID                                   |
+
+为什么非要一个独立的导出步骤，而不是把这些变量直接写在 `tauri-action` 上：🔴 **打包器判定证书用的是 `var_os("APPLE_CERTIFICATE")`，「存在且为空」也算存在**。Secret 未配置时 `${{ secrets.X }}` 展开成空串，于是它会拿着一个空的 `.p12` 走进证书分支，`security import` 失败 → 打包失败。所以这些 Secret 在**自己的步骤**里读（步骤级 `env` 不会泄漏到后续步骤），只有确认非空时才 `>> $GITHUB_ENV`。顺带在这个步骤里做一次校验：有证书但缺公证凭据直接 `::error::` 退出 —— 签名而不公证比 ad-hoc 更糟（贴不上票，Gatekeeper 照样拦），而在 `notarytool` 内部失败时报错信息指向不到具体 Secret。
+
+另外两条判据：① **`APPLE_SIGNING_IDENTITY` 故意不设** —— 有 `APPLE_CERTIFICATE` 时 CLI 自己从证书里取身份，而填一个对不上的名字是硬错误而非提示；② `secrets` 上下文在步骤 `if` 里不可用（只有 `env` / `vars` 等），所以「有没有配置证书」只能在 shell 里判断。
+
+**Windows 仍未接线**，且它与 macOS 不同——那条路不看环境变量，而是配置：`bundle.windows.certificateThumbprint` + 把 `.pfx` 导进 runner 的证书存储（`signtool` 只认存储里的证书）。没有证书时**不能**预先写进 `tauri.conf.json`，否则打包会因为找不到指纹对应的证书直接失败，所以等真有 Windows 证书时再一并补。
 
 **自动更新已落地**（2026-09-15）。机制是 Tauri 的 updater + process 两个插件：`check()` 读 `plugins.updater.endpoints` 指向的 `latest.json`（GitHub Releases 的 `releases/latest/download/` 路径），验签通过后 `downloadAndInstall()`，再 `relaunch()` 换到新版本。**它的信任根是一对自己生成的 minisign 密钥**（`pnpm tauri signer generate`；公钥钉在 `tauri.conf.json`，私钥只进 GitHub Secrets）——与 Apple / 微软证书无关，所以没有平台证书也能做。
 

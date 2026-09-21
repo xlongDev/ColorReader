@@ -47,6 +47,49 @@ jobs:
           cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
           cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
           cargo test --manifest-path src-tauri/Cargo.toml
+      # macOS code signing. The Tauri CLI runs the whole ceremony itself —
+      # temporary keychain, `security import`, `codesign --options runtime`,
+      # `notarytool submit` + staple — but only when it *sees* the variables:
+      # the bundler's check is `var_os(...)`, which treats a variable that is
+      # present-and-empty as present. An unset secret expands to "", so passing
+      # these straight to the build step would walk it down the certificate
+      # branch with an empty .p12 and fail the bundle.
+      #
+      # So the secrets are read here — step `env` does not leak into later
+      # steps — and re-exported into the job environment only when the
+      # certificate is really there. Nothing configured ⇒ ad-hoc signed, exactly
+      # as before. (`secrets` is not available in a step `if`, hence the shell
+      # test rather than a condition.)
+      - name: Export macOS signing secrets
+        if: matrix.platform == 'macos-latest'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "No APPLE_CERTIFICATE secret — macOS bundles ship ad-hoc signed."
+            exit 0
+          fi
+          # Signing without notarisation is worse than ad-hoc: the app is
+          # stapled to nothing and Gatekeeper still complains. Fail here, where
+          # the message names the missing secret, instead of inside `notarytool`.
+          missing=""
+          for name in APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::APPLE_CERTIFICATE is set but these are missing:$missing"
+            exit 1
+          fi
+          {
+            for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              printf '%s<<CR_SIGN_EOF\n%s\nCR_SIGN_EOF\n' "$name" "${!name}"
+            done
+          } >> "$GITHUB_ENV"
+          echo "macOS signing configured: bundles will be signed and notarised."
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -58,9 +101,18 @@ jobs:
           # that are already out there.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Platform code signing is still absent (no Apple certificate), so the
-          # artifacts ship ad-hoc signed on macOS. To enable later:
-          #   APPLE_CERTIFICATE / APPLE_CERTIFICATE_PASSWORD / APPLE_SIGNING_IDENTITY
+          # Apple code signing and notarisation, when the step above put them
+          # in the job environment. Nothing to set here: either they are already
+          # exported, or the bundles go out ad-hoc signed.
+          #
+          # `APPLE_SIGNING_IDENTITY` is deliberately absent — with
+          # `APPLE_CERTIFICATE` present the CLI reads the identity off the
+          # certificate itself, and naming one that does not match is a hard
+          # error rather than a hint.
+          #
+          # Windows is unsigned too: that path is config, not environment —
+          # `bundle.windows.certificateThumbprint` plus a .pfx imported into the
+          # runner's certificate store. See ARCHITECTURE §9.
         with:
           projectPath: "."
           tauriScript: pnpm tauri
