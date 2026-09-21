@@ -313,33 +313,36 @@ type Props = {
 /**
  * Our page transitions onto foliate's turn pipeline.
  *
- * **`slide` / `pan`** — foliate's native scroll pan (the default turn in stock
- * foliate). We set `animated` but do NOT set a layered `turn-style`, so the
- * paginator's `#layeredTurn` returns null and the page physically scrolls via
- * `cssAnimateScroll` / `rafAnimateScroll` (transform: translateX on the column
- * strip). This runs inside the renderer div which is `overflow:hidden`-clipped
- * by our reading pane — so the animation never bleeds into the sidebar, exactly
- * matching the EPUB prose path's `scrollTo({behavior:"smooth"})`.
+ * **`pan`** — foliate's native scroll pan (the default turn in stock foliate,
+ * and readest's "Push"): we set `animated` but no `turn-style`, so the
+ * paginator's `#layeredTurn` is null and the page physically scrolls via
+ * `cssAnimateScroll` / `rafAnimateScroll` (a transform on the column strip).
+ * It runs inside the renderer div, which our reading pane clips with
+ * `overflow:hidden`, so the animation never bleeds into the sidebar — exactly
+ * the EPUB prose path's `scrollTo({behavior:"smooth"})`.
  *
- * **`fade` / `paper`** — the fork's layered View Transition styles
- * (readest#555): the outgoing page is snapshotted and animated over the live
- * incoming one. These paint in the viewport-fixed top layer (escaping ancestor
- * overflow:hidden), so we mark our host with `data-view-transition-root` —
- * foliate's `#vtSetup` scopes the capture naming to that element. Fade stays
- * in place (no overflow); paper curls inward (minor overflow possible but
- * contained by typical reading-pane proportions).
+ * **`slide`（覆盖）/ `fade` / `paper`（仿真）** — the fork's layered View
+ * Transition styles (readest#555): the outgoing page is snapshotted and
+ * animated over the live incoming one. These paint in the viewport-fixed top
+ * layer (escaping ancestor `overflow:hidden`), so the host is marked
+ * `data-view-transition-root` and foliate's `#vtSetup` names that element
+ * `foliate-turn`. The paginator gates them on `document.startViewTransition`
+ * on its own (`#layeredTurn`); an engine without it falls back to the native
+ * pan by itself.
  *
  * `animated` is the master switch; without it (`none`) every turn is instant.
  */
 const ANIMATED: Record<PageTransition, boolean> = {
   none: false,
   pan: true,
+  slide: true,
   fade: true,
   paper: true,
 };
 const TURN_STYLE: Record<PageTransition, string | null> = {
   none: null,
   pan: null,
+  slide: "slide",
   fade: "fade",
   paper: "curl",
 };
@@ -367,9 +370,10 @@ const applyLayout = (
   } else {
     renderer.setAttribute("flow", "paginated");
     renderer.setAttribute("max-column-count", layout === "double" ? "2" : "1");
-    // `animated` is the master switch; `slide`/`pan` omit `turn-style` so foliate
-    // uses its native scroll pan (clipped to the reading pane). `fade`/`paper` set
-    // a layered `turn-style` for VT effects (scoped to data-view-transition-root).
+    // `animated` is the master switch. `pan` omits `turn-style` so foliate uses
+    // its native scroll pan (clipped to the reading pane); `slide` / `fade` /
+    // `paper` set a layered `turn-style` for VT effects, scoped to
+    // `data-view-transition-root`.
     if (ANIMATED[transition]) {
       renderer.setAttribute("animated", "");
       const turn = TURN_STYLE[transition];

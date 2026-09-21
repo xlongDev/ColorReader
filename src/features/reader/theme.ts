@@ -26,7 +26,7 @@ export interface ReadingSurface {
   mode: "light" | "dark";
 }
 
-export type PageTransition = "none" | "pan" | "fade" | "paper";
+export type PageTransition = "none" | "pan" | "slide" | "fade" | "paper";
 export type LayoutMode = "scroll" | "single" | "double";
 
 export const READING_SURFACES: ReadingSurface[] = [
@@ -346,8 +346,9 @@ export function bundledFacesFor(key: string): string {
 export const PAGE_TRANSITIONS: { key: PageTransition; label: string }[] = [
   { key: "none", label: "无" },
   { key: "pan", label: "左右平移" },
+  { key: "slide", label: "覆盖" },
   { key: "fade", label: "淡入淡出" },
-  { key: "paper", label: "仿真书页" },
+  { key: "paper", label: "仿真" },
 ];
 
 export const LAYOUT_MODES: { key: LayoutMode; label: string }[] = [

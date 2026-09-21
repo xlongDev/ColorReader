@@ -9,6 +9,14 @@ export interface TailPad {
   width: number;
 }
 
+/**
+ * The curve foliate's layered `slide` turn uses for its VT keyframes
+ * (paginator.js `foliate-turn-slide-out-left`). The prose path cannot
+ * snapshot the outgoing page, so it slides the incoming one in on the same
+ * curve to read as the same gesture.
+ */
+const SLIDE_EASING = "cubic-bezier(0.25, 0.46, 0.45, 0.94)";
+
 /** Distance between neighbouring column boundaries in a paged layout (px).
  * `margin` is the final applied side margin. */
 export function columnPitch(el: HTMLDivElement, mode: LayoutMode, margin: number): number {
@@ -81,11 +89,10 @@ export function alignTail(
 /**
  * Performs one in-chapter page flip, honouring the page-transition setting:
  * "pan" keeps the native smooth scroll (the same clipped horizontal slide the
- * MOBI path uses via foliate's native pan, and the EPUB prose path via
- * `scrollTo`); "fade" and "paper" jump to the target page instantly and animate
- * the new page in via WAAPI — imperative, so a flip never re-renders or
- * remounts the chapter — and "none" jumps with no animation. Reduced motion
- * always jumps instantly.
+ * MOBI path uses via foliate's native pan); "slide", "fade" and "paper" jump
+ * to the target page instantly and animate the new page in via WAAPI —
+ * imperative, so a flip never re-renders or remounts the chapter — and "none"
+ * jumps with no animation. Reduced motion always jumps instantly.
  */
 export function flipPage(
   el: HTMLElement,
@@ -104,8 +111,15 @@ export function flipPage(
     return;
   }
   el.scrollTo({ left, behavior: "auto" });
-  // The prose path animates the incoming page: "fade" cross-fades it in,
-  // "paper" swings it in about the spine.
+  if (mode === "slide") {
+    el.animate(
+      [{ transform: `translateX(${dir === 1 ? "100%" : "-100%"})` }, { transform: "none" }],
+      { duration: 300, easing: SLIDE_EASING },
+    );
+    return;
+  }
+  // "fade" cross-dissolves the incoming page, "paper" swings it in about the
+  // spine.
   const frames: Keyframe[] =
     mode === "fade"
       ? [{ opacity: 0 }, { opacity: 1 }]
@@ -117,6 +131,8 @@ export function flipPage(
           },
           { opacity: 1, transform: "perspective(1200px) rotateY(0deg)" },
         ];
-  const duration = mode === "paper" ? 400 : 300;
-  el.animate(frames, { duration, easing: "cubic-bezier(0.22, 1, 0.36, 1)" });
+  el.animate(frames, {
+    duration: mode === "paper" ? 400 : 300,
+    easing: "cubic-bezier(0.22, 1, 0.36, 1)",
+  });
 }

@@ -159,6 +159,22 @@ describe("flipPage", () => {
     );
   });
 
+  it("slides the incoming page in over the page it replaces", () => {
+    const node = animated();
+    flipPage(node, 960, "slide", 1, false);
+    expect(node.scrollTo).toHaveBeenCalledWith({ left: 960, behavior: "auto" });
+    // A forward turn arrives from the right; a backward one from the left.
+    expect(node.animate).toHaveBeenCalledWith(
+      [{ transform: "translateX(100%)" }, { transform: "none" }],
+      expect.objectContaining({ duration: 300 }),
+    );
+    flipPage(node, 0, "slide", -1, false);
+    expect(node.animate).toHaveBeenLastCalledWith(
+      [{ transform: "translateX(-100%)" }, { transform: "none" }],
+      expect.objectContaining({ duration: 300 }),
+    );
+  });
+
   it("keeps the native smooth scroll for the pan transition", () => {
     const node = animated();
     flipPage(node, 960, "pan", 1, false);
