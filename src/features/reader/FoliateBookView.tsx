@@ -8,6 +8,8 @@ import type { LayoutMode, PageTransition } from "./theme";
 import { speechUnits, unitsFromOffset, TTS_WASH_BOOK } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
 import { buildStyleSheet } from "./foliateStyle";
+import { lineRects, relayRulerLayout } from "./rulerPointer";
+import type { RulerRect } from "./rulerPointer";
 import { CapturedPageTurn } from "./capturedTurn";
 import { markLoneFigures } from "./loneFigure";
 import type { FoliateStyle } from "./foliateStyle";
@@ -153,6 +155,19 @@ export type FoliateHandle = {
    *  `getSelection` cannot see inside a section iframe, so the pill asks here
    *  to follow the words it belongs to across a page turn or a scroll. */
   selectionBox: () => { x: number; y: number; bottom: number } | null;
+  /**
+   * The lines of type the reader can see, in host window coordinates — the
+   * reading ruler's own geometry, which it cannot gather for itself: the words
+   * are in section iframes, and a rect inside one says nothing about where the
+   * section sits on the reader's screen.
+   *
+   * Every loaded section is walked, not just the one on screen, and the frame's
+   * own box is the conversion (the same one `rangeInHostView` makes), because a
+   * paginated section is one long strip shown through a moving window: the
+   * off-screen columns come back as rects far outside the reading area, where
+   * the ruler's "nearest line" rule can never pick them.
+   */
+  rulerLines: () => readonly RulerRect[];
 };
 
 /**
@@ -932,6 +947,22 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
    * handler turns one press into two page turns).
    */
   const hookedRef = useRef(new WeakSet<Document>());
+  /**
+   * The page foliate last reported. Hoisted out of the open effect because the
+   * style effect needs it too: a change of writing-mode makes the paginator
+   * rebuild, and it has to be told which page to rebuild *on*.
+   */
+  const locatedRef = useRef("");
+  // The way the page last turned, relayed to the reading ruler once the turn's
+  // relocation reports it (see `onRelocate` in the mount effect below).
+  const rulerDirRef = useRef<1 | -1 | 0>(0);
+  /**
+   * The writing-mode the mounted sections were laid out in. foliate resolves a
+   * section's axis once, when it loads it, and caches it — `setStyles` only
+   * swaps the sheet, so a change from horizontal to vertical is something this
+   * component has to notice and act on itself.
+   */
+  const verticalRef = useRef(style.vertical);
   const attachSection = useCallback(
     (event: Event) => {
       const doc = (event as CustomEvent<{ doc?: Document }>).detail?.doc;
@@ -962,14 +993,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     // the effect that applies layout, which is what turns it off again when
     // 「仿真」 stops being the transition.
     let captured: CapturedPageTurn | null = null;
-    // The page foliate last reported, half of what decides whether the
-    // controller's idle snapshot is still a picture of this page (it adds the
-    // typography and the pane's geometry itself).
-    const located = { current: "" };
-
+    // Half of what decides whether the controller's idle snapshot is still a
+    // picture of this page (it adds the typography and the pane's geometry
+    // itself), and the destination a rebuild has to be aimed at.
     const onRelocate = (event: Event) => {
       const detail = (event as CustomEvent<FoliateRelocate>).detail;
-      located.current = detail.cfi ?? "";
+      locatedRef.current = detail.cfi ?? "";
       report.current?.({
         cfi: detail.cfi ?? "",
         fraction: detail.fraction ?? 0,
@@ -977,6 +1006,16 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         page: detail.page ?? null,
         bookPage: bookPageFromLocation(detail.location),
       });
+      // The reading ruler parks its band at a fraction of the page and then
+      // snaps it to whole lines, so every relayout is new geometry: a page
+      // turn inside a section is a translated strip, not a DOM change in the
+      // reader's document, and nothing over there would notice on its own.
+      // The turn's direction rides along once — a page the reader arrived on
+      // meets the band at its start — and is spent on the first notice, since
+      // every relocation after that is the same page settling.
+      const dir = rulerDirRef.current;
+      rulerDirRef.current = 0;
+      relayRulerLayout(viewRef.current, dir);
     };
 
     void (async () => {
@@ -1047,6 +1086,11 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         view.addEventListener("create-overlay", onOverlay);
         host.append(view);
         await view.open(book);
+        // Before `init`, never after: foliate reads a section's `writing-mode`
+        // off its computed style as the section loads and lays the columns out
+        // on the axis it finds there, then caches it. A sheet injected once the
+        // first section is already up leaves the whole book horizontal.
+        view.renderer?.setStyles?.(buildStyleSheet(styleRef.current));
         await view.init(startCfi ? { lastLocation: startCfi } : {});
         if (!startCfi && startFraction && view.book?.splitTOCHref) {
           await view.goToFraction(startFraction);
@@ -1071,7 +1115,6 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         }
         if (cancelled) return;
         applyLayout(view, layoutRef.current, transitionRef.current, marginsRef.current);
-        view.renderer?.setStyles?.(buildStyleSheet(styleRef.current));
         // The style effect predates the view, so a book opened straight into
         // the night palette needs the fixed-layout tint applied here too.
         syncPageInvert(view, styleRef.current);
@@ -1105,7 +1148,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
           // payload is all primitives and this runs once per turn). An empty
           // anchor — foliate has not reported yet — disables the warm path.
           key: () =>
-            located.current ? `${located.current}|${JSON.stringify(styleRef.current)}` : "",
+            locatedRef.current ? `${locatedRef.current}|${JSON.stringify(styleRef.current)}` : "",
           maskChrome: () => {
             const viewport = hostRef.current?.closest<HTMLElement>("[data-reading-viewport]");
             if (!viewport) return null;
@@ -1136,7 +1179,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         });
         captured = controller;
         capturedRef.current = controller;
-        controller.setEnabled(transitionRef.current === "paper");
+        controller.setEnabled(transitionRef.current === "paper" && !styleRef.current.vertical);
         // Snapshot the page the book opened on, so the first tap is as quick as
         // the ones after it (`capturedTurn.ts` also re-arms this once a turn
         // has settled). Desktop only: a browser has no capture command, and
@@ -1212,7 +1255,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     layoutRef.current = layout;
     transitionRef.current = transition;
     marginsRef.current = { x: marginX, y: marginY };
-    capturedRef.current?.setEnabled(transition === "paper");
+    capturedRef.current?.setEnabled(transition === "paper" && !styleRef.current.vertical);
     const view = viewRef.current;
     if (view) applyLayout(view, layout, transition, { x: marginX, y: marginY });
   }, [layout, transition, marginX, marginY]);
@@ -1222,10 +1265,23 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   useEffect(() => {
     styleRef.current = style;
     ttsColorRef.current = ttsWash(style.dark);
+    // 「仿真」 peels a horizontal sheet, and foliate has a two-phase turn of its
+    // own for the vertical axis, so the captured curl stands down when the
+    // columns run top-to-bottom. `setEnabled(false)` makes `turn()` decline and
+    // the caller falls through to the renderer's own animation.
+    capturedRef.current?.setEnabled(transitionRef.current === "paper" && !style.vertical);
     const view = viewRef.current;
     if (!view) return;
     view.renderer?.setStyles?.(buildStyleSheet(style));
     syncPageInvert(view, style);
+    // The sheet alone cannot turn the page sideways: foliate resolves a
+    // section's axis once, at load, and caches it. Handing it the page it is
+    // already on is what makes it re-read the axis — `goTo` sees the
+    // difference, throws every view away and rebuilds them on the new one.
+    if (verticalRef.current !== style.vertical) {
+      verticalRef.current = style.vertical;
+      if (locatedRef.current) void view.goTo(locatedRef.current);
+    }
   }, [style]);
 
   // Highlights: repaint whenever the list changes. foliate draws each one
@@ -1333,11 +1389,13 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     ref,
     () => ({
       flip: (dir) => {
+        rulerDirRef.current = dir;
         const view = viewRef.current;
         if (!view) return;
         void (dir === 1 ? view.next() : view.prev());
       },
       section: (dir) => {
+        rulerDirRef.current = dir;
         const renderer = viewRef.current?.renderer;
         if (!renderer) return;
         void (dir === 1 ? renderer.nextSection() : renderer.prevSection());
@@ -1364,6 +1422,15 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
           if (measured) return measured.box;
         }
         return null;
+      },
+      rulerLines: () => {
+        const rects: RulerRect[] = [];
+        for (const entry of viewRef.current?.renderer?.getContents() ?? []) {
+          const frame = entry.doc.defaultView?.frameElement?.getBoundingClientRect();
+          if (!frame || frame.width <= 0 || frame.height <= 0) continue;
+          rects.push(...lineRects(entry.doc, null, frame.left, frame.top));
+        }
+        return rects;
       },
       scrollByPx: (delta, subpixel) => {
         const renderer = viewRef.current?.renderer;

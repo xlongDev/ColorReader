@@ -15,6 +15,7 @@ const style = (over: Partial<FoliateStyle> = {}): FoliateStyle => ({
   dark: true,
   invertImages: false,
   fontFaces: "",
+  vertical: false,
   ...over,
 });
 
@@ -91,6 +92,15 @@ describe("buildStyleSheet", () => {
     expect(buildStyleSheet(style({ dark: false, invertImages: true }))).not.toContain("invert(1)");
     expect(buildStyleSheet(style({ invertImages: true }))).toContain(
       "filter: invert(1) hue-rotate(180deg)",
+    );
+  });
+
+  it("turns the text vertical only when asked", () => {
+    expect(buildStyleSheet(style())).not.toContain("writing-mode");
+    // On the text elements, not only the root: a converted book restates
+    // writing-mode on its own paragraph classes.
+    expect(buildStyleSheet(style({ vertical: true }))).toContain(
+      "writing-mode: vertical-rl !important",
     );
   });
 });

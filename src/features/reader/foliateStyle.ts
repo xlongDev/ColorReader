@@ -28,6 +28,16 @@ export type FoliateStyle = {
    *  [`fontFaceCss`]. A section is a document of its own, so the app's own
    *  declarations do not reach inside it — the sheet has to carry them. */
   fontFaces: string;
+  /**
+   * Vertical CJK: columns run top-to-bottom and stack right-to-left.
+   *
+   * A 古籍 or a 日漫 is typeset this way, and the paginator knows it — it reads
+   * `writing-mode` off the section, lays the columns out along the other axis
+   * and turns pages with the two-phase slide it keeps for exactly this case.
+   * What it cannot know is that the reader *wants* it, which is the only thing
+   * this flag adds.
+   */
+  vertical: boolean;
 };
 
 /**
@@ -66,6 +76,7 @@ export const buildStyleSheet = ({
   dark,
   invertImages,
   fontFaces,
+  vertical,
 }: FoliateStyle) => {
   const typography = `${fontFaces}
 :root {
@@ -174,7 +185,23 @@ svg[viewBox][width*="%"][height*="%"] {
    clamped — percentages and fr units already resolve against the column. */
 *[width]:not([width=""]):not([width*="%"]) {
   max-width: 100% !important;
-}`;
+}${
+    vertical
+      ? `
+/* Vertical CJK. Forced on the text elements rather than only on html/body
+   for the same reason line-height is: a converted book restates
+   writing-mode on its own paragraph classes, and a declaration there
+   beats an inherited one. text-orientation is left at "mixed", so a Latin
+   run inside a vertical column lies on its side the way a printed book
+   sets it, rather than standing every letter up.
+   The paginator reads writing-mode back off the section, so it gets the
+   column axis, the page margins and the two-phase vertical page-turn
+   slide out of this one declaration. */
+html, body, p, li, blockquote, dd, dt, td, th, div {
+  writing-mode: vertical-rl !important;
+}`
+      : ""
+  }`;
   if (!dark) return typography;
   return `${typography}
 html {
