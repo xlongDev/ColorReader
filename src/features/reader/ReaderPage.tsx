@@ -40,6 +40,11 @@ import { ImageLightbox } from "@/features/reader/ImageLightbox";
 import { ReaderFooterControls, ReaderHeaderBar } from "@/features/reader/ReaderChrome";
 import { ReaderPanels } from "@/features/reader/ReaderPanels";
 import { ReaderChapterView } from "@/features/reader/ReaderChapterView";
+import { PullBookmark } from "@/features/reader/PullBookmark";
+import { ReadingRuler, rulerStepForKey } from "@/features/reader/ReadingRuler";
+import type { ReadingRulerHandle } from "@/features/reader/ReadingRuler";
+import { relayRulerLayout } from "@/features/reader/rulerPointer";
+import { foldPace, medianCpm, NO_PACE, type PaceSample } from "@/features/reader/pace";
 import {
   bookPageOf,
   bookPagesOf,
@@ -60,6 +65,8 @@ import {
   selectionBottom,
   type TextRange,
 } from "@/features/reader/selection";
+import { RsvpPlayer } from "@/features/reader/RsvpPlayer";
+import { rsvpTokens } from "@/features/reader/rsvp";
 import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionToolbar";
 import type { AnnotationStyle } from "@/types/ipc";
 import { useSpeechVoices, useTts } from "@/features/reader/tts";
@@ -85,6 +92,7 @@ import {
 import { useBookmarks, useCreateBookmark, useDeleteBookmark } from "@/hooks/useBookmarks";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import { useFonts } from "@/hooks/useFonts";
+import { useGamepadPager } from "@/hooks/useGamepadPager";
 import {
   useBook,
   useBookImages,
@@ -128,6 +136,18 @@ const ExportNotesDialog = lazy(() =>
 /** How long to wait after scrolling stops before persisting the position. */
 const SAVE_DELAY_MS = 600;
 
+/**
+ * How long the page has to stand still before the reading ruler re-measures.
+ *
+ * Longer than the longest page-turn animation (450 ms, `flipPage`'s slide):
+ * that animation is a *transform* on the scroller, and the lines' measured
+ * positions include it, so a measure taken while one is running reads a page in
+ * flight and parks the band on whatever block a half-slid page put under it.
+ * The animation starts after the jump's own scroll event, so the settle has to
+ * outlast it rather than the event.
+ */
+const RULER_SETTLE_MS = 520;
+
 /** Gutter between the two columns of a spread: the page margin itself, so the
  * centre gap matches the outer margins and both paged modes share one rhythm. */
 
@@ -145,6 +165,9 @@ const NO_IMAGES: BookImage[] = [];
  * per render would rebuild the stylesheet handed to foliate on every render.
  */
 const NO_FONTS: LocalFont[] = [];
+/** Speed reading's token list while it is closed: one shared empty array, so a
+ *  closed overlay never looks like a new chapter to the run-reset effect. */
+const NO_WORDS: string[] = [];
 
 /**
  * Stand-in for a PDF's bookmark outline before (or without) the query. A fresh
@@ -224,6 +247,9 @@ function ReaderView({
     autoScrollSpeed,
     readingSpeed,
     setReadingSpeed,
+    rsvpWpm,
+    paceSamples,
+    recordPace,
     pageNumbers,
     pdfFill,
     pdfNight: pdfNightOn,
@@ -285,6 +311,8 @@ function ReaderView({
   // Player surfaces. The sleep timer is the parent's business — it owns the
   // voice, so it is what has to stop it; the card only draws the countdown.
   const [playerOpen, setPlayerOpen] = useState(false);
+  /** Speed reading: takes over the reading area while it is on. */
+  const [rsvpOpen, setRsvpOpen] = useState(false);
   const [sleep, setSleep] = useState<SleepTimer>(null);
   // Mirrored into a ref: `onChapterEnd` is a dependency of the position effect
   // below, and a fresh identity there would re-apply the pending scroll — which
@@ -464,6 +492,18 @@ function ReaderView({
   /** Continuous scroll vs paged single/double spread. */
   const paged = layoutMode !== "scroll";
   /**
+   * Whether the next page lies to the left.
+   *
+   * A vertical column is read top-to-bottom and the columns run right-to-left,
+   * so the page after this one is the column on its *left*: the arrow keys
+   * have to point at where the next page comes from, not at a fixed side.
+   * foliate reads the axis the same way — a `vertical-rl` section turns pages
+   * on the horizontal-rtl convention — and only a foliate book can be vertical
+   * at all. A right-to-left horizontal book belongs here too; that would need
+   * the book's own `dir` plumbed out of the renderer.
+   */
+  const readsLeftward = useFoliate && settings.vertical;
+  /**
    * Auto-scroll, as the flow sees it.
    *
    * The flag is the reader's; this is what it can currently do. A paged
@@ -473,9 +513,21 @@ function ReaderView({
    */
   const autoScrollOn = autoScrolling && !paged;
   const scrollRef = useRef<HTMLDivElement>(null);
+  // The reading viewport: the box the reading ruler is positioned against,
+  // which is the pane below the header rather than the window.
+  const viewportRef = useRef<HTMLDivElement>(null);
   // The foliate view, driven imperatively (see flip /
   // stepChapter): paging and sections never touch our chapter index.
   const foliateRef = useRef<FoliateHandle | null>(null);
+  // The reading ruler's lines, asked of the book rather than read from here:
+  // a foliate book's words are in section iframes, and only the view knows
+  // where those sections currently sit. Stable, because the ruler measures on
+  // it and an unstable prop would re-measure on every render.
+  const foliateRulerLines = useCallback(() => foliateRef.current?.rulerLines() ?? null, []);
+  // The reading ruler, driven imperatively for the same reason the foliate view
+  // is: an arrow key has to ask the band to step *before* it becomes a page turn,
+  // and only the ruler knows whether there is another block of lines to step to.
+  const rulerRef = useRef<ReadingRulerHandle | null>(null);
 
   /**
    * Re-reads the live selection's box and moves the toolbar onto it.
@@ -531,6 +583,14 @@ function ReaderView({
   // Offset of a search hit to reveal instead of the scroll fraction.
   const pendingFocus = useRef<number | null>(initialOffset);
   const debounceRef = useRef<number | null>(null);
+  // Pending "the page has stopped moving" notice to the reading ruler. Its own
+  // timer, not `debounceRef`: that one persists the position and the two must be
+  // able to disagree about when the page settled.
+  const rulerSettleRef = useRef<number | null>(null);
+  // The way the page last turned, for the same notice: a page the reader arrived
+  // on meets the band at its start, and one page turn can still be settling when
+  // the notice goes out, so the direction has to outlive the call to `flip`.
+  const rulerDirRef = useRef<1 | -1 | 0>(0);
   // Pending debounce of the foliate position save (a CFI, so it only ever
   // carries the latest one — a page-turn storm must not queue a write each).
   const foliateSaveRef = useRef<number | null>(null);
@@ -585,6 +645,10 @@ function ReaderView({
   );
   /** Previous progress sample for the sustained reading speed estimate. */
   const speedSampleRef = useRef<{ at: number; chars: number } | null>(null);
+  /** The reading stretch the pace median is still folding into. A ref rather
+   *  than a store field: it changes on every save, and a write per save is a
+   *  write of the whole persisted settings blob — custom paper included. */
+  const paceRef = useRef<PaceSample>(NO_PACE);
   /** Hover-reveal flip affordance for paged modes; hides itself after 2s idle. */
   const [flipHint, setFlipHint] = useState(false);
   /** 1-based position inside the chapter's column count, for the page indicator. */
@@ -969,6 +1033,10 @@ function ReaderView({
     const frame = requestAnimationFrame(() => {
       measureTail(el);
       applyPending(el);
+      // New chapter, new lines: the ruler measures the page it is now over. The
+      // chapter body is in the DOM by the time this effect runs, and the frame
+      // covers the tail spacer the ruler's own geometry depends on.
+      relayRulerLayout(el);
     });
     return () => cancelAnimationFrame(frame);
   }, [chapterData, applyPending, measureTail]);
@@ -996,6 +1064,11 @@ function ReaderView({
         goTo(chapterIdx + dir * (layoutModeRef.current === "double" ? 2 : 1));
         return;
       }
+      // A prose page turn is a page the reader arrives on, and the ruler meets
+      // it at the far edge (its own relay reads this on the way out). Chapter
+      // rolls leave it alone: they land where the reader was, not where the
+      // page starts.
+      rulerDirRef.current = dir;
       const max = el.scrollWidth - el.clientWidth;
       const pos = el.scrollLeft;
       if (dir === 1 && pos >= max - 2) {
@@ -1117,8 +1190,55 @@ function ReaderView({
           event.target.tagName === "TEXTAREA" ||
           event.target.tagName === "SELECT");
       if (editing) return;
+      // The reading ruler owns the arrows while it is on, because that is what
+      // reading with it means: each press lays the band over the next block of
+      // lines. Only when the page runs out does the key become a page turn again
+      // — the band declines, and the turn happens here instead.
+      //
+      // In the scroll layout it owns nothing: there the arrows are the reader's
+      // own scrolling, and a ruler drawn on a page that scrolls under it is
+      // exactly what a physical ruler does — it stays where it is, and `onScroll`
+      // lays it back over the lines that have arrived under it.
+      //
+      // Horizontal type reads down the page, so all four arrows step it. Vertical
+      // type reads leftward, where Left/Right are the page turns, so only Up/Down
+      // step the band (the reference's own rule).
+      if (settings.readingRuler && paged) {
+        const step = rulerStepForKey(event.key, readsLeftward);
+        if (step !== 0) {
+          if (!(rulerRef.current?.move(step) ?? false)) flip(step);
+          event.preventDefault();
+          return;
+        }
+      }
+      // Page-turner keys. A pedal that presents as a keyboard sends one of
+      // these: PageUp/PageDown on the ones that mimic a document reader, Space
+      // on the ones that mimic a clicker, and the media keys on the ones that
+      // mimic a remote. Space and the media keys are claimed here because in a
+      // paged layout they do nothing otherwise — in the scroll layout the
+      // browser's own Space and PageDown are the right answer and are left
+      // alone.
+      if (paged) {
+        const dir =
+          event.key === "PageDown" || event.key === "MediaTrackNext"
+            ? 1
+            : event.key === "PageUp" || event.key === "MediaTrackPrevious"
+              ? -1
+              : 0;
+        if (dir !== 0) {
+          flip(dir);
+          event.preventDefault();
+          return;
+        }
+        if (event.key === " " && !event.shiftKey) {
+          flip(1);
+          event.preventDefault();
+          return;
+        }
+      }
       if (paged && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
-        flip(event.key === "ArrowRight" ? 1 : -1);
+        const ahead = event.key === (readsLeftward ? "ArrowLeft" : "ArrowRight");
+        flip(ahead ? 1 : -1);
         event.preventDefault();
         return;
       }
@@ -1142,9 +1262,34 @@ function ReaderView({
     panel,
     paged,
     pending,
+    readsLeftward,
+    // The ruler claims the arrows only while it is on, so the handler has to
+    // re-bind when it is switched on — otherwise the key that just turned the
+    // band on would keep turning pages until something else changed.
+    settings.readingRuler,
     stepChapter,
     toggleFullscreen,
   ]);
+
+  // One step of the page, whichever way this layout moves: a page turn in the
+  // paged layouts, a chapter in the scrolled one — the same split the arrow
+  // keys already make, shared with the gamepad pedal.
+  const pageStep = useCallback(
+    (dir: 1 | -1) => {
+      if (paged) flip(dir);
+      else stepChapter(dir);
+    },
+    [flip, paged, stepChapter],
+  );
+
+  // A gamepad or a Bluetooth page-turner: the same two actions the arrows
+  // own, driven from a pedal. Always on — a pad attached to a reading app is
+  // there to turn pages, and there is nothing else here it could mean.
+  useGamepadPager({
+    enabled: true,
+    onNext: () => pageStep(1),
+    onPrev: () => pageStep(-1),
+  });
 
   // Auto-scroll, scroll layout: advances the viewport down the flow until it
   // runs out. Read off `autoScrollOn` rather than the bare flag: a paged
@@ -1352,6 +1497,36 @@ function ReaderView({
 
   /** The queue the voice is walking: prose units, or the foliate section's. */
   const activeUnits = useFoliate ? foliateUnits : speechQueue;
+
+  /**
+   * The words speed reading flashes, cut once per run rather than per frame.
+   *
+   * Only cut while the overlay is open — the token list for a long chapter is
+   * not something to hold for every reader who never opens it — and off the
+   * same units read-aloud uses, so the two agree about what a chapter says.
+   */
+  const rsvpWords = useMemo(
+    () => (rsvpOpen ? rsvpTokens(activeUnits.map((unit) => unit.text).join(" ")) : NO_WORDS),
+    [rsvpOpen, activeUnits],
+  );
+
+  /**
+   * Opens speed reading.
+   *
+   * A foliate book has no chapter-wide text on this side of the IPC — its
+   * words live in section documents — so the units are asked of the reader
+   * that has them, which hands back the section on screen. Starting where the
+   * reader is looking is the right answer anyway: nobody opens speed reading
+   * to go back to the top of the chapter.
+   */
+  const openRsvp = useCallback(() => {
+    if (useFoliate) {
+      void foliateRef.current?.readFrom().then((units) => {
+        if (units.length > 0) setFoliateUnits(units);
+      });
+    }
+    setRsvpOpen(true);
+  }, [useFoliate]);
 
   /** Set when a rate or a voice changed while the voice was on hold: the
    *  utterance being held was spoken with the old settings, so the transport
@@ -1563,11 +1738,19 @@ function ReaderView({
       const last = speedSampleRef.current;
       speedSampleRef.current = sample;
       if (last) {
-        const next = updateReadingSpeed(readingSpeed, charsNow - last.chars, sample.at - last.at);
+        const read = charsNow - last.chars;
+        const elapsed = sample.at - last.at;
+        const next = updateReadingSpeed(readingSpeed, read, elapsed);
         if (next !== readingSpeed) setReadingSpeed(next);
+        // The same delta, folded into the median window. The average above is
+        // what the label says for the first few minutes; this is what it says
+        // once there are stretches to take a middle one from.
+        const folded = foldPace(paceRef.current, read, elapsed);
+        paceRef.current = folded.acc;
+        if (folded.sample) recordPace(folded.sample);
       }
     },
-    [chapters, chapterIdx, readingSpeed, setProgress, setReadingSpeed],
+    [chapters, chapterIdx, readingSpeed, setProgress, setReadingSpeed, recordPace],
   );
 
   const onScroll = useCallback(() => {
@@ -1603,6 +1786,20 @@ function ReaderView({
     }
     if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
     debounceRef.current = window.setTimeout(() => saveProgress(frac), SAVE_DELAY_MS);
+    // The page has moved under the reading ruler, and it re-measures once the
+    // movement is over rather than at the start of it: every way a page turns
+    // here ends as a scroll — the instant jump, 「平移」's smooth scroll, and the
+    // ones that jump and then animate — but only the last scroll event says the
+    // page has arrived. The band stays where it is and is re-derived from the
+    // lines now under it, which is the whole idea of it.
+    if (rulerSettleRef.current !== null) window.clearTimeout(rulerSettleRef.current);
+    rulerSettleRef.current = window.setTimeout(() => {
+      // A turn's direction rides along once, then is spent: whatever the next
+      // notice is, it is not the same page turn.
+      const dir = rulerDirRef.current;
+      rulerDirRef.current = 0;
+      relayRulerLayout(el, pagedNow ? dir : 0);
+    }, RULER_SETTLE_MS);
   }, [
     chapters,
     chapterIdx,
@@ -1667,6 +1864,7 @@ function ReaderView({
     return () => {
       if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
       if (foliateSaveRef.current !== null) window.clearTimeout(foliateSaveRef.current);
+      if (rulerSettleRef.current !== null) window.clearTimeout(rulerSettleRef.current);
     };
   }, []);
 
@@ -1971,6 +2169,9 @@ function ReaderView({
       fontFaces: [fontFaceCss(fonts), bundledFacesFor(settings.fontFamily)]
         .filter(Boolean)
         .join("\n"),
+      // Vertical CJK. The paginator reads it back off the section and takes
+      // the column axis, the margins and its vertical page turn from it.
+      vertical: settings.vertical,
     }),
     [
       fontSize,
@@ -1978,6 +2179,7 @@ function ReaderView({
       paraGapIdx,
       indent,
       settings.fontFamily,
+      settings.vertical,
       surface.fg,
       surface.mode,
       surface.tint,
@@ -2018,7 +2220,10 @@ function ReaderView({
   // landed. Both estimates would answer "不到 1 分钟" for a 400-page book — a
   // wrong number dressed as a precise one — so report the speed as unknown
   // instead, which is what `estimateLabel` makes of it.
-  const weighedSpeed = totalChars(chapters) > 0 ? readingSpeed : 0;
+  // The remaining-time labels: the median stretch once there are enough of
+  // them to take one, the running average until then. The median is the honest
+  // one — an average still carries the ten minutes the app sat open on a page.
+  const weighedSpeed = totalChars(chapters) > 0 ? (medianCpm(paceSamples) ?? readingSpeed) : 0;
 
   // Bookmark state is derived, not flashed: the icon stays filled while the
   // reading position sits on a bookmark (same chapter, within 1% of chapter
@@ -2282,6 +2487,8 @@ function ReaderView({
       bookRemaining={bookRemaining}
       readingSpeed={weighedSpeed}
       progress={displayProgress}
+      rsvpOn={rsvpOpen}
+      onRsvp={() => (rsvpOpen ? setRsvpOpen(false) : openRsvp())}
     />
   );
 
@@ -2302,6 +2509,7 @@ function ReaderView({
       {/* Reading viewport. In paged modes the flip arrows reveal on hover or
           pointer-down and fade out after 2s, so they never sit on the text. */}
       <div
+        ref={viewportRef}
         data-reading-viewport
         className="relative flex min-h-0 flex-1"
         onMouseMove={revealFlipHintOnMove}
@@ -2431,6 +2639,16 @@ function ReaderView({
               ink: markInk,
             }}
           />
+          {/* Pull-to-bookmark. The prose scroller only: whether the page is at
+            its top is the gesture's whole premise, and that is a scrollTop
+            only this path owns — foliate and the PDF view keep their own
+            scrollers, where a downward drag is a scroll up the page. */}
+          <PullBookmark
+            hostRef={viewportRef}
+            scrollRef={scrollRef}
+            enabled={!paged && !useFoliate && !isPdf}
+            onTrigger={addBookmark}
+          />
           {paged && tail && (
             <div
               aria-hidden
@@ -2441,12 +2659,32 @@ function ReaderView({
           )}
         </div>
 
+        {/* Reading ruler: a band parked at the reader's place, with the rest of
+          the page washed toward the paper. A sibling of the scroller, not a
+          child — a paged chapter is a long strip inside a moving window, and a
+          ruler inside it would be carried off with the page that just left.
+          Its body is inert, so only its two edges ever take a pointer (see
+          `ReadingRuler`). */}
+        <ReadingRuler
+          ref={rulerRef}
+          hostRef={viewportRef}
+          enabled={settings.readingRuler}
+          vertical={readsLeftward}
+          columns={!readsLeftward && layoutMode === "double" ? 2 : 1}
+          pitch={fontSize * (LINE_HEIGHTS[lineHeightIdx] ?? 1.8)}
+          scrim={surface.tint}
+          ink={surface.fg}
+          lines={useFoliate ? foliateRulerLines : undefined}
+        />
+
         {/* Page indicator (settings-gated) and a hairline progress rail that
-            surfaces on activity and fades out after 2s of stillness. */}
+            surfaces on activity and fades out after 2s of stillness. Above the
+            ruler's wash, which covers the page bottom along with everything
+            else outside the band. */}
         {paged && shownPages && (
           <p
             data-page-indicator
-            className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 text-xs tabular-nums opacity-70"
+            className="pointer-events-none absolute bottom-3 left-1/2 z-30 -translate-x-1/2 text-xs tabular-nums opacity-70"
             style={{ color: surface.fg }}
           >
             {shownPages.estimated && "约 "}
@@ -2535,6 +2773,21 @@ function ReaderView({
           onSkip={skipSpeech}
           onSeek={seekSpeech}
         />
+
+        {/* Speed reading: takes the whole reading area while it runs, and
+            hands it back on close — the page is the same page underneath. */}
+        {rsvpOpen && (
+          <RsvpPlayer
+            onClose={() => setRsvpOpen(false)}
+            tokens={rsvpWords}
+            chapter={headerChapter}
+            wpm={rsvpWpm}
+            onWpm={(value) => settings.update({ rsvpWpm: value })}
+            onNextChapter={() => stepChapter(1)}
+            hasNextChapter={chapterIdx < total - 1}
+            background={surface.background}
+          />
+        )}
       </div>
 
       {!fullscreen ? (
@@ -2624,6 +2877,7 @@ function ReaderView({
       <ReaderPanels
         panel={panel}
         bookId={bookId}
+        verticalAvailable={useFoliate}
         onClose={() => {
           if (panel === "search") {
             setSearch("");
