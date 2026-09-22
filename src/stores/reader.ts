@@ -1,6 +1,9 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
+import type { PaceSample } from "@/features/reader/pace";
+import { pushPace } from "@/features/reader/pace";
+import { DEFAULT_WPM } from "@/features/reader/rsvp";
 import type { LayoutMode, PageTransition } from "@/features/reader/theme";
 import type { SpeechGranularity } from "@/features/reader/speech";
 import type { AnnotationStyle } from "@/types/ipc";
@@ -30,6 +33,27 @@ interface ReaderState {
   marginY: number;
   /** Two-em text-indent at the start of every paragraph. */
   indent: boolean;
+  /** Vertical CJK: columns run top-to-bottom and stack right-to-left. The
+   *  books that are typeset that way — 古籍, 日漫 — are what it is for, and
+   *  the paginator has its own two-phase page turn for it. */
+  vertical: boolean;
+  /**
+   * Reading ruler: a band parked at the reader's place on the page, with
+   * everything outside it washed toward the paper. Worth most on a dense CJK
+   * page, where the lines are long and the paragraphs are one block.
+   */
+  readingRuler: boolean;
+  /** How many whole lines the band spans. */
+  rulerLines: number;
+  /** The band's colour, a `RULER_COLORS` key; `clear` leaves it unfilled. */
+  rulerColor: RulerColor;
+  /** How far the page outside the band fades toward the paper. */
+  rulerOpacity: number;
+  /** Where the band sits along the reading axis, as a percentage — moved by
+   *  dragging the band's own edges. */
+  rulerPosition: number;
+  /** Speed-reading rate, in words per minute (RSVP). */
+  rsvpWpm: number;
   /** Reading surface for the light appearance, a `READING_SURFACES` key or `"custom"`. */
   surface: string;
   /** Reading surface for the dark appearance, same key space. */
@@ -44,6 +68,19 @@ interface ReaderState {
   autoScrollSpeed: number;
   /** Sustained reading speed in chars per minute, measured while scrolling. */
   readingSpeed: number;
+  /**
+   * Finished reading stretches, oldest first, capped at `PACE_WINDOW`.
+   *
+   * The remaining-time estimate is the median of these when there are enough
+   * of them, and `readingSpeed` — a running average — otherwise. Two
+   * estimators because they answer the question under different conditions:
+   * the average has a value from the first minute, the median only becomes
+   * truthful after a handful of stretches, and it is the one that survives a
+   * reader leaving the app open on a page.
+   */
+  paceSamples: PaceSample[];
+  /** Records one finished stretch. */
+  recordPace: (sample: PaceSample) => void;
   /** How much of the "N / M 页" page indicator to show in paged layouts. */
   pageNumbers: PageNumberScope;
   /**
@@ -92,7 +129,10 @@ interface ReaderState {
   /** Applies a partial settings patch in one call. */
   update: (
     patch: Partial<
-      Omit<ReaderState, "update" | "setFontSize" | "setReadingSpeed" | "setOriginalLayout">
+      Omit<
+        ReaderState,
+        "update" | "setFontSize" | "setReadingSpeed" | "setOriginalLayout" | "recordPace"
+      >
     >,
   ) => void;
   setReadingSpeed: (charsPerMinute: number) => void;
@@ -197,6 +237,33 @@ export const HIGHLIGHT_COLORS = [
 ] as const;
 
 /**
+ * The reading ruler's colours, in display order. `clear` is the default and the
+ * odd one out: the band takes no fill at all and is drawn as a pair of
+ * hairlines, which is the reading the reference ships — on a page whose paper
+ * is already the reader's choice, an unfilled band dims the page without
+ * tinting the words under it.
+ */
+export type RulerColor = "clear" | "yellow" | "green" | "blue" | "red";
+
+export const RULER_COLORS: { key: RulerColor; hex: string | null; label: string }[] = [
+  { key: "clear", hex: null, label: "仅描边" },
+  { key: "yellow", hex: "#ffd12e", label: "黄色" },
+  { key: "green", hex: "#7cd92c", label: "绿色" },
+  { key: "blue", hex: "#56aee2", label: "蓝色" },
+  { key: "red", hex: "#f76f6f", label: "红色" },
+];
+
+/** Bounds for the reading ruler's steppers, and the parked band's default
+ *  place — a third of the way down, which is where the reference parks it. The
+ *  opacity ceiling is the reference's too: at 1.0 the page outside the band is
+ *  unreadable, and the reader has lost the text they were about to read next. */
+export const MIN_RULER_LINES = 1;
+export const MAX_RULER_LINES = 6;
+export const MIN_RULER_OPACITY = 0.1;
+export const MAX_RULER_OPACITY = 0.9;
+export const DEFAULT_RULER_POSITION = 33;
+
+/**
  * Folds one animation frame of auto-scroll into a whole-pixel delta plus the
  * fractional remainder carried to the next frame. Browsers snap scroll offsets
  * to device pixels, so adding a sub-pixel step each frame (a slow speed on a
@@ -251,6 +318,13 @@ export const DEFAULT_READER_SETTINGS = {
   marginX: DEFAULT_MARGIN_X,
   marginY: DEFAULT_MARGIN_Y,
   indent: false,
+  vertical: false,
+  readingRuler: false,
+  rulerLines: 2,
+  rulerColor: "clear",
+  rulerOpacity: 0.5,
+  rulerPosition: DEFAULT_RULER_POSITION,
+  rsvpWpm: DEFAULT_WPM,
   surface: "standard",
   nightSurface: "night",
   customSurface: null,
@@ -258,6 +332,7 @@ export const DEFAULT_READER_SETTINGS = {
   layoutMode: "scroll",
   autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
   readingSpeed: DEFAULT_READING_SPEED,
+  paceSamples: [],
   pageNumbers: "off",
   pageTheme: null,
   pdfFill: true,
@@ -287,6 +362,8 @@ export const useReaderSettings = create<ReaderState>()(
             MAX_READING_SPEED,
           ),
         }),
+      recordPace: (sample) =>
+        set((state) => ({ paceSamples: pushPace(state.paceSamples, sample) })),
     }),
     {
       name: "colorreader.reader",

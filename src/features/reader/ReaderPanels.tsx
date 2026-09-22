@@ -53,10 +53,14 @@ export function ReaderPanels({
   search,
   annotations,
   ai,
+  verticalAvailable,
 }: {
   panel: Panel;
   bookId: string;
   onClose: () => void;
+  /** Whether this book has a paginator that can lay columns out vertically —
+      a foliate book has one; prose and PDF are laid out here instead. */
+  verticalAvailable: boolean;
   toc: {
     chapters: ChapterMeta[];
     outline: PdfOutlineItem[];
@@ -122,7 +126,7 @@ export function ReaderPanels({
                 onAddBookmark={toc.onAddBookmark}
               />
             )}
-            {panel === "settings" && <SettingsPanel />}
+            {panel === "settings" && <SettingsPanel verticalAvailable={verticalAvailable} />}
             {panel === "annotations" && (
               <AnnotationList
                 annotations={annotations.items}

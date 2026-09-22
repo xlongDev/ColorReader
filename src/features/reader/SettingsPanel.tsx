@@ -11,15 +11,20 @@ import {
   MAX_FONT_SIZE,
   MAX_MARGIN_X,
   MAX_MARGIN_Y,
+  MAX_RULER_LINES,
+  MAX_RULER_OPACITY,
   MIN_AUTO_SCROLL_SPEED,
   MIN_FONT_SIZE,
   MIN_MARGIN_X,
   MIN_MARGIN_Y,
+  MIN_RULER_LINES,
+  MIN_RULER_OPACITY,
   MARGIN_X_PRESETS,
   PAGE_NUMBER_SCOPES,
   PAGE_THEMES,
   pageIsNight,
   PARA_GAPS,
+  RULER_COLORS,
   useReaderSettings,
 } from "@/stores/reader";
 import { useFonts } from "@/hooks/useFonts";
@@ -39,7 +44,7 @@ import { SPRING } from "@/lib/motion";
  * into the persisted reader store; the page re-renders live off the same
  * store, so nothing here needs an "apply" step.
  */
-export function SettingsPanel() {
+export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable?: boolean }) {
   const settings = useReaderSettings();
   const { update } = settings;
   const fonts = useFonts().data ?? [];
@@ -182,6 +187,92 @@ export function SettingsPanel() {
             value={settings.indent}
             onChange={(value) => update({ indent: value })}
           />
+        </Group>
+        {/* Offered on a book with a paginator only: prose and PDF are laid out
+            here instead, and a setting that does nothing where it is shown is
+            worse than one that is not shown. */}
+        {verticalAvailable && (
+          <Group label="竖排">
+            <Chips
+              options={[
+                { key: false, label: "横排" },
+                { key: true, label: "竖排" },
+              ]}
+              value={settings.vertical}
+              onChange={(value) => update({ vertical: value })}
+            />
+            <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
+              古籍与日漫的排法：字自上而下，行自右向左。
+            </p>
+          </Group>
+        )}
+        <Group label="阅读标尺">
+          <Chips
+            options={[
+              { key: false, label: "关闭" },
+              { key: true, label: "开启" },
+            ]}
+            value={settings.readingRuler}
+            onChange={(value) => update({ readingRuler: value })}
+          />
+          <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
+            在页面上留一条亮带、其余压暗，长段落不容易串行。带上下来拖动即可挪位置。
+          </p>
+          {/* Only where it does something: a ruler that is off has no band for
+              these to describe. */}
+          {settings.readingRuler && (
+            <>
+              <SliderRow
+                label="突出显示行数"
+                readout={`${settings.rulerLines} 行`}
+                min={MIN_RULER_LINES}
+                max={MAX_RULER_LINES}
+                value={settings.rulerLines}
+                onChange={(value) => update({ rulerLines: value })}
+              />
+              <div className="mt-2 flex items-center gap-2.5">
+                <span className="text-text-3 shrink-0 text-[12px]">尺子颜色</span>
+                <div className="flex items-center gap-1.5">
+                  {RULER_COLORS.map(({ key, hex, label }) => (
+                    <button
+                      key={key}
+                      type="button"
+                      aria-label={label}
+                      title={label}
+                      onClick={() => update({ rulerColor: key })}
+                      className={cn(
+                        "focus-visible:focus-ring flex h-5 w-5 items-center justify-center rounded-full transition-transform",
+                        settings.rulerColor === key ? "scale-110" : "hover:scale-105",
+                      )}
+                      style={
+                        settings.rulerColor === key
+                          ? {
+                              boxShadow: `0 0 0 2px var(--glass-btn), 0 0 0 3.5px ${hex ?? "var(--text-3)"}`,
+                            }
+                          : undefined
+                      }
+                    >
+                      <span
+                        aria-hidden
+                        className="block h-3.5 w-3.5 rounded-full"
+                        style={
+                          hex ? { backgroundColor: hex } : { border: "1px solid var(--text-3)" }
+                        }
+                      />
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <SliderRow
+                label="不透明度"
+                readout={`${Math.round(settings.rulerOpacity * 100)}%`}
+                min={Math.round(MIN_RULER_OPACITY * 100)}
+                max={Math.round(MAX_RULER_OPACITY * 100)}
+                value={Math.round(settings.rulerOpacity * 100)}
+                onChange={(value) => update({ rulerOpacity: value / 100 })}
+              />
+            </>
+          )}
         </Group>
       </Section>
 

@@ -12,6 +12,7 @@ import {
   Graph,
   HighlighterCircle,
   ListBullets,
+  Lightning,
   MagnifyingGlass,
   Minus,
   Pause,
@@ -261,6 +262,8 @@ export function ReaderFooterControls({
   bookRemaining,
   readingSpeed,
   progress,
+  rsvpOn,
+  onRsvp,
 }: {
   speechStatus: "idle" | "playing" | "paused";
   onToggleSpeech: () => void;
@@ -277,6 +280,9 @@ export function ReaderFooterControls({
   /** Words per minute, from the reader's own measured reading speed. */
   readingSpeed: number;
   progress: number;
+  /** Speed reading is running: the button shows it rather than only opening it. */
+  rsvpOn: boolean;
+  onRsvp: () => void;
 }) {
   /** Speech first, then the player, then auto-scroll — see the footer's own
    *  note on why the scroll button is not available in every layout. */
@@ -307,6 +313,18 @@ export function ReaderFooterControls({
       </GlassIconButton>
       <GlassIconButton label="朗读播放器" size="sm" className={CHROME_BTN} onClick={onTogglePlayer}>
         <span className="text-[11px] font-semibold tabular-nums">{speechRate}×</span>
+      </GlassIconButton>
+      {/* Speed reading, third next to listening and scrolling: it is the same
+          job — taking in the chapter without moving your hands — done by the
+          eye instead of the ear. */}
+      <GlassIconButton
+        label="速读（RSVP）"
+        size="sm"
+        className={cn(CHROME_BTN, rsvpOn && "text-accent")}
+        aria-pressed={rsvpOn}
+        onClick={onRsvp}
+      >
+        <Lightning size={16} weight={rsvpOn ? "fill" : "regular"} />
       </GlassIconButton>
       <GlassIconButton
         // Auto-scroll is a rolling viewport; a paged one has no flow to roll,
