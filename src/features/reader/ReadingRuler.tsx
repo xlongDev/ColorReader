@@ -21,7 +21,7 @@ import {
   visibleLines,
 } from "@/features/reader/rulerPointer";
 import type { RulerColumn, RulerInterval, RulerRect } from "@/features/reader/rulerPointer";
-import { MAX_RULER_OPACITY, RULER_COLORS, useReaderSettings } from "@/stores/reader";
+import { MAX_RULER_OPACITY, rulerHex, useReaderSettings } from "@/stores/reader";
 
 /**
  * How far the band stands off the page's own edges when it spans the full width
@@ -35,6 +35,10 @@ const RULER_INSET = 8;
  *  distance and then crawl through the last few pixels. */
 const RULER_STEP_MS = 340;
 
+/** How long the band takes to appear: switched on, or handed to a page that
+ *  arrived. It fades and settles down into the page rather than blinking on. */
+const RULER_APPEAR_MS = 220;
+
 /**
  * How many frames an empty measurement is re-asked for. Long enough for a
  * chapter to be fetched and a section to be laid out — the two arrivals that
@@ -42,6 +46,9 @@ const RULER_STEP_MS = 340;
  * measure (a cover, an empty chapter) stops asking.
  */
 const SETTLE_TRIES = 120;
+
+/** Frames skipped between asks once the burst is over: thirty frames ≈ 500 ms. */
+const SETTLE_WALK = 30;
 
 /** What the reader's chrome drives the ruler with. */
 export type ReadingRulerHandle = {
@@ -156,6 +163,9 @@ export function ReadingRuler({
   const [dragging, setDragging] = useState(false);
   /** A step is in flight: the band travels to its block rather than jumping. */
   const [stepping, setStepping] = useState(false);
+  /** Whether the band is on the page at all: it fades in rather than blinking
+   *  on, and stays out of the way while a page is turning under it. */
+  const [revealed, setRevealed] = useState(false);
 
   // Everything the effect measures lives in refs, because the imperative handle
   // and the pointer handlers both read it long after the render that set it up.
@@ -166,6 +176,8 @@ export function ReadingRuler({
   const bandRef = useRef<RulerInterval | null>(null);
   const gripRef = useRef<{ centre: number; extent: number; at: number } | null>(null);
   const stepTimerRef = useRef<number | null>(null);
+  /** The frame on which a landing band fades in. */
+  const revealRef = useRef(0);
   // Where the reader left the band, as it was when this mount began. Placement
   // follows it until the reader moves the band themselves (`movedRef`), and the
   // band itself after that — so saving a drag cannot pull it back onto a line,
@@ -175,8 +187,28 @@ export function ReadingRuler({
   const movedRef = useRef(false);
   /** The way the page last turned, consumed by the placement that meets it. */
   const dirRef = useRef<1 | -1 | 0>(0);
+  /** What the last placement was made for: the reading area's axis and the
+   *  leading the band was sized against. A page that moved *under* a band made
+   *  for the same ones leaves it exactly where it is; a new axis or a new
+   *  leading is a new band, and it is placed. */
+  const placedKeyRef = useRef("");
 
   const pad = Math.round(pitch * RULER_PAD_FACTOR);
+
+  /** Puts a band on the page. A step — or a page turn handing the band to the
+   *  page it landed on — travels on the landing curve; a re-measure (a resize, a
+   *  repagination under a still band) must not, or the band would chase every
+   *  frame of it. */
+  const draw = useCallback((next: RulerInterval, animate: boolean) => {
+    bandRef.current = next;
+    setBand(next);
+    setStepping(animate);
+    if (stepTimerRef.current !== null) window.clearTimeout(stepTimerRef.current);
+    stepTimerRef.current = window.setTimeout(() => {
+      stepTimerRef.current = null;
+      setStepping(false);
+    }, RULER_STEP_MS);
+  }, []);
 
   /** Draws the band around a block. */
   const applyBlock = useCallback(
@@ -186,33 +218,21 @@ export function ReadingRuler({
       const wanted = bandOver(block, pitch, rulerLines);
       const extent = wanted.end - wanted.start;
       const centre = clampAnchor((wanted.start + wanted.end) / 2, extent, 0, axis);
-      const next = { start: centre - extent / 2, end: centre + extent / 2 };
-      bandRef.current = next;
-      setBand(next);
-      // A step travels to its block; a re-measure (a resize, a repagination under
-      // a still band) must not, or the band would chase every frame of it.
-      setStepping(animate);
-      if (stepTimerRef.current !== null) window.clearTimeout(stepTimerRef.current);
-      stepTimerRef.current = window.setTimeout(() => {
-        stepTimerRef.current = null;
-        setStepping(false);
-      }, RULER_STEP_MS);
+      draw({ start: centre - extent / 2, end: centre + extent / 2 }, animate);
     },
-    [pitch, rulerLines],
+    [draw, pitch, rulerLines],
   );
 
   /** No line to sit on: the reader's own leading still marks the place. */
   const applyFallback = useCallback(
-    (centre: number) => {
+    (centre: number, animate = false) => {
       const { axis } = areaRef.current;
       if (axis <= 0) return;
       const extent = pitch * Math.max(1, Math.floor(rulerLines));
       const at = clampAnchor(centre, extent, 0, axis);
-      const next = fallbackBand(at, pitch, rulerLines);
-      bandRef.current = next;
-      setBand(next);
+      draw(fallbackBand(at, pitch, rulerLines), animate);
     },
-    [pitch, rulerLines],
+    [draw, pitch, rulerLines],
   );
 
   /**
@@ -281,8 +301,10 @@ export function ReadingRuler({
       // A spread: two flows whose line grids do not agree, so they are measured
       // apart and the band covers one of them.
       const measured = toColumns(rects, columns, 0, next.cross).flatMap((entry) => {
-        const shown = visibleLines(entry.lines, 0, next.axis);
-        return shown.length > 0 ? [{ left: entry.left, right: entry.right, lines: shown }] : [];
+        const onScreen = visibleLines(entry.lines, 0, next.axis);
+        return onScreen.length > 0
+          ? [{ left: entry.left, right: entry.right, lines: onScreen }]
+          : [];
       });
       columnsRef.current = measured;
       linesRef.current = [];
@@ -292,8 +314,8 @@ export function ReadingRuler({
       if (dirRef.current === -1) activeColumnRef.current = Number.MAX_SAFE_INTEGER;
       const active = Math.min(activeColumnRef.current, Math.max(0, measured.length - 1));
       activeColumnRef.current = active;
-      const shown = measured[active] ?? null;
-      const nextEdges = shown ? { from: shown.left, to: shown.right } : null;
+      const column = measured[active] ?? null;
+      const nextEdges = column ? { from: column.left, to: column.right } : null;
       setEdges((was) =>
         was?.from === nextEdges?.from && was?.to === nextEdges?.to ? was : nextEdges,
       );
@@ -339,6 +361,15 @@ export function ReadingRuler({
     const dir = dirRef.current;
     dirRef.current = 0;
     const drawn = bandRef.current;
+    // A page that moved *under* the band leaves it exactly where the reader put
+    // it. Re-snapping there is a movement they never asked for — the band
+    // shifting again half a second after the scroll — and a band drawn on the
+    // page is right wherever it stands. Only the first measure, a turn, or a band
+    // that is a different shape than the last one (a new leading, a resized
+    // reading area) set the place.
+    const key = `${axis}|${rulerLines}|${pitch}`;
+    if (dir === 0 && drawn && placedKeyRef.current === key) return;
+    placedKeyRef.current = key;
     const held = dir === 0 && movedRef.current ? drawn : null;
     const centre = held ? (held.start + held.end) / 2 : ((seedRef.current ?? 0) / 100) * axis;
     const half = held ? Math.max(0, (held.end - held.start) / 2 - pad) : (pitch * rulerLines) / 2;
@@ -348,8 +379,18 @@ export function ReadingRuler({
     const block = page
       ? blockNear(page, anchor)
       : blockNear(columnsRef.current[activeColumnRef.current]?.lines ?? [], anchor);
+    const landing = dir !== 0 || !drawn;
+    // On the page that arrived, in place: the handover is the fade, not a slide
+    // from wherever the band was standing when the page left.
     if (block) applyBlock(block, false);
-    else applyFallback(dir === 1 ? half : dir === -1 ? axis - half : centre);
+    else applyFallback(dir === 1 ? half : dir === -1 ? axis - half : centre, false);
+    // Switched on, or handed to a page that arrived: the band appears on the
+    // page rather than travelling to it. A turn's band rides the old page for
+    // the length of the turn otherwise, which is the jump there and back.
+    if (landing) {
+      setRevealed(false);
+      revealRef.current = requestAnimationFrame(() => setRevealed(true));
+    }
   }, [applyBlock, applyFallback, blockNear, pad, pitch, rulerLines]);
 
   /** One step of the reader's own advance, whole blocks at a time. */
@@ -448,34 +489,44 @@ export function ReadingRuler({
     let tries = 0;
     let pending = false;
     let frame = 0;
+    let skipped = 0;
     // The lines a measure last counted, so the loop can tell a page still
     // arriving from a page that is there.
     let counted = -1;
     // The words are not always there yet: a chapter is fetched, a section has to
-    // lay out, and neither resizes anything this effect observes. So an empty
-    // measure asks again on the next frame, for a while. Bounded, because a ruler
-    // is a nicety and a rAF loop that outlives the page is not.
+    // lay out, and neither resizes anything this effect observes. One ask per
+    // frame covers the words that arrive within a couple of seconds; past that
+    // the ask slows to a walk — a frame in thirty — instead of stopping, because
+    // a band that never appears is one the reader cannot step with the keys and
+    // one that reopens nowhere in particular. The walk stops the moment the
+    // lines are there, and with them the two measures that agree.
     //
     // A measure that is *short* is not an answer either. A chapter arrives in
     // pieces and the first piece is often a line or two, so the loop waits for two
     // measures in a row to agree: measured against a page still growing, the band
     // snaps to whatever fragment is on screen — a stray line at the top of an
     // empty column — and then sits on it until something else moves the page.
-    const settle = () => {
-      if (pending || tries >= SETTLE_TRIES) return;
-      const measured = measure();
-      if (measured > 0 && measured === counted) {
-        place();
-        return;
-      }
-      counted = measured;
-      tries += 1;
+    const ask = () => {
+      if (pending) return;
       pending = true;
       frame = requestAnimationFrame(() => {
         pending = false;
-        settle();
+        const measured = measure();
+        if (measured > 0 && measured === counted) {
+          place();
+          return;
+        }
+        counted = measured;
+        tries += 1;
+        if (tries >= SETTLE_TRIES && skipped++ < SETTLE_WALK) {
+          ask();
+          return;
+        }
+        skipped = 0;
+        ask();
       });
     };
+    ask();
 
     // A re-measure walks the chapter's text nodes, which is milliseconds of work
     // — and the reading area is resized on every frame of the sidebar spring, as
@@ -492,19 +543,27 @@ export function ReadingRuler({
         // A re-measure after a page turn meets a page of the same shape, so the
         // count it last saw cannot be trusted to say the new one has arrived.
         counted = -1;
-        settle();
+        ask();
       });
     };
 
-    settle();
+    ask();
     const observer = new ResizeObserver(relayout);
     observer.observe(host);
     // The relay's `detail` is the way the page turned, and only a turn's notice
     // carries one: a resize or a repagination is the same page, and the band
     // keeps its place on it.
     const onLayout = (event: Event) => {
-      const dir = (event as CustomEvent<number | undefined>).detail;
-      if (dir === 1 || dir === -1) dirRef.current = dir;
+      const turn = (event as CustomEvent<{ dir: 1 | -1 | 0; landed: boolean } | undefined>).detail;
+      if (turn && turn.dir !== 0) {
+        dirRef.current = turn.dir;
+        // Still turning: the band hides and waits for the page that arrives,
+        // instead of riding this one out to its last line.
+        if (!turn.landed) {
+          setRevealed(false);
+          return;
+        }
+      }
       relayout();
     };
     host.addEventListener(RULER_LAYOUT_EVENT, onLayout);
@@ -512,6 +571,7 @@ export function ReadingRuler({
     return () => {
       cancelAnimationFrame(frame);
       cancelAnimationFrame(layoutFrame);
+      cancelAnimationFrame(revealRef.current);
       observer.disconnect();
       host.removeEventListener(RULER_LAYOUT_EVENT, onLayout);
     };
@@ -524,10 +584,18 @@ export function ReadingRuler({
     [],
   );
 
+  // Leaving the reader saves where the band is, so the next visit — same book or
+  // another one — opens on it. Nothing else saves a placement, which is what
+  // keeps a page turn from walking the stored place down the book; the exit is
+  // the one moment the current place is the reader's.
+  useEffect(() => {
+    const atExit = remember;
+    return () => atExit();
+  }, [remember]);
+
   if (!enabled || !band) return null;
 
-  const swatch = RULER_COLORS.find((entry) => entry.key === rulerColor);
-  const tint = swatch?.hex ?? null;
+  const tint = rulerHex(rulerColor);
   const fade = Math.min(Math.max(rulerOpacity, 0.05), MAX_RULER_OPACITY);
 
   // Where the band is, in each axis. The reading axis already runs in reading
@@ -556,6 +624,15 @@ export function ReadingRuler({
         }
       : undefined;
 
+  // Appearing: the band and the wash that comes with it fade in and settle down
+  // into the page. Switched on, they arrive rather than blink on; between pages
+  // they are out of the way entirely, so the turn itself is what the reader sees.
+  const appear: CSSProperties = {
+    transitionProperty: "opacity, transform",
+    transitionDuration: `${RULER_APPEAR_MS}ms`,
+    transitionTimingFunction: "var(--ease-land)",
+  };
+
   const axisStyle = (from: number, to: number): CSSProperties =>
     vertical
       ? { right: from, width: Math.max(0, to - from) }
@@ -575,7 +652,15 @@ export function ReadingRuler({
   // with an axis offset and no cross extent is shrink-to-fit, and an empty box
   // shrinks to nothing — so the two axis washes would be invisible and the page
   // outside the band would never fade at all.
-  const paper: CSSProperties = { position: "absolute", background: scrim, opacity: fade, ...glide };
+  const paper: CSSProperties = {
+    position: "absolute",
+    background: scrim,
+    // The wash has two jobs at once: how far the page fades, and whether the
+    // ruler is on the page at all. Off, it goes with the band.
+    opacity: revealed ? fade : 0,
+    ...appear,
+    ...glide,
+  };
   const before: CSSProperties = {
     ...paper,
     ...axisStyle(0, band.start),
@@ -615,6 +700,9 @@ export function ReadingRuler({
         style={{
           ...axisStyle(band.start, band.end),
           ...crossStyle(cross.from, cross.to),
+          ...appear,
+          opacity: revealed ? 1 : 0,
+          transform: revealed ? undefined : "translateY(-5px)",
           ...glide,
           background: tint
             ? `color-mix(in srgb, ${tint} ${Math.round(fade * 100)}%, transparent)`

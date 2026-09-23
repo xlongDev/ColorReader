@@ -17,6 +17,7 @@ import {
   Minus,
   Pause,
   Plus,
+  Ruler,
   SpeakerHigh,
   Sparkle,
 } from "@phosphor-icons/react";
@@ -62,6 +63,8 @@ export function ReaderHeaderBar({
   onToggleBookmark,
   bookmarkPending,
   onToggleFullscreen,
+  rulerOn,
+  onToggleRuler,
 }: {
   fullscreen: boolean;
   onBack: () => void;
@@ -86,6 +89,9 @@ export function ReaderHeaderBar({
   onToggleBookmark: () => void;
   bookmarkPending: boolean;
   onToggleFullscreen: () => void;
+  /** Whether the reading ruler is on: the header button shows it. */
+  rulerOn: boolean;
+  onToggleRuler: () => void;
 }) {
   return (
     <header
@@ -148,6 +154,21 @@ export function ReaderHeaderBar({
           <Sparkle size={16} />
         </GlassIconButton>
         <HeaderRule />
+        {/* A reading-aid toggle, not a panel: pressed state instead of an open
+            drawer, sitting with the other things that change the page itself. */}
+        <GlassIconButton
+          label={rulerOn ? "关闭阅读标尺" : "开启阅读标尺"}
+          size="sm"
+          className={CHROME_BTN}
+          aria-pressed={rulerOn}
+          onClick={onToggleRuler}
+        >
+          <span
+            className={cn("inline-flex transition-colors duration-300", rulerOn && "text-accent")}
+          >
+            <Ruler size={16} weight={rulerOn ? "fill" : "regular"} />
+          </span>
+        </GlassIconButton>
         <GlassIconButton
           label="阅读设置"
           size="sm"

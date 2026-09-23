@@ -43,7 +43,7 @@ import { ReaderChapterView } from "@/features/reader/ReaderChapterView";
 import { PullBookmark } from "@/features/reader/PullBookmark";
 import { ReadingRuler, rulerStepForKey } from "@/features/reader/ReadingRuler";
 import type { ReadingRulerHandle } from "@/features/reader/ReadingRuler";
-import { relayRulerLayout } from "@/features/reader/rulerPointer";
+import { relayRulerLayout, relayRulerTurn } from "@/features/reader/rulerPointer";
 import { foldPace, medianCpm, NO_PACE, type PaceSample } from "@/features/reader/pace";
 import {
   bookPageOf,
@@ -644,6 +644,10 @@ function ReaderView({
         const el = scrollRef.current;
         if (el) applyPosition(el, fractionRef.current, "scroll", marginRef.current);
       }
+      // The PDF's text layer arrives with the pages, not with the chapter: tell
+      // the ruler the geometry changed, or its first placement measures whatever
+      // fragments happened to be painted when it asked.
+      relayRulerLayout(viewportRef.current);
     },
     [layoutModeRef, marginRef],
   );
@@ -1021,9 +1025,31 @@ function ReaderView({
         el.querySelector(`[data-para-idx="${target}"]`)?.scrollIntoView({ block: "center" });
         return;
       }
+      if (isPdf && layoutModeRef.current === "scroll") {
+        // A PDF's scroll layout is a stack of uniform page slots, and the saved
+        // position is a *page index*: the chapter fraction inside a page is
+        // always zero, so the fraction that lands on the page is the page's own
+        // share of the book. Without this the book reopens at its first page.
+        if (pdfSlotH.current > 0) {
+          el.scrollTop = chapterIdx * pdfSlotH.current;
+          return;
+        }
+        applyPosition(el, globalProgress(chapters, chapterIdx, 0), "scroll", marginRef.current);
+        return;
+      }
       applyPosition(el, frac, layoutModeRef.current, marginRef.current);
     },
-    [chapterData, layoutModeRef, marginRef, onChapterEnd, play, speechQueue],
+    [
+      chapterData,
+      chapterIdx,
+      chapters,
+      isPdf,
+      layoutModeRef,
+      marginRef,
+      onChapterEnd,
+      play,
+      speechQueue,
+    ],
   );
 
   // Apply the pending position once the chapter body has rendered: a search hit
@@ -1039,8 +1065,13 @@ function ReaderView({
       applyPending(el);
       // New chapter, new lines: the ruler measures the page it is now over. The
       // chapter body is in the DOM by the time this effect runs, and the frame
-      // covers the tail spacer the ruler's own geometry depends on.
-      relayRulerLayout(el);
+      // covers the tail spacer the ruler's own geometry depends on. A turn's
+      // direction rides along once — a page the reader arrived on meets the band
+      // at its start — and is spent here, so a later chapter jump (a bookmark, a
+      // TTS roll) keeps the band where the reader was put.
+      const dir = rulerDirRef.current;
+      rulerDirRef.current = 0;
+      relayRulerLayout(el, dir);
     });
     return () => cancelAnimationFrame(frame);
   }, [chapterData, applyPending, measureTail]);
@@ -1056,23 +1087,28 @@ function ReaderView({
         // next chapter" deterministic for keyboard paging.
         const handle = foliateRef.current;
         if (!handle) return;
+        // Same handover as the prose turn below: out of the way while the page
+        // moves, back on the page that arrives (foliate relays that itself, with
+        // the direction it was flipped).
+        relayRulerTurn(viewportRef.current, dir);
         if (handle.atEdge(dir)) handle.section(dir);
         else handle.flip(dir);
         return;
       }
       const el = scrollRef.current;
       if (!el) return;
+      // A prose page turn is a page the reader arrives on: the ruler is told the
+      // turn has started — it steps out of the way rather than riding this page
+      // down to its last line — and meets the new page at the far edge when the
+      // turn's own relay lands (see `flipPage` / the settle notice in `onScroll`).
+      rulerDirRef.current = dir;
+      relayRulerTurn(el, dir);
       if (isPdf) {
         // A PDF page fills the viewport exactly — there is no column to
         // slide, so a flip is a page step (two at a time in the spread).
         goTo(chapterIdx + dir * (layoutModeRef.current === "double" ? 2 : 1));
         return;
       }
-      // A prose page turn is a page the reader arrives on, and the ruler meets
-      // it at the far edge (its own relay reads this on the way out). Chapter
-      // rolls leave it alone: they land where the reader was, not where the
-      // page starts.
-      rulerDirRef.current = dir;
       const max = el.scrollWidth - el.clientWidth;
       const pos = el.scrollLeft;
       if (dir === 1 && pos >= max - 2) {
@@ -1196,21 +1232,31 @@ function ReaderView({
       if (editing) return;
       // The reading ruler owns the arrows while it is on, because that is what
       // reading with it means: each press lays the band over the next block of
-      // lines. Only when the page runs out does the key become a page turn again
-      // — the band declines, and the turn happens here instead.
-      //
-      // In the scroll layout it owns nothing: there the arrows are the reader's
-      // own scrolling, and a ruler drawn on a page that scrolls under it is
-      // exactly what a physical ruler does — it stays where it is, and `onScroll`
-      // lays it back over the lines that have arrived under it.
+      // lines, and the band arrives where the press put it — no second
+      // adjustment. Only when the page runs out does the key move the reading
+      // instead: a page turn in the paged layouts, one step of scroll in the
+      // scroll layout, which brings the next block under the band where it is.
       //
       // Horizontal type reads down the page, so all four arrows step it. Vertical
       // type reads leftward, where Left/Right are the page turns, so only Up/Down
       // step the band (the reference's own rule).
-      if (settings.readingRuler && paged) {
-        const step = rulerStepForKey(event.key, readsLeftward);
+      if (settings.readingRuler) {
+        // Left/Right are spoken for: by the page turns in vertical type, and by
+        // the chapter steps of the scroll layout. Up/Down step the band in both.
+        const step = rulerStepForKey(event.key, readsLeftward || !paged);
         if (step !== 0) {
-          if (!(rulerRef.current?.move(step) ?? false)) flip(step);
+          if (!(rulerRef.current?.move(step) ?? false)) {
+            const el = scrollRef.current;
+            if (paged) flip(step);
+            else if (el) {
+              // One step of the reader's own leading, times the lines the band
+              // spans: the same distance the band walks inside a page.
+              el.scrollBy({
+                top: step * fontSize * (LINE_HEIGHTS[lineHeightIdx] ?? 1.8) * settings.rulerLines,
+                behavior: "smooth",
+              });
+            }
+          }
           event.preventDefault();
           return;
         }
@@ -1259,8 +1305,11 @@ function ReaderView({
     return () => window.removeEventListener("keydown", onKey);
   }, [
     bookImages.length,
+    // The ruler's scroll-layout step is one block of the reader's own leading.
+    fontSize,
     flip,
     fullscreen,
+    lineHeightIdx,
     lightboxIdx,
     lookup,
     panel,
@@ -1271,6 +1320,7 @@ function ReaderView({
     // re-bind when it is switched on — otherwise the key that just turned the
     // band on would keep turning pages until something else changed.
     settings.readingRuler,
+    settings.rulerLines,
     stepChapter,
     toggleFullscreen,
   ]);
@@ -2473,6 +2523,8 @@ function ReaderView({
       onToggleBookmark={addBookmark}
       bookmarkPending={createBookmark.isPending || deleteBookmark.isPending}
       onToggleFullscreen={() => void toggleFullscreen()}
+      rulerOn={settings.readingRuler}
+      onToggleRuler={() => settings.update({ readingRuler: !settings.readingRuler })}
     />
   );
 

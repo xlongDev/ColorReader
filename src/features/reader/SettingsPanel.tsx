@@ -22,6 +22,7 @@ import {
   MARGIN_X_PRESETS,
   PAGE_NUMBER_SCOPES,
   PAGE_THEMES,
+  isPresetRulerColor,
   pageIsNight,
   PARA_GAPS,
   RULER_COLORS,
@@ -62,6 +63,8 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
   const nightPage = resolveSurface(activeSurface, settings.customSurface).mode === "dark";
   const fileRef = useRef<HTMLInputElement>(null);
   const reduce = useReducedMotion();
+  // A colour outside the presets is the custom one; the wheel bead shows it.
+  const custom = isPresetRulerColor(settings.rulerColor) ? null : settings.rulerColor;
 
   const pickImage = async (file: File) => {
     update({ surface: "custom", customSurface: await compressImage(file) });
@@ -261,6 +264,40 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
                       />
                     </button>
                   ))}
+                  {/* 无极颜色：一个色轮珠子，点击唤起浏览器自己的取色器。珠子显示
+                      当前自定义色；没有时转一圈色相，读作「这里可以随便挑」。 */}
+                  <span
+                    className={cn(
+                      "focus-within:focus-ring relative flex h-5 w-5 items-center justify-center rounded-full transition-transform",
+                      custom ? "scale-110" : "hover:scale-105",
+                    )}
+                    style={
+                      custom
+                        ? { boxShadow: `0 0 0 2px var(--glass-btn), 0 0 0 3.5px ${custom}` }
+                        : undefined
+                    }
+                  >
+                    <span
+                      aria-hidden
+                      className="block h-3.5 w-3.5 rounded-full"
+                      style={
+                        custom
+                          ? { backgroundColor: custom }
+                          : {
+                              background:
+                                "conic-gradient(from 40deg, #f76f6f, #ffd12e, #7cd92c, #56aee2, #b08fe8, #f76f6f)",
+                            }
+                      }
+                    />
+                    <input
+                      type="color"
+                      aria-label="自定义颜色"
+                      title="自定义颜色"
+                      value={custom ?? "#7cd92c"}
+                      onChange={(event) => update({ rulerColor: event.target.value })}
+                      className="absolute inset-0 cursor-pointer opacity-0"
+                    />
+                  </span>
                 </div>
               </div>
               <SliderRow

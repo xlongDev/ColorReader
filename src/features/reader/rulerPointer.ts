@@ -93,7 +93,21 @@ export const RULER_LAYOUT_EVENT = "reading-ruler-layout";
 
 /** Relays one relayout — a page turn, a repagination — to the ruler. */
 export function relayRulerLayout(target: Element | null, dir: 1 | -1 | 0 = 0) {
-  target?.dispatchEvent(new CustomEvent(RULER_LAYOUT_EVENT, { bubbles: true, detail: dir }));
+  target?.dispatchEvent(
+    new CustomEvent(RULER_LAYOUT_EVENT, { bubbles: true, detail: { dir, landed: true } }),
+  );
+}
+
+/**
+ * Relays the *start* of a turn: the page is still moving, and a band drawn on a
+ * page that is leaving is the band riding the old page down to its last line.
+ * The ruler hides until the turn's own `relayRulerLayout` — sent once the page
+ * has stopped moving — lands it on the page that arrived.
+ */
+export function relayRulerTurn(target: Element | null, dir: 1 | -1) {
+  target?.dispatchEvent(
+    new CustomEvent(RULER_LAYOUT_EVENT, { bubbles: true, detail: { dir, landed: false } }),
+  );
 }
 
 /**

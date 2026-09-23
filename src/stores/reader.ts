@@ -45,8 +45,9 @@ interface ReaderState {
   readingRuler: boolean;
   /** How many whole lines the band spans. */
   rulerLines: number;
-  /** The band's colour, a `RULER_COLORS` key; `clear` leaves it unfilled. */
-  rulerColor: RulerColor;
+  /** The band's colour: a `RULER_COLORS` key, `clear` for no fill, or a custom
+   *  `#rrggbb`. */
+  rulerColor: string;
   /** How far the page outside the band fades toward the paper. */
   rulerOpacity: number;
   /** Where the band sits along the reading axis, as a percentage — moved by
@@ -252,6 +253,24 @@ export const RULER_COLORS: { key: RulerColor; hex: string | null; label: string 
   { key: "blue", hex: "#56aee2", label: "蓝色" },
   { key: "red", hex: "#f76f6f", label: "红色" },
 ];
+
+/**
+ * The band's fill for a stored colour: a preset key resolves to its hex, a
+ * custom value is its own hex, and `clear` — or anything unrecognisable, which
+ * an older build could have written — fills nothing.
+ */
+export function rulerHex(color: string): string | null {
+  if (color === "clear") return null;
+  const preset = RULER_COLORS.find((entry) => entry.key === color);
+  if (preset) return preset.hex;
+  return /^#[0-9a-f]{6}$/i.test(color) ? color : null;
+}
+
+/** Whether a stored colour is one of the presets, which is what the picker
+ *  needs to know to light the custom swatch instead. */
+export function isPresetRulerColor(color: string): boolean {
+  return color === "clear" || RULER_COLORS.some((entry) => entry.key === color);
+}
 
 /** Bounds for the reading ruler's steppers, and the parked band's default
  *  place — a third of the way down, which is where the reference parks it. The
