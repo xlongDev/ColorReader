@@ -1,8 +1,6 @@
-import { useReducedMotion } from "motion/react";
-import { motion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import {
   ArrowDown,
-  ArrowUp,
   CaretDown,
   MagnifyingGlass,
   Rows,
@@ -15,7 +13,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassInput } from "@/components/glass/input";
 import { sortOptions } from "@/features/library/format";
 import { groupOptions, type ShelfGroup } from "@/features/library/group";
-import { SPRING } from "@/lib/motion";
+import { DURATION, SPRING } from "@/lib/motion";
 import { cn } from "@/lib/cn";
 import type { useLibraryStats } from "@/hooks/useLibrary";
 import type { LibrarySort } from "@/types/ipc";
@@ -55,6 +53,22 @@ export function ShelfToolbar({
   stats: ReturnType<typeof useLibraryStats>["data"];
 }) {
   const reduce = useReducedMotion();
+
+  /**
+   * Where a word waits when it is not the one being shown: 降序 parks above the
+   * slot, 升序 below it, so flipping the control slides *both* the same way in
+   * one movement — the outgoing word leaving through the top as the incoming
+   * one arrives from the bottom. One direction for the whole control, which is
+   * the thing that makes it read as the shelf being re-pointed rather than as
+   * a word that was replaced.
+   *
+   * Both words stay mounted rather than swapping under an `AnimatePresence`,
+   * so a flip caught mid-flight carries its velocity into the next one instead
+   * of restarting from wherever the interrupted one happened to be.
+   */
+  const parked = (above: boolean) => (reduce ? "0%" : above ? "-100%" : "100%");
+  const flip = reduce ? { duration: DURATION.fast } : SPRING.tap;
+
   return (
     <div className="mb-4 flex flex-wrap items-center gap-2">
       <div className="relative w-full max-w-64">
@@ -119,8 +133,34 @@ export function ShelfToolbar({
           descending && "text-text-1",
         )}
       >
-        {descending ? <ArrowDown size={13} /> : <ArrowUp size={13} />}
-        {descending ? "降序" : "升序"}
+        {/* One arrow, turned, rather than two swapped: the flip is a rotation
+            and an icon that turns in place says that, where two different
+            glyphs say "this is a different control now". */}
+        <motion.span
+          className="inline-flex"
+          animate={{ rotate: descending ? 0 : 180 }}
+          transition={reduce ? { duration: 0 } : SPRING.tap}
+        >
+          <ArrowDown size={13} />
+        </motion.span>
+        {/* Fixed width: both words are two characters, so the control must not
+            twitch as they trade places. */}
+        <span className="relative inline-block h-5 w-8 overflow-hidden">
+          <motion.span
+            animate={{ y: descending ? "0%" : parked(true), opacity: descending ? 1 : 0 }}
+            transition={flip}
+            className="absolute inset-0 flex items-center justify-center"
+          >
+            降序
+          </motion.span>
+          <motion.span
+            animate={{ y: descending ? parked(false) : "0%", opacity: descending ? 0 : 1 }}
+            transition={flip}
+            className="absolute inset-0 flex items-center justify-center"
+          >
+            升序
+          </motion.span>
+        </span>
       </button>
 
       {/* Grouping. Sections, not order: with a group chosen the shelf is cut
