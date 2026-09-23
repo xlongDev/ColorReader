@@ -23,7 +23,7 @@ import { ShelfToolbar } from "@/features/library/ShelfToolbar";
 import { TagBar } from "@/features/library/TagBar";
 import { DeleteBookDialog } from "@/features/library/BookCard";
 import { pickContinueReading, sortOptions, titleForFilter } from "@/features/library/format";
-import { shelfSections, type ShelfGroup } from "@/features/library/group";
+import { shelfSections } from "@/features/library/group";
 import { batchNeedsPassword } from "@/features/library/pack";
 import { buildBookQuery, type LibraryFilter } from "@/features/library/shelfQuery";
 import { useShelfSelection } from "@/features/library/useShelfSelection";
@@ -44,8 +44,8 @@ import {
 import { DURATION, useMotion } from "@/lib/motion";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { useBookHandoff } from "@/stores/book-handoff";
-import { useSettings } from "@/stores/settings";
-import type { BookQuery, BookSummary, ImportOutcome, LibrarySort } from "@/types/ipc";
+import { useSettings, type ShelfView } from "@/stores/settings";
+import type { BookQuery, BookSummary, ImportOutcome } from "@/types/ipc";
 
 // Dialog chunks load on first open; local disk, so no spinner is needed.
 const ExportPackDialog = lazy(() =>
@@ -165,22 +165,28 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   );
 
   const [now, setNow] = useState(() => new Date());
-  const [search, setSearch] = useState("");
-  const [sort, setSort] = useState<LibrarySort>("recentlyAdded");
-  /** True while the shelf reads the backend's order backwards. Kept as the
-   *  flip rather than as a direction because every order arrives in its own
-   *  one — 最近添加 is already descending, 书名 already ascending — and a
-   *  stored "descending" would have to be recomputed whenever the order
-   *  changed. Reversing the array gives all seven both directions for free,
-   *  with no second `ORDER BY` per option. */
-  const [reversed, setReversed] = useState(false);
-  /** The piles the shelf is shown in, if any; see `group.ts` for the
-   *  dimensions. Kept beside the order rather than in the settings store: like
-   *  the order, it is how this visit is reading the shelf, not a preference. */
-  const [group, setGroup] = useState<ShelfGroup>("none");
-  /** The piles whose cards are folded away, by section key. Beside the grouping
-   *  rather than in the settings store, for the same reason: which piles a
-   *  reader has folded shut is how this visit is reading the shelf.
+  /**
+   * How this shelf is arranged, from the settings store — so a trip into the
+   * reader, which unmounts the shelf, comes back to the same view, and so
+   * does a restart. Each filter has its own record: see `ShelfView`.
+   *
+   * `collapsed` is deliberately *not* in it. Which piles are folded shut is a
+   * gesture of the moment, and a shelf that comes back with piles closed tells
+   * the reader nothing about what is underneath them.
+   */
+  const view = useSettings((s) => s.shelfViews[filter]);
+  const setShelfView = useSettings((s) => s.setShelfView);
+  const update = (patch: Partial<ShelfView>) => setShelfView(filter, patch);
+  const { search, sort, descending, group } = view;
+  /** True while the shelf reads the backend's order backwards. Every order
+   *  arrives in its own direction — 最近添加 is already descending, 书名
+   *  already ascending — and `descending` names the way the reader wants it,
+   *  so the flip is the difference between the two. Reversing the array gives
+   *  all seven orders both directions for free, with no second `ORDER BY`
+   *  per option. */
+  const defaultDesc = sortOptions.find((option) => option.value === sort)?.desc ?? false;
+  const reversed = defaultDesc !== descending;
+  /** The piles whose cards are folded away, by section key.
    *
    *  Not cleared when the grouping changes: keys from another dimension simply
    *  match nothing, and coming back to this one finds the piles as they were. */
@@ -193,8 +199,6 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       return next;
     });
   }, []);
-  const defaultDesc = sortOptions.find((option) => option.value === sort)?.desc ?? false;
-  const descending = defaultDesc !== reversed;
   const [deleteTarget, setDeleteTarget] = useState<BookSummary | null>(null);
   const [exportTarget, setExportTarget] = useState<BookSummary | null>(null);
   const [lockedBatch, setLockedBatch] = useState<string[] | null>(null);
@@ -204,8 +208,6 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const [clippingsOpen, setClippingsOpen] = useState(false);
   /** True when the import button was clicked in the browser, which has no backend. */
   const [webNotice, setWebNotice] = useState(false);
-  /** Tag shelf: the tag being shown, `null` for the whole shelf. */
-  const [tag, setTag] = useState<string | null>(null);
   /** Books the label sheet is open for; one book = edit, several = add. */
   const [tagTarget, setTagTarget] = useState<BookSummary[] | null>(null);
   /** The book whose metadata sheet is open; one book at a time, since a title
@@ -217,6 +219,24 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     return () => window.clearInterval(id);
   }, []);
 
+  const tags = useTags();
+  /**
+   * The label the 标签 shelf is narrowed to.
+   *
+   * Falling back to the whole shelf when the remembered label is not in the
+   * list: it is remembered now, so a label can be deleted while this shelf is
+   * away, and a filter pointing at a label that no longer exists is an empty
+   * grid with no chip lit to explain it. Deleting from the bar clears the
+   * choice itself; this is the case it cannot see.
+   *
+   * Left alone while the labels are still loading — `undefined` means "not
+   * known yet", and dropping the choice then would forget it on every mount.
+   */
+  const tag =
+    view.tag !== null && tags.data?.some((entry) => entry.name === view.tag) === false
+      ? null
+      : view.tag;
+
   const query: BookQuery = useMemo(
     () => buildBookQuery(filter, sort, search, tag),
     [filter, sort, search, tag],
@@ -224,7 +244,6 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
 
   const books = useBooks(query);
   const stats = useLibraryStats();
-  const tags = useTags();
   const assignTags = useAssignTags();
   const importBooks = useImportBooks();
   const exportPack = useExportPack();
@@ -349,17 +368,23 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       >
         {filter === "all" && <ContinueReadingCard book={continueReading} onOpen={openBook} />}
 
-        {filter === "tags" && <TagBar tags={tags.data ?? []} selected={tag} onSelect={setTag} />}
+        {filter === "tags" && (
+          <TagBar
+            tags={tags.data ?? []}
+            selected={tag}
+            onSelect={(next) => update({ tag: next })}
+          />
+        )}
 
         <ShelfToolbar
           search={search}
-          onSearch={setSearch}
+          onSearch={(value) => update({ search: value })}
           sort={sort}
-          onSort={setSort}
+          onSort={(value) => update({ sort: value })}
           descending={descending}
-          onDescending={(next) => setReversed(next !== defaultDesc)}
+          onDescending={(next) => update({ descending: next })}
           group={group}
-          onGroup={setGroup}
+          onGroup={(value) => update({ group: value })}
           layout={shelfLayout}
           onLayout={setShelfLayout}
           managing={selection.managing}

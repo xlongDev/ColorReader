@@ -26,6 +26,7 @@ import {
 
 import { cn } from "@/lib/cn";
 import { SPRING, useMotion } from "@/lib/motion";
+import { useSettings, type NotesView } from "@/stores/settings";
 import { useBooks } from "@/hooks/useLibrary";
 import {
   useAnnotationsByBook,
@@ -69,10 +70,12 @@ import type { BookQuery } from "@/types/ipc";
  *  in is the one whose notes you are most likely looking for. */
 const SHELF_QUERY: BookQuery = { filter: "all", sort: "recentlyRead" };
 
+// `satisfies` so the two cannot drift: a value added here that the store does
+// not know about is a compile error, not a filter that silently resets.
 const FILTERS = [
   { value: "all", label: "全部" },
   { value: "noted", label: "有笔记" },
-] as const;
+] as const satisfies readonly { value: NotesView["filter"]; label: string }[];
 
 type FilterValue = (typeof FILTERS)[number]["value"];
 
@@ -95,8 +98,12 @@ export function NotesPage() {
   const annotations = useAnnotationsByBook(bookIds);
   const { byBook } = annotations;
 
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<FilterValue>("all");
+  // What the list is narrowed to, from the settings store: following a
+  // highlight into its book unmounts this page, and a reader who narrows to
+  // 有笔记 and comes back wants the same list, not the whole one again.
+  const view = useSettings((s) => s.notesView);
+  const setNotesView = useSettings((s) => s.setNotesView);
+  const { query, filter } = view;
 
   /** Batch-manage mode: rows toggle selection instead of opening. */
   const [managing, setManaging] = useState(false);
@@ -264,9 +271,9 @@ export function NotesPage() {
         >
           <Toolbar
             query={query}
-            onQuery={setQuery}
+            onQuery={(value) => setNotesView({ query: value })}
             filter={filter}
-            onFilter={setFilter}
+            onFilter={(value) => setNotesView({ filter: value })}
             total={total}
             visible={visible}
             narrowed={narrowed}
@@ -284,10 +291,7 @@ export function NotesPage() {
               <Board
                 narrowed={narrowed}
                 hasAny={total.highlights > 0}
-                onClear={() => {
-                  setQuery("");
-                  setFilter("all");
-                }}
+                onClear={() => setNotesView({ query: "", filter: "all" })}
               />
             ) : (
               <div className="pb-4">
