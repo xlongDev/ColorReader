@@ -191,6 +191,15 @@ export function AppShell() {
     if (!reading && readerFullscreen) setReaderFullscreen(false);
   }, [reading, readerFullscreen, setReaderFullscreen]);
 
+  // Remember where a book was opened from, for the reader's 返回. Written from
+  // the shell because every route lands here and the reader is not mounted
+  // when the trip starts; `reading` is excluded so a reader-to-reader jump
+  // (a citation in another book) cannot overwrite the real origin.
+  const setReaderReturnPath = useChrome((s) => s.setReaderReturnPath);
+  useEffect(() => {
+    if (!reading) setReaderReturnPath(pathname);
+  }, [reading, pathname, setReaderReturnPath]);
+
   return (
     <div
       className="relative flex h-[100dvh] flex-col"

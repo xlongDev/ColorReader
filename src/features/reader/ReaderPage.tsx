@@ -112,6 +112,7 @@ import {
   HIGHLIGHT_COLORS,
 } from "@/stores/reader";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
+import { useChrome } from "@/stores/chrome";
 import { cn } from "@/lib/cn";
 import type { PdfOutlineItem } from "@/lib/pdf";
 import type {
@@ -204,6 +205,8 @@ interface ReaderViewProps {
    * "carry on where I left off".
    */
   initialAnnotation: string | null;
+  /** What the 返回 button says; where it goes is `onBack`'s business. */
+  backLabel: string;
   onBack: () => void;
 }
 
@@ -225,6 +228,7 @@ function ReaderView({
   initialQuery,
   initialOffset,
   initialAnnotation,
+  backLabel,
   onBack,
 }: ReaderViewProps) {
   // Destructure `mutate`: the mutation result object gets a new identity on
@@ -2451,6 +2455,7 @@ function ReaderView({
     <ReaderHeaderBar
       fullscreen={fullscreen}
       onBack={leaveReader}
+      backLabel={backLabel}
       bookId={bookId}
       coverUrl={coverUrl}
       coverBoxRef={coverBoxRef}
@@ -3008,6 +3013,18 @@ function ReaderView({
   );
 }
 
+/**
+ * What the 返回 button is called, by the route it goes back to.
+ *
+ * The shelf routes are absent on purpose: they all read "返回书库", which is
+ * what the button has always said and what every shelf-side test looks for.
+ */
+const BACK_LABELS: Record<string, string> = {
+  "/notes": "返回笔记",
+  "/search": "返回搜索",
+  "/stats": "返回统计",
+};
+
 /** A non-negative integer query parameter, or `null` when absent or malformed. */
 function readOffset(value: string | null): number | null {
   if (value === null) return null;
@@ -3022,6 +3039,10 @@ export function ReaderPage() {
   const initialChapter = readOffset(searchParams.get("chapter"));
   const initialOffset = readOffset(searchParams.get("at"));
   const initialQuery = searchParams.get("q") ?? "";
+  // Where this book was opened from. The shell wrote it down on the way in.
+  const returnPath = useChrome((s) => s.readerReturnPath);
+  const backLabel = BACK_LABELS[returnPath] ?? "返回书库";
+  const goBack = useCallback(() => navigate(returnPath), [navigate, returnPath]);
   // A `colorreader://` link lands here as a plain query parameter, so the deep
   // link and a search result reach the reader the same way.
   const initialAnnotation = searchParams.get("annotation");
@@ -3057,8 +3078,8 @@ export function ReaderPage() {
           title="这本书打不开"
           description="章节索引加载失败，回到书库重新导入试试。"
           action={
-            <GlassButton variant="subtle" onClick={() => navigate("/")}>
-              返回书库
+            <GlassButton variant="subtle" onClick={goBack}>
+              {backLabel}
             </GlassButton>
           }
         />
@@ -3074,7 +3095,8 @@ export function ReaderPage() {
     book.isError,
     toc.isPending,
     toc.isError,
-    navigate,
+    goBack,
+    backLabel,
     initialAnnotation,
     linkedAnnotations.isPending,
   ]);
@@ -3095,8 +3117,8 @@ export function ReaderPage() {
           title="这本书没有章节"
           description="这本书的格式暂时无法提取正文，重新导入可能可以解决。"
           action={
-            <GlassButton variant="subtle" onClick={() => navigate("/")}>
-              返回书库
+            <GlassButton variant="subtle" onClick={goBack}>
+              {backLabel}
             </GlassButton>
           }
         />
@@ -3118,7 +3140,8 @@ export function ReaderPage() {
       initialQuery={initialQuery}
       initialOffset={initialOffset}
       initialAnnotation={initialAnnotation}
-      onBack={() => navigate("/")}
+      backLabel={backLabel}
+      onBack={goBack}
     />
   );
 }

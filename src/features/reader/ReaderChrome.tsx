@@ -44,6 +44,7 @@ const CHROME_BTN = "bg-(--glass-btn) border-hairline-strong shadow-glass";
 export function ReaderHeaderBar({
   fullscreen,
   onBack,
+  backLabel,
   bookId,
   coverUrl,
   coverBoxRef,
@@ -64,6 +65,8 @@ export function ReaderHeaderBar({
 }: {
   fullscreen: boolean;
   onBack: () => void;
+  /** Where 返回 leads, named for the page it goes back to. */
+  backLabel: string;
   bookId: string;
   coverUrl: string | null;
   coverBoxRef: RefObject<HTMLSpanElement | null>;
@@ -91,7 +94,7 @@ export function ReaderHeaderBar({
         fullscreen && "bg-(--glass-btn) backdrop-blur-xl",
       )}
     >
-      <GlassIconButton label="返回书库" size="sm" onClick={onBack} className={CHROME_BTN}>
+      <GlassIconButton label={backLabel} size="sm" onClick={onBack} className={CHROME_BTN}>
         <ArrowLeft size={16} />
       </GlassIconButton>
       <HeaderCover bookId={bookId} coverUrl={coverUrl} boxRef={coverBoxRef} />
