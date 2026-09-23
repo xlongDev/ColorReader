@@ -25,7 +25,11 @@ import { DeleteBookDialog } from "@/features/library/BookCard";
 import { pickContinueReading, sortOptions, titleForFilter } from "@/features/library/format";
 import { shelfSections } from "@/features/library/group";
 import { batchNeedsPassword } from "@/features/library/pack";
-import { buildBookQuery, type LibraryFilter } from "@/features/library/shelfQuery";
+import {
+  buildBookQuery,
+  resolveTagFilter,
+  type LibraryFilter,
+} from "@/features/library/shelfQuery";
 import { useShelfSelection } from "@/features/library/useShelfSelection";
 import { useDragDropImport } from "@/hooks/useDragDropImport";
 import { useShelfWindow } from "@/hooks/useShelfWindow";
@@ -220,22 +224,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   }, []);
 
   const tags = useTags();
-  /**
-   * The label the 标签 shelf is narrowed to.
-   *
-   * Falling back to the whole shelf when the remembered label is not in the
-   * list: it is remembered now, so a label can be deleted while this shelf is
-   * away, and a filter pointing at a label that no longer exists is an empty
-   * grid with no chip lit to explain it. Deleting from the bar clears the
-   * choice itself; this is the case it cannot see.
-   *
-   * Left alone while the labels are still loading — `undefined` means "not
-   * known yet", and dropping the choice then would forget it on every mount.
-   */
-  const tag =
-    view.tag !== null && tags.data?.some((entry) => entry.name === view.tag) === false
-      ? null
-      : view.tag;
+  /** The label this shelf is narrowed to; see `resolveTagFilter` for why a
+   *  remembered label that no longer exists falls back to the whole shelf. */
+  const tag = resolveTagFilter(view.tag, tags.data);
 
   const query: BookQuery = useMemo(
     () => buildBookQuery(filter, sort, search, tag),
