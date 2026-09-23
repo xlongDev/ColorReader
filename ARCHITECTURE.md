@@ -257,11 +257,11 @@ Feature-oriented：`components/` 放可复用 UI，`features/` 放业务领域�
 
 ### 状态归属
 
-| 状态类型          | 归属               | 例子                                   |
-| ----------------- | ------------------ | -------------------------------------- |
-| UI / 交互 / 偏好  | **Zustand**        | 侧边栏折叠、主题、命令注册表、面板开关 |
-| 服务端（IPC）数据 | **TanStack Query** | 系统信息、书库列表、搜索结果、AI 回答  |
-| 派生数据          | `useMemo`          | 命令面板的评分与分组                   |
+| 状态类型          | 归属               | 例子                                             |
+| ----------------- | ------------------ | ------------------------------------------------ |
+| UI / 交互 / 偏好  | **Zustand**        | 侧边栏折叠、主题、书架视图、命令注册表、面板开关 |
+| 服务端（IPC）数据 | **TanStack Query** | 系统信息、书库列表、搜索结果、AI 回答            |
+| 派生数据          | `useMemo`          | 命令面板的评分与分组                             |
 
 禁止把 IPC 返回值塞进 Zustand，也禁止把所有业务状态塞进 Zustand。
 
@@ -373,6 +373,10 @@ Command（lib/commands.ts）
 ### 路由
 
 桌面应用没有地址栏，使用 `createMemoryRouter`。命令 → 路由跳转通过一个 `CustomEvent` 桥接（`useNavigationBridge`），因为命令注册表本身在 React Router 之外。
+
+**返回是记下来的，不是从历史里读的。** 阅读器里的「返回」要回到打开这本书的那一页 —— 书库 / 最近 / 收藏 / 标签 / 笔记 / 统计 / 搜索，七个入口。memory router 没有可查询的地址栏，而阅读器还会自己压栈（RAG 引用会打开另一本书），所以 `navigate(-1)` 在那条路径上指回的是上一本书，不是书架。做法是 `AppShell` 用一个 effect 记住最近一次非 `/reader` 的 pathname（`chrome.readerReturnPath`，**不持久化**：它是这次会话从哪来，不是偏好），阅读器的按钮读它，并按来源改自己的文案。
+
+**页面卸载不等于状态丢失。** 进阅读器会把书库或笔记页整个卸载，所以「回来时还是刚才那样」不能靠组件状态 —— 书架视图与笔记页的筛选都落在 `useSettings` 里（`shelfViews` / `notesView`，见 `src/stores/settings.ts`），跟着 `persist` 一起活过重启。这是「偏好」而不是「业务数据」，与下面「禁止把 IPC 返回值塞进 Zustand」不冲突。
 
 ---
 
@@ -597,7 +601,7 @@ capability 只放行实际用到的三条：`updater:allow-check`、`updater:all
 
 - **CI**：`.github/workflows/ci.yml`（push/PR 跑 `verify` + Rust 三件套 + bundle size 摘要）、`release.yml`（`v*` tag → tauri-action 四平台 draft release，打包前先跑 Rust 门禁）。
 - **打包**：`pnpm tauri build` 本地实测产出 `ColorReader.app`（arm64，ad-hoc 签名，二进制 7.7 MB）；dmg 由 CI 产出。
-- **E2E**：`pnpm test:e2e`（Playwright + chromium）对 `vite preview` 的生产构建做路由 smoke：书库 → 搜索 → 设置 → 书库各页渲染且 console/pageerror 为空，懒加载 chunk 加载失败会在此暴露。
+- **E2E**：`pnpm test:e2e`（Playwright，**chromium + webkit 两个 project** —— 前者是开发便利，后者才是 Tauri 真正用的引擎）对 `vite preview` 的生产构建做路由 smoke：书库 → 搜索 → 设置 → 书库各页渲染且 console/pageerror 为空，懒加载 chunk 加载失败会在此暴露。
 - **Benchmark**：`cargo test --release bench -- --ignored --nocapture`（600 章 / 2.7 MB 参考书）：导入（切章 + FTS 索引）60 ms，检索均值 1.3 ms，目录加载 0.6 ms。Apple M 系列、release profile。
 
 > 文档同步备忘：本节的 PDF 段落已据代码实际状态订正（此前写「PDF 不可标注」已失效——文字版 PDF 标注 + 划词问 AI 均已落地）；「同步模型」一节已改写为「进度 + 标注 + 书签」，P0-① 标注/书签同步随之从待办移出。
