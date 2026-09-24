@@ -55,7 +55,16 @@ export function open(): Promise<IDBDatabase> {
   return opening;
 }
 
-/** Runs one request against a store and settles with its result. */
+/**
+ * Runs one request against a store and settles with its result.
+ *
+ * 🔴 A **write** is settled by the transaction completing, not by its request
+ * succeeding. A value the engine cannot clone (WebKit refuses `File` objects
+ * outright) fails the transaction after the request has already reported
+ * success — so waiting on the request alone reported an import as stored while
+ * the store stayed empty, and the book came back later as "this book's file is
+ * not in local storage". A read has nothing to wait for and settles on its own.
+ */
 async function run<T>(
   store: StoreName,
   mode: IDBTransactionMode,
@@ -65,8 +74,19 @@ async function run<T>(
   return new Promise<T>((resolve, reject) => {
     const transaction = database.transaction(store, mode);
     const result = request(transaction.objectStore(store));
-    result.addEventListener("success", () => resolve(result.result as T));
+    let value: T;
+    result.addEventListener("success", () => {
+      value = result.result as T;
+      if (mode === "readonly") resolve(value);
+    });
     result.addEventListener("error", () => reject(result.error ?? new Error(`${store} 读写失败`)));
+    transaction.addEventListener("complete", () => resolve(value));
+    transaction.addEventListener("abort", () =>
+      reject(transaction.error ?? new Error(`${store} 的写入被中止`)),
+    );
+    transaction.addEventListener("error", () =>
+      reject(transaction.error ?? new Error(`${store} 写入失败`)),
+    );
   });
 }
 
