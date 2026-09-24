@@ -1,12 +1,22 @@
 import { useRef, useState } from "react";
 import { motion } from "motion/react";
-import { BookOpen, Check, Export, PencilSimple, Star, Tag, Trash } from "@phosphor-icons/react";
+import {
+  BookOpen,
+  Check,
+  DownloadSimple,
+  Export,
+  PencilSimple,
+  Star,
+  Tag,
+  Trash,
+} from "@phosphor-icons/react";
 
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { MarqueeText } from "@/components/common/MarqueeText";
 import { authorLine, formatFileSize } from "@/features/library/format";
 import { cn } from "@/lib/cn";
+import { isDesktopRuntime } from "@/lib/ipc";
 import { SPRING, useMotion } from "@/lib/motion";
 import { useLandingBox } from "@/hooks/useLandingBox";
 import { boxOf, useBookHandoff, type CoverBox } from "@/stores/book-handoff";
@@ -33,6 +43,10 @@ interface BookCardProps {
   onToggleFavorite: (book: BookSummary) => void;
   onAskDelete: (book: BookSummary) => void;
   onAskExport: (book: BookSummary) => void;
+  /** The browser's export: a download of the book's own file. The desktop has
+   *  somewhere to write and a panel to ask, so it offers `onAskExport`
+   *  (a `.ctz`) instead — only one of the two is ever rendered. */
+  onExportFile: (book: BookSummary) => void;
   onEditTags: (book: BookSummary) => void;
   onEditMeta: (book: BookSummary) => void;
   /** Batch-manage mode: clicks toggle selection instead of opening. */
@@ -71,6 +85,7 @@ export function BookCard({
   onToggleFavorite,
   onAskDelete,
   onAskExport,
+  onExportFile,
   onEditTags,
   onEditMeta,
   selecting = false,
@@ -330,16 +345,33 @@ export function BookCard({
           >
             <PencilSimple size={13} />
           </GlassIconButton>
-          <GlassIconButton
-            label="导出书档"
-            onClick={(event) => {
-              event.stopPropagation();
-              onAskExport(book);
-            }}
-            className={coverAction}
-          >
-            <Export size={13} />
-          </GlassIconButton>
+          {/* One slot, two exports. The `grid` bar is a five-column grid, so a
+              sixth button would either wrap or shrink every chip; and the two
+              are the same gesture anyway — "let me have this book" — answered
+              by whichever build can answer it. */}
+          {isDesktopRuntime ? (
+            <GlassIconButton
+              label="导出书档"
+              onClick={(event) => {
+                event.stopPropagation();
+                onAskExport(book);
+              }}
+              className={coverAction}
+            >
+              <Export size={13} />
+            </GlassIconButton>
+          ) : (
+            <GlassIconButton
+              label="导出文件"
+              onClick={(event) => {
+                event.stopPropagation();
+                onExportFile(book);
+              }}
+              className={coverAction}
+            >
+              <DownloadSimple size={13} />
+            </GlassIconButton>
+          )}
           <GlassIconButton
             label="删除"
             onClick={(event) => {

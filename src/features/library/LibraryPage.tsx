@@ -38,6 +38,7 @@ import { useAssignTags, useTags } from "@/hooks/useTags";
 import {
   useBooks,
   useDeleteBook,
+  useExportBookFile,
   useExportPack,
   useImportBooks,
   useImportFiles,
@@ -240,6 +241,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const importBooks = useImportBooks();
   const importFiles = useImportFiles();
   const exportPack = useExportPack();
+  const exportFile = useExportBookFile();
   const deleteBook = useDeleteBook();
   const setFavorite = useSetFavorite();
   const updateBook = useUpdateBook();
@@ -444,6 +446,9 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           }
           onAskDelete={setDeleteTarget}
           onAskExport={setExportTarget}
+          // No dialog: a download has nothing to choose. Failures surface
+          // through the shared mutation toast, like every other write.
+          onExportFile={(target) => exportFile.mutate(target.id)}
           onEditTags={(target) => setTagTarget([target])}
           onEditMeta={setMetaTarget}
           onImport={startImport}

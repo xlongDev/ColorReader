@@ -48,6 +48,7 @@ function renderCard(book: Partial<BookSummary> = {}) {
       onToggleFavorite={() => {}}
       onAskDelete={() => {}}
       onAskExport={() => {}}
+      onExportFile={() => {}}
       onEditTags={() => {}}
       onEditMeta={() => {}}
     />,

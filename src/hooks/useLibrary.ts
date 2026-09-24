@@ -90,6 +90,16 @@ export function useImportFiles() {
   });
 }
 
+/** Saves a book's own file — the browser's way out for a book it imported.
+ *  Nothing to invalidate: the shelf is untouched and the bytes are the ones
+ *  that were already stored.
+ */
+export function useExportBookFile() {
+  return useMutation({
+    mutationFn: (id: string) => ipc.bookExport(id),
+  });
+}
+
 /** Writes one book to a `.ctz` / `.ctzx` pack. Nothing to invalidate: the
  * shelf is untouched, the file lands wherever the save dialog pointed.
  */

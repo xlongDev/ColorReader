@@ -35,6 +35,7 @@ export function ShelfGrid({
   onToggleFavorite,
   onAskDelete,
   onAskExport,
+  onExportFile,
   onEditTags,
   onEditMeta,
   onImport,
@@ -57,6 +58,7 @@ export function ShelfGrid({
   onToggleFavorite: (book: BookSummary) => void;
   onAskDelete: (book: BookSummary) => void;
   onAskExport: (book: BookSummary) => void;
+  onExportFile: (book: BookSummary) => void;
   onEditTags: (book: BookSummary) => void;
   onEditMeta: (book: BookSummary) => void;
   onImport: () => void;
@@ -191,6 +193,7 @@ export function ShelfGrid({
                 onToggleFavorite={onToggleFavorite}
                 onAskDelete={onAskDelete}
                 onAskExport={onAskExport}
+                onExportFile={onExportFile}
                 onEditTags={onEditTags}
                 onEditMeta={onEditMeta}
               />
