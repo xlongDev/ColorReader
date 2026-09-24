@@ -30,20 +30,19 @@ function loadPdfjs() {
 const docs = new Map<string, Promise<PDFDocumentProxy>>();
 
 /**
- * The document's bytes: over IPC in the app, from the browser fixture under
- * `?demo=1&pdf=1`.
+ * The document's bytes: the book's own, from whichever store this build has.
  *
- * This is the one thing about a PDF that differs between the two runtimes, so
- * it is the one thing that has to know about both. Every other book in a
- * browser still gets the honest refusal — a reader who opens a real PDF in the
- * dev server should be told the desktop app is what reads it, not handed an
- * empty page.
+ * `?demo=1&pdf=1` is the one exception — the sample PDF has no bytes of its
+ * own, it is generated for the preview — so the fixture is checked first and
+ * everything else goes to the command channel, which reads SQLite on the
+ * desktop and IndexedDB in the browser. An imported PDF therefore opens the
+ * same way in either build, rather than the browser refusing a book it just
+ * accepted.
  */
 async function bookBytes(bookId: string): Promise<ArrayBuffer> {
   if (!isDesktopRuntime) {
     const fixture = await demoPdfBytes(bookId);
     if (fixture) return fixture;
-    throw new Error("PDF 阅读只能在桌面端使用");
   }
   return ipc.bookFile(bookId);
 }
