@@ -1,9 +1,8 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { ipc } from "@/lib/ipc";
 import { demoEnabled, demoReadingStats } from "@/lib/demo";
-import type { ReadingStats } from "@/types/ipc";
 
 /**
  * Reading time: what the stats page reads and what the reader reports.
@@ -12,18 +11,6 @@ import type { ReadingStats } from "@/types/ipc";
  * Rust row per (book, local day), so this side never has to remember a session
  * start: it only has to notice that the reader is still on the page.
  */
-
-/** Browser dev mode has no backend and no history; the page shows zeroes. */
-const EMPTY: ReadingStats = {
-  todaySeconds: 0,
-  weekSeconds: 0,
-  totalSeconds: 0,
-  streak: 0,
-  daysRead: 0,
-  days: [],
-  bestStreak: 0,
-  topBooks: [],
-};
 
 /** How often accumulated time is handed to the backend. */
 const FLUSH_MS = 60_000;
@@ -35,9 +22,7 @@ export function useReadingStats() {
   return useQuery({
     queryKey: ["reading", "stats"],
     queryFn: () => {
-      if (!isDesktopRuntime) {
-        return Promise.resolve(demoEnabled() ? demoReadingStats : EMPTY);
-      }
+      if (demoEnabled()) return Promise.resolve(demoReadingStats);
       return ipc.statsReading();
     },
     staleTime: 30_000,
