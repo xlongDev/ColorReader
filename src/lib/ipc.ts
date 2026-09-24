@@ -5,10 +5,92 @@ import { commands } from "@/lib/bindings";
 import type {
   AiDelta,
   GraphProgress,
+  ImportOutcome,
   ImportProgress,
   RagProgress,
   SourceProgress,
 } from "@/lib/bindings";
+
+/** `true` only when the renderer is hosted inside the Tauri shell. */
+export const isDesktopRuntime: boolean = isTauri();
+
+/**
+ * The commands the web build answers for itself.
+ *
+ * Same names, same shapes, storage swapped: IndexedDB in the browser, SQLite in
+ * Rust. Everything above this line — hooks, query keys, caches — is then the
+ * same code on both sides, which is the point of routing it here rather than
+ * branching in fifteen hooks.
+ *
+ * Loaded on first use, not at import: the browser backend pulls in foliate's
+ * book parsing and the reader's pdf.js path, and the desktop — which has Rust
+ * for all of this — should not carry 25 kB of it in its main chunk.
+ *
+ * The ones left out are the ones that need a real backend (AI, RAG, graph,
+ * sync, book sources, backup packs) or a filesystem (font and dictionary
+ * import); those keep their existing "desktop only" behaviour.
+ */
+const LOCAL_COMMANDS = [
+  "bookImportFiles",
+  "bookList",
+  "bookStats",
+  "bookGet",
+  "bookDelete",
+  "bookSetFavorite",
+  "bookUpdate",
+  "bookCoverSave",
+  "readerToc",
+  "readerChapter",
+  "bookImages",
+  "readerSetProgress",
+  "annotationList",
+  "annotationCreate",
+  "annotationDelete",
+  "annotationDeleteMany",
+  "annotationUpdate",
+  "annotationAnchor",
+  "annotationNote",
+  "bookmarkList",
+  "bookmarkCreate",
+  "bookmarkDelete",
+  "statsReading",
+  "statsRecordSession",
+  "statsClear",
+  "tagList",
+  "bookSetTags",
+  "tagDelete",
+  "searchQuery",
+  "bookFile",
+  "bookAsset",
+] as const;
+
+/** One browser command, resolved when it is first called. Loose on purpose:
+ *  the types the callers see are `LocalCommands` below, taken from the
+ *  generated bindings, so a mismatch is reported at the implementation. */
+const fromLocal =
+  (name: string) =>
+  (...args: unknown[]): Promise<unknown> =>
+    import("@/lib/local/backend").then((module) => {
+      const call = (module as unknown as Record<string, (...a: unknown[]) => unknown>)[name];
+      if (!call) throw new Error(`本地后端没有 ${name}`);
+      return call(...args);
+    });
+
+/** What the browser answers: the same names the generated commands have, so a
+ *  caller cannot tell the two builds apart. */
+/** `bookFile` / `bookAsset` carry raw bytes and are hand-written on `ipc` below,
+ *  so they are not part of the generated set this picks from. */
+type LocalCommands = Pick<
+  typeof commands,
+  Exclude<(typeof LOCAL_COMMANDS)[number], "bookAsset" | "bookFile" | "bookImportFiles">
+> & {
+  /** Browser-only: the desktop imports by path instead. */
+  bookImportFiles: (files: File[]) => Promise<ImportOutcome[]>;
+};
+
+const local: Partial<Record<keyof LocalCommands, (...args: never[]) => unknown>> = isDesktopRuntime
+  ? {}
+  : Object.fromEntries(LOCAL_COMMANDS.map((name) => [name, fromLocal(name)]));
 
 /**
  * Every command that crosses as JSON is generated into `bindings.ts` straight
@@ -22,15 +104,32 @@ import type {
  */
 export const ipc = {
   ...commands,
+  // Nothing at runtime on the desktop — the cast only keeps the names visible to
+  // callers, so the web build's shelf and reader share one call site.
+  ...(local as LocalCommands),
 
   /** Raw bytes of one image inside a book's source EPUB (binary channel). */
   bookAsset(id: string, path: string): Promise<ArrayBuffer> {
+    if (!isDesktopRuntime) return fromLocal("bookAsset")(id, path) as Promise<ArrayBuffer>;
     return invoke<ArrayBuffer>("book_asset", { id, path });
   },
 
   /** The whole stored source file (binary channel); powers pdf.js rendering. */
   bookFile(id: string): Promise<ArrayBuffer> {
+    if (!isDesktopRuntime) return fromLocal("bookFile")(id) as Promise<ArrayBuffer>;
     return invoke<ArrayBuffer>("book_source_file", { id });
+  },
+
+  /**
+   * Imports files the *browser* picked. The desktop takes paths from its native
+   * dialog instead (`bookImport`); this exists so the shelf's import button has
+   * one shape to call in both builds.
+   */
+  bookImportFiles(files: File[]) {
+    if (isDesktopRuntime) {
+      throw new Error("桌面端走 bookImport（路径），这里是浏览器端的入口");
+    }
+    return fromLocal("bookImportFiles")(files) as Promise<ImportOutcome[]>;
   },
 
   /**
@@ -101,9 +200,6 @@ export async function onSourceProgress(
   if (!isTauri()) return undefined;
   return listen<SourceProgress>(SOURCE_DOWNLOAD_EVENT, (event) => handler(event.payload));
 }
-
-/** `true` only when the renderer is hosted inside the Tauri shell. */
-export const isDesktopRuntime: boolean = isTauri();
 
 /**
  * Query body for something only the desktop app can answer.
