@@ -1,6 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 
 import { PACK_EXTENSIONS } from "@/features/library/pack";
+import { acceptOf, pickFiles as pickBrowserFiles } from "@/lib/pickFile";
 
 /** Every extension `BookFormat::from_path` accepts; kept here so the dialog and
     the Rust side never drift apart. */
@@ -18,8 +19,11 @@ export const BOOK_EXTENSIONS = [
   "markdown",
 ] as const;
 
-/** Native open dialog, restricted to the formats the library understands. */
-export async function pickFiles(): Promise<string[]> {
+/** Native open dialog, restricted to the formats the library understands.
+ *  Answers **absolute paths** — the desktop's import takes those — which is why
+ *  it is not the `pickFiles` the browser uses (that one can only return the
+ *  files themselves). */
+export async function pickPaths(): Promise<string[]> {
   try {
     const picked = await open({
       multiple: true,
@@ -47,20 +51,7 @@ export async function pickFiles(): Promise<string[]> {
  * themselves — the bytes are what the shelf stores either way, and IndexedDB
  * keeps them. Cancelling resolves empty rather than hanging.
  */
+/** The same picker as any other: a book's formats are just a longer filter. */
 export function pickBookFiles(): Promise<File[]> {
-  return new Promise((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.multiple = true;
-    input.accept = BOOK_EXTENSIONS.map((extension) => `.${extension}`).join(",");
-    const done = (files: File[]) => {
-      input.remove();
-      resolve(files);
-    };
-    input.addEventListener("change", () => done([...(input.files ?? [])]));
-    input.addEventListener("cancel", () => done([]));
-    input.style.display = "none";
-    document.body.append(input);
-    input.click();
-  });
+  return pickBrowserFiles(acceptOf(BOOK_EXTENSIONS), true);
 }

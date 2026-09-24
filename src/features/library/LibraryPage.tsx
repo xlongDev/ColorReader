@@ -16,7 +16,7 @@ import { Upload } from "@phosphor-icons/react";
 import { OverlayPortal } from "@/components/glass/overlay";
 import { ContinueReadingCard } from "@/features/library/ContinueReadingCard";
 import { ImportSummary } from "@/features/library/ImportSummary";
-import { pickBookFiles, pickFiles } from "@/features/library/importFiles";
+import { pickBookFiles, pickPaths } from "@/features/library/importFiles";
 import { ShelfBatchBar } from "@/features/library/ShelfBatchBar";
 import { ShelfGrid } from "@/features/library/ShelfGrid";
 import { ShelfHeader } from "@/features/library/ShelfHeader";
@@ -368,7 +368,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       });
       return;
     }
-    void pickFiles().then(importPaths);
+    void pickPaths().then(importPaths);
   };
 
   const m = useMotion();
