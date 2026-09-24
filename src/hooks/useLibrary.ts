@@ -12,9 +12,10 @@ export function useBooks(query: BookQuery) {
   return useQuery<BookSummary[]>({
     queryKey: ["books", query.filter, query.sort, query.search ?? "", query.tag ?? ""],
     queryFn: () => {
-      // Browser dev mode has no backend: show an empty shelf instead of
-      // erroring — unless `?demo=1` asked for the sample one.
-      if (!isDesktopRuntime) return Promise.resolve(demoEnabled() ? demoBooks : []);
+      // `?demo=1` is the sample shelf, and an explicit one: without it the web
+      // build reads the books the reader imported here (IndexedDB), the same
+      // way the desktop reads its own.
+      if (demoEnabled()) return Promise.resolve(demoBooks);
       return ipc.bookList(query);
     },
     staleTime: 10_000,
@@ -26,11 +27,7 @@ export function useLibraryStats() {
   return useQuery({
     queryKey: ["books", "stats"],
     queryFn: () => {
-      if (!isDesktopRuntime) {
-        return demoEnabled()
-          ? Promise.resolve(demoLibraryStats)
-          : Promise.resolve({ total: 0, favorites: 0, reading: 0, finished: 0 });
-      }
+      if (demoEnabled()) return Promise.resolve(demoLibraryStats);
       return ipc.bookStats();
     },
     staleTime: 10_000,
@@ -79,6 +76,16 @@ export function useImportBooks() {
   return useMutation({
     mutationFn: ({ paths, password }: { paths: string[]; password?: string }) =>
       ipc.bookImport(paths, password ?? null),
+    onSettled: invalidate,
+  });
+}
+
+/** Imports files the browser picked, and refreshes the shelf when done. Same
+ *  outcomes as `useImportBooks`, so the sheet that reports them is shared. */
+export function useImportFiles() {
+  const invalidate = useInvalidateShelf();
+  return useMutation({
+    mutationFn: (files: File[]) => ipc.bookImportFiles(files),
     onSettled: invalidate,
   });
 }

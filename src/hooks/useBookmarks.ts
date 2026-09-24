@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { ipc } from "@/lib/ipc";
 import type { Bookmark, NewBookmark } from "@/types/ipc";
 
 const bookmarksKey = (bookId: string) => ["bookmarks", bookId];
@@ -10,7 +10,7 @@ export function useBookmarks(bookId: string | null) {
   return useQuery({
     queryKey: bookmarksKey(bookId ?? ""),
     queryFn: () => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve<Bookmark[]>([]);
+      if (!bookId) return Promise.resolve<Bookmark[]>([]);
       return ipc.bookmarkList(bookId);
     },
     enabled: bookId !== null,
@@ -23,7 +23,7 @@ export function useCreateBookmark(bookId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: Omit<NewBookmark, "bookId">) => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve<Bookmark | null>(null);
+      if (!bookId) return Promise.resolve<Bookmark | null>(null);
       return ipc.bookmarkCreate(bookId, input.chapterIdx, input.fraction, input.label);
     },
     onSuccess: (created) => {
@@ -42,7 +42,7 @@ export function useDeleteBookmark(bookId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve();
+      if (!bookId) return Promise.resolve();
       return ipc.bookmarkDelete(id);
     },
     onSuccess: (_result, id) => {

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { desktopQuery, ipc, isDesktopRuntime } from "@/lib/ipc";
+import { ipc } from "@/lib/ipc";
 import type { TagSummary } from "@/types/ipc";
 
 /**
@@ -15,7 +15,7 @@ import type { TagSummary } from "@/types/ipc";
 export function useTags() {
   return useQuery<TagSummary[]>({
     queryKey: ["tags"],
-    queryFn: desktopQuery([], () => ipc.tagList()),
+    queryFn: () => ipc.tagList(),
     staleTime: 30_000,
   });
 }
@@ -40,7 +40,7 @@ export function useAssignTags() {
   const invalidate = useInvalidateLabels();
   return useMutation({
     mutationFn: ({ ids, add, remove }: { ids: string[]; add: string[]; remove: string[] }) =>
-      isDesktopRuntime ? ipc.bookSetTags(ids, add, remove) : Promise.resolve(),
+      ipc.bookSetTags(ids, add, remove),
     onSettled: invalidate,
   });
 }
@@ -49,7 +49,7 @@ export function useAssignTags() {
 export function useDeleteTag() {
   const invalidate = useInvalidateLabels();
   return useMutation({
-    mutationFn: (id: string) => (isDesktopRuntime ? ipc.tagDelete(id) : Promise.resolve()),
+    mutationFn: (id: string) => ipc.tagDelete(id),
     onSettled: invalidate,
   });
 }

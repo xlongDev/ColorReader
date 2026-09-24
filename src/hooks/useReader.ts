@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { ipc } from "@/lib/ipc";
 import { demoBooks, demoChapter, demoEnabled, demoToc } from "@/lib/demo";
 import { readPdfOutline, type PdfOutlineItem } from "@/lib/pdf";
 import type { BookImage, ChapterMeta } from "@/types/ipc";
@@ -11,10 +11,8 @@ export function useBook(id: string | null) {
     queryKey: ["book", id],
     queryFn: () => {
       if (!id) return Promise.resolve(null);
-      if (!isDesktopRuntime) {
-        return Promise.resolve(
-          demoEnabled() ? (demoBooks.find((book) => book.id === id) ?? null) : null,
-        );
+      if (demoEnabled()) {
+        return Promise.resolve(demoBooks.find((book) => book.id === id) ?? null);
       }
       return ipc.bookGet(id);
     },
@@ -29,7 +27,7 @@ export function useReaderToc(bookId: string | null) {
     queryKey: ["reader", "toc", bookId],
     queryFn: () => {
       if (!bookId) return Promise.resolve<ChapterMeta[]>([]);
-      if (!isDesktopRuntime) return Promise.resolve(demoEnabled() ? demoToc : []);
+      if (demoEnabled()) return Promise.resolve(demoToc);
       return ipc.readerToc(bookId);
     },
     enabled: bookId !== null,
@@ -43,7 +41,7 @@ export function useChapter(bookId: string | null, idx: number | null) {
     queryKey: ["reader", "chapter", bookId, idx],
     queryFn: () => {
       if (!bookId || idx === null) return Promise.resolve(null);
-      if (!isDesktopRuntime) return Promise.resolve(demoEnabled() ? demoChapter(idx) : null);
+      if (demoEnabled()) return Promise.resolve(demoChapter(idx));
       return ipc.readerChapter(bookId, idx);
     },
     enabled: bookId !== null && idx !== null,
@@ -56,7 +54,7 @@ export function useBookImages(bookId: string | null) {
   return useQuery({
     queryKey: ["reader", "images", bookId],
     queryFn: () => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve<BookImage[]>([]);
+      if (!bookId) return Promise.resolve<BookImage[]>([]);
       return ipc.bookImages(bookId);
     },
     enabled: bookId !== null,
@@ -72,7 +70,7 @@ export function usePdfOutline(bookId: string | null, enabled: boolean) {
   return useQuery({
     queryKey: ["reader", "pdf-outline", bookId],
     queryFn: () => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve<PdfOutlineItem[]>([]);
+      if (!bookId) return Promise.resolve<PdfOutlineItem[]>([]);
       return readPdfOutline(bookId);
     },
     enabled: bookId !== null && enabled,
@@ -85,7 +83,7 @@ export function usePdfOutline(bookId: string | null, enabled: boolean) {
 export function useSetProgress(bookId: string | null) {
   return useMutation({
     mutationFn: ({ progress, location }: { progress: number; location?: string }) => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve();
+      if (!bookId) return Promise.resolve();
       return ipc.readerSetProgress(bookId, progress, location ?? null);
     },
   });

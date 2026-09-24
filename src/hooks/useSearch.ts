@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
-import type { SearchHit } from "@/types/ipc";
+import { ipc } from "@/lib/ipc";
 
 /**
  * Chapters whose text contains `needle`, best match first.
@@ -14,7 +13,6 @@ export function useSearch(needle: string, bookId: string | null) {
   return useQuery({
     queryKey: ["search", trimmed, bookId],
     queryFn: () => {
-      if (!isDesktopRuntime) return Promise.resolve<SearchHit[]>([]);
       return ipc.searchQuery(trimmed, bookId, null);
     },
     enabled: trimmed.length > 0,

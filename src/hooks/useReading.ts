@@ -55,7 +55,7 @@ function useRecordSession() {
   const invalidate = useInvalidateReading();
   return useMutation({
     mutationFn: (input: { bookId: string; seconds: number }) =>
-      isDesktopRuntime ? ipc.statsRecordSession(input.bookId, input.seconds) : Promise.resolve(),
+      ipc.statsRecordSession(input.bookId, input.seconds),
     onSuccess: invalidate,
   });
 }
@@ -69,7 +69,7 @@ function useRecordSession() {
 export function useClearReadingStats() {
   const invalidate = useInvalidateReading();
   return useMutation({
-    mutationFn: () => (isDesktopRuntime ? ipc.statsClear() : Promise.resolve()),
+    mutationFn: () => ipc.statsClear(),
     onSuccess: invalidate,
   });
 }

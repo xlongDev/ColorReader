@@ -26,7 +26,6 @@ const demoMode = !isDesktopRuntime && demoEnabled();
 /** One book's highlights, from whichever source this runtime has. */
 function listAnnotations(bookId: string): Promise<Annotation[]> {
   if (demoMode) return Promise.resolve(demoAnnotationList(bookId));
-  if (!isDesktopRuntime) return Promise.resolve<Annotation[]>([]);
   return ipc.annotationList(bookId);
 }
 
@@ -82,7 +81,7 @@ export function useCreateAnnotation(bookId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (input: Omit<NewAnnotation, "bookId">) => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve<Annotation | null>(null);
+      if (!bookId) return Promise.resolve<Annotation | null>(null);
       return ipc.annotationCreate(
         bookId,
         input.chapterIdx,
@@ -120,7 +119,6 @@ export function useDeleteAnnotation(bookId: string | null) {
     mutationFn: (id: string) => {
       if (!bookId) return Promise.resolve();
       if (demoMode) return Promise.resolve(demoAnnotationDelete(id));
-      if (!isDesktopRuntime) return Promise.resolve();
       return ipc.annotationDelete(id);
     },
     onSuccess: (_result, id) => {
@@ -155,7 +153,6 @@ export function useDeleteAnnotations() {
         for (const id of ids) demoAnnotationDelete(id);
         return Promise.resolve(ids.length);
       }
-      if (!isDesktopRuntime) return Promise.resolve(0);
       return ipc.annotationDeleteMany([...ids]);
     },
     onSuccess: (_removed, ids) => {
@@ -175,7 +172,7 @@ export function useUpdateAnnotation(bookId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, color, style }: { id: string; color?: string; style?: AnnotationStyle }) => {
-      if (!bookId || !isDesktopRuntime) {
+      if (!bookId) {
         return Promise.resolve<Annotation | null>(null);
       }
       return ipc.annotationUpdate(id, color ?? null, style ?? null);
@@ -202,7 +199,7 @@ export function useAnchorAnnotation(bookId: string | null) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: ({ id, cfi }: { id: string; cfi: string }) => {
-      if (!bookId || !isDesktopRuntime) return Promise.resolve<Annotation | null>(null);
+      if (!bookId) return Promise.resolve<Annotation | null>(null);
       return ipc.annotationAnchor(id, cfi);
     },
     onSuccess: (updated) => {
@@ -226,7 +223,6 @@ export function useSetAnnotationNote(bookId: string | null) {
     mutationFn: ({ id, note }: { id: string; note: string | null }) => {
       if (!bookId) return Promise.resolve<Annotation | null>(null);
       if (demoMode) return Promise.resolve(demoAnnotationNote(id, note));
-      if (!isDesktopRuntime) return Promise.resolve<Annotation | null>(null);
       return ipc.annotationNote(id, note);
     },
     onSuccess: (updated) => {
