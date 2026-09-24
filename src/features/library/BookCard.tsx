@@ -348,10 +348,12 @@ export function BookCard({
           {/* One slot, two exports. The `grid` bar is a five-column grid, so a
               sixth button would either wrap or shrink every chip; and the two
               are the same gesture anyway — "let me have this book" — answered
-              by whichever build can answer it. */}
+              by whichever build can answer it. The desktop's dialog then asks
+              *which* file (the book itself, or a pack that also carries the
+              progress and the highlights), so its label stays open. */}
           {isDesktopRuntime ? (
             <GlassIconButton
-              label="导出书档"
+              label="导出"
               onClick={(event) => {
                 event.stopPropagation();
                 onAskExport(book);

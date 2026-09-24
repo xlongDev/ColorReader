@@ -448,7 +448,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           onAskExport={setExportTarget}
           // No dialog: a download has nothing to choose. Failures surface
           // through the shared mutation toast, like every other write.
-          onExportFile={(target) => exportFile.mutate(target.id)}
+          onExportFile={(target) => exportFile.mutate({ id: target.id })}
           onEditTags={(target) => setTagTarget([target])}
           onEditMeta={setMetaTarget}
           onImport={startImport}
@@ -529,18 +529,27 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         <Suspense fallback={null}>
           <ExportPackDialog
             book={exportTarget}
-            busy={exportPack.isPending}
-            error={exportPack.error ? String(exportPack.error) : null}
+            busy={exportPack.isPending || exportFile.isPending}
+            error={
+              exportPack.error
+                ? String(exportPack.error)
+                : exportFile.error
+                  ? String(exportFile.error)
+                  : null
+            }
             onCancel={() => {
               setExportTarget(null);
               exportPack.reset();
+              exportFile.reset();
             }}
-            onConfirm={({ book, path, password }) =>
-              exportPack.mutate(
-                { id: book.id, path, password },
-                { onSuccess: () => setExportTarget(null) },
-              )
-            }
+            // Both go through the same dialog and the same save panel; only the
+            // command behind them differs — the book's own bytes, or a pack
+            // that also carries what was read and marked in it.
+            onConfirm={({ book, path, kind, password }) => {
+              const done = { onSuccess: () => setExportTarget(null) };
+              if (kind === "original") exportFile.mutate({ id: book.id, path }, done);
+              else exportPack.mutate({ id: book.id, path, password }, done);
+            }}
           />
         </Suspense>
       )}

@@ -1,13 +1,34 @@
 import { useState } from "react";
 import { Lock, Package } from "@phosphor-icons/react";
 
+import { cn } from "@/lib/cn";
+
 import { GlassButton } from "@/components/glass/button";
-import { GlassInput, GlassSwitch } from "@/components/glass/input";
+import { GlassInput } from "@/components/glass/input";
 import { GlassDialog } from "@/components/glass/overlay";
 import { Reveal } from "@/components/motion/Reveal";
 import { useSavePath } from "@/hooks/useSavePath";
 import { filename } from "@/lib/filename";
 import type { BookSummary } from "@/types/ipc";
+
+/** What a reader can save, and what each one is good for.
+ *
+ * `original` is the book as it was imported — the only one another reader can
+ * open. The two packs also carry the reading progress, the favourite flag and
+ * every highlight; the second is the same archive under a password, for when it
+ * travels through somewhere it should not be readable.
+ */
+const KINDS = [
+  {
+    key: "original",
+    label: "原文件",
+    hint: "就是导入时的那本书本身，别的阅读器也能打开",
+  },
+  { key: "pack", label: "书档", hint: "带上阅读进度、收藏和全部标注，只有本应用认得" },
+  { key: "encrypted", label: "加密书档", hint: "同上，再加一个密码" },
+] as const;
+
+export type ExportKind = (typeof KINDS)[number]["key"];
 
 interface ExportDialogProps {
   book: BookSummary | null;
@@ -15,23 +36,37 @@ interface ExportDialogProps {
   error?: string | null;
   onCancel: () => void;
   /** Receives the path chosen by the native save dialog. */
-  onConfirm: (request: { book: BookSummary; path: string; password?: string }) => void;
+  onConfirm: (request: {
+    book: BookSummary;
+    path: string;
+    kind: ExportKind;
+    password?: string;
+  }) => void;
 }
 
 /**
- * Export one book as a book pack.
+ * Export one book: as its own file, or as a book pack.
  *
- * The destination extension is what selects the format, so the switch and the
- * save dialog's filter are kept in lockstep: the file the user sees is the file
- * they get.
+ * The shape is picked here rather than by the save dialog's filter — switching
+ * a native panel's format dropdown is not something a reader should have to
+ * discover — and the extension the file lands with is the one picked here.
  */
 export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: ExportDialogProps) {
-  const [encrypted, setEncrypted] = useState(false);
+  const [kind, setKind] = useState<ExportKind>("original");
   const [password, setPassword] = useState("");
   const { choose: choosePath, error: panelError } = useSavePath();
 
   if (!book) return null;
-  const extension = encrypted ? "ctzx" : "ctz";
+  const encrypted = kind === "encrypted";
+  const extension =
+    kind === "original"
+      ? book.format === "markdown"
+        ? "md"
+        : book.format
+      : encrypted
+        ? "ctzx"
+        : "ctz";
+  const chosen = KINDS.find((entry) => entry.key === kind)!;
   const ready = !encrypted || password.length > 0;
 
   /** The panel's own failure outranks the write's: it happens first. */
@@ -39,12 +74,12 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
 
   const choose = async () => {
     const path = await choosePath({
-      title: "导出书档",
-      defaultPath: `${filename(book.title, "书档")}.${extension}`,
-      filters: [{ name: "书档", extensions: [extension] }],
+      title: kind === "original" ? "导出书籍文件" : "导出书档",
+      defaultPath: filename(book.title, chosen.label) + `.${extension}`,
+      filters: [{ name: chosen.label, extensions: [extension] }],
     });
     if (path === null) return;
-    onConfirm({ book, path, password: encrypted ? password : undefined });
+    onConfirm({ book, path, kind, password: encrypted ? password : undefined });
   };
 
   return (
@@ -59,20 +94,32 @@ export function ExportPackDialog({ book, busy, error, onCancel, onConfirm }: Exp
           导出《{book.title}》
         </span>
       }
-      description="书档会带上原文件、阅读进度、收藏状态和全部标注。章节与封面不打包，导入时会从原文件重新提取。"
+      description={chosen.hint}
       widthClass="w-[min(92vw,440px)]"
     >
       <div className="space-y-3">
-        <div className="border-hairline bg-surface-1 flex items-center justify-between rounded-md border px-3 py-2.5">
-          <label htmlFor="pack-encrypt" className="flex cursor-pointer items-center gap-2">
-            <Lock size={14} className="text-text-2" />
-            <span className="text-text-1 text-sm">用密码加密（.ctzx）</span>
-          </label>
-          <GlassSwitch id="pack-encrypt" checked={encrypted} onCheckedChange={setEncrypted} />
+        {/* No `role="group"`: each button carries its own `aria-pressed`, which
+            is what a screen reader needs — and the linter is right that a
+            grouping role here would want a real `fieldset`. */}
+        <div className="flex flex-wrap gap-1.5">
+          {KINDS.map(({ key, label }) => (
+            <button
+              key={key}
+              type="button"
+              aria-pressed={kind === key}
+              onClick={() => setKind(key)}
+              className={cn(
+                "border-hairline text-text-2 hover:text-text-1 rounded-full border px-2.5 py-1 text-[12px] transition-colors",
+                kind === key && "border-accent text-accent",
+              )}
+            >
+              {label}
+            </button>
+          ))}
         </div>
 
-        {/* The switch reveals a whole row of UI below it; without an entrance
-            the field simply materialises halfway down the dialog. */}
+        {/* The password field appears under a choice that was just made; without
+            an entrance the dialog simply grows a row halfway down. */}
         {encrypted && (
           <Reveal>
             <GlassInput
