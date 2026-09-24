@@ -35,6 +35,7 @@ import { useDeleteFont, useFonts, useImportFont } from "@/hooks/useFonts";
 import { useUpdater, type UpdateState } from "@/hooks/useUpdater";
 import { useExportBackup, useStageBackup } from "@/hooks/useBackup";
 import { isDesktopRuntime } from "@/lib/ipc";
+import { acceptOf, pickFiles as pickBrowserFiles } from "@/lib/pickFile";
 import { formatFileSize } from "@/features/library/format";
 import type { AiConfig, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
 import { cn } from "@/lib/cn";
@@ -759,6 +760,11 @@ function AboutSection() {
   );
 }
 
+/** What a font file can be, named once for both pickers — the native dialog and
+ *  the browser's own. The reader sees the same list in the group's description.
+ */
+const FONT_EXTENSIONS = ["ttf", "otf", "ttc", "woff", "woff2"] as const;
+
 /** The form only mounts once the stored config is known, and remounts when the
  * stored value changes — typing stays local state, saving refills the form.
  */
@@ -996,13 +1002,21 @@ function FontSection() {
   const pick = async () => {
     setStatus(null);
     try {
-      const picked = await open({
-        multiple: false,
-        directory: false,
-        filters: [{ name: "字体", extensions: ["ttf", "otf", "ttc", "woff", "woff2"] }],
-      });
-      if (typeof picked !== "string") return;
-      upload.mutate(picked, {
+      // The desktop's dialog answers with a path; the browser can only answer
+      // with the file itself. Both are what `useImportFont` knows how to take.
+      let chosen: string | File | null = null;
+      if (isDesktopRuntime) {
+        const picked = await open({
+          multiple: false,
+          directory: false,
+          filters: [{ name: "字体", extensions: [...FONT_EXTENSIONS] }],
+        });
+        chosen = typeof picked === "string" ? picked : null;
+      } else {
+        chosen = (await pickBrowserFiles(acceptOf(FONT_EXTENSIONS)))[0] ?? null;
+      }
+      if (chosen === null) return;
+      upload.mutate(chosen, {
         onSuccess: (added) => setStatus({ tone: "ok", text: `已导入「${added.name}」。` }),
         onError: (error) => setStatus({ tone: "bad", text: String(error) }),
       });

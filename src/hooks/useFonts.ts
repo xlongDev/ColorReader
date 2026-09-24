@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { desktopQuery, ipc } from "@/lib/ipc";
+import { ipc } from "@/lib/ipc";
 import { useReaderSettings } from "@/stores/reader";
 import { customFontKey } from "@/features/reader/theme";
 import type { LocalFont } from "@/types/ipc";
@@ -9,18 +9,23 @@ import type { LocalFont } from "@/types/ipc";
 export function useFonts() {
   return useQuery<LocalFont[]>({
     queryKey: ["fonts"],
-    // Browser dev mode has no backend; an empty list is the honest answer and
-    // leaves the picker with the stacks every machine already has.
-    queryFn: desktopQuery([], () => ipc.fontList()),
+    queryFn: () => ipc.fontList(),
     staleTime: 30_000,
   });
 }
 
-/** Copies one font file in. */
+/**
+ * Copies one font in.
+ *
+ * A path on the desktop (its dialog hands one over) and the `File` itself in
+ * the browser (there are no paths there). Everything past that point — the
+ * bytes, the URL the face is declared from, the list it joins — is the same.
+ */
 export function useImportFont() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (path: string) => ipc.fontImport(path),
+    mutationFn: (source: string | File) =>
+      typeof source === "string" ? ipc.fontImport(source) : ipc.fontImportFile(source),
     meta: { silent: true },
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["fonts"] });

@@ -2,6 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { commands } from "@/lib/bindings";
+import type { LocalFont } from "@/types/ipc";
 import type {
   AiDelta,
   GraphProgress,
@@ -40,6 +41,8 @@ const LOCAL_COMMANDS = [
   "bookUpdate",
   "bookCoverSave",
   "bookExport",
+  "fontList",
+  "fontDelete",
   "readerToc",
   "readerChapter",
   "bookImages",
@@ -119,6 +122,21 @@ export const ipc = {
   bookFile(id: string): Promise<ArrayBuffer> {
     if (!isDesktopRuntime) return fromLocal("bookFile")(id) as Promise<ArrayBuffer>;
     return invoke<ArrayBuffer>("book_source_file", { id });
+  },
+
+  /**
+   * Imports a font the *browser* picked.
+   *
+   * Browser-only, and for the same reason as `bookImportFiles`: the desktop
+   * takes a path from its native dialog (`fontImport`), the browser can only
+   * hand over the file itself. Everything after that — the bytes, the URL the
+   * face is declared from — is the same on both sides.
+   */
+  fontImportFile(file: File): Promise<LocalFont> {
+    if (isDesktopRuntime) {
+      throw new Error("桌面端走 font_import（路径），这里是浏览器端的入口");
+    }
+    return fromLocal("fontImportFile")(file) as Promise<LocalFont>;
   },
 
   /**
