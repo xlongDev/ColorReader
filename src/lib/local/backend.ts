@@ -33,12 +33,23 @@ import type {
 } from "@/lib/bindings";
 
 import { countChars, pdfLines } from "@/lib/local/blocks";
+import { downloadBytes } from "@/lib/local/save";
+import { filename } from "@/lib/filename";
 import * as db from "@/lib/local/db";
 import { loadDoc, renderFirstPagePng } from "@/lib/pdf";
 import { readBook } from "@/lib/local/import";
 
 /** A shelf row as it is stored: `BookSummary` minus the cover, plus the TOC. */
 type StoredBook = Omit<BookSummary, "coverUrl"> & { toc: ChapterMeta[] };
+
+/**
+ * An image in the store: the bytes plus the type to read them back as.
+ *
+ * A `Blob` would carry both at once, and Chromium is happy to keep one — but
+ * WebKit refuses to store a `File` at all and aborts the transaction, so the
+ * bytes go in as an `ArrayBuffer`, which every engine clones.
+ */
+type StoredImage = { type: string; bytes: ArrayBuffer };
 
 /** One finished reading stretch, the raw material of the stats page. */
 type Session = { day: string; bookId: string; seconds: number };
@@ -63,6 +74,14 @@ function dayOf(seconds: number): string {
 /** Cover object URLs, one per book, made once and kept for the session. */
 const coverUrls = new Map<string, string>();
 
+/** A book's cover as a Blob, from either shape the store has held: the image
+ *  itself (older rows) or its bytes with their type. */
+async function coverOf(id: string): Promise<Blob | null> {
+  const stored = await db.get<StoredImage | Blob>("files", `${id}:cover`);
+  if (!stored) return null;
+  return stored instanceof Blob ? stored : new Blob([stored.bytes], { type: stored.type });
+}
+
 async function coverUrlOf(id: string, cover: Blob | null): Promise<string | null> {
   if (!cover) return null;
   const existing = coverUrls.get(id);
@@ -73,7 +92,7 @@ async function coverUrlOf(id: string, cover: Blob | null): Promise<string | null
 }
 
 async function summaryOf(book: StoredBook): Promise<BookSummary> {
-  const cover = await db.get<Blob>("files", `${book.id}:cover`);
+  const cover = await coverOf(book.id);
   const { toc: _toc, ...rest } = book;
   return { ...rest, coverUrl: await coverUrlOf(book.id, cover) };
 }
@@ -150,8 +169,16 @@ async function importOne(file: File, seen: Set<string>): Promise<ImportOutcome> 
       toc: parsed.toc,
     };
     await db.put("books", id, row);
-    await db.put("files", id, file);
-    if (parsed.cover) await db.put("files", `${id}:cover`, parsed.cover);
+    // 🔴 The bytes, not the `File`. WebKit will not store a `File` object in
+    // IndexedDB and aborts the transaction doing it, so a book imported there
+    // had a row and no file — see the note on `run` in `db.ts`.
+    await db.put("files", id, await file.arrayBuffer());
+    if (parsed.cover) {
+      await db.put("files", `${id}:cover`, {
+        type: parsed.cover.type,
+        bytes: await parsed.cover.arrayBuffer(),
+      } satisfies StoredImage);
+    }
     await Promise.all(
       (parsed.chapters ?? []).map((chapter) => db.put("chapters", `${id}:${chapter.idx}`, chapter)),
     );
@@ -323,7 +350,10 @@ export async function bookCoverSave(id: string, bytes: number[]): Promise<void> 
     URL.revokeObjectURL(url);
     coverUrls.delete(id);
   }
-  await db.put("files", `${id}:cover`, new Blob([new Uint8Array(bytes)], { type: "image/png" }));
+  await db.put("files", `${id}:cover`, {
+    type: "image/png",
+    bytes: new Uint8Array(bytes).buffer,
+  } satisfies StoredImage);
 }
 
 /* ------------------------------------------------------------------- reader */
@@ -377,9 +407,32 @@ export async function readerSetProgress(
 /* --------------------------------------------------------------------- data */
 
 export async function bookFile(id: string): Promise<ArrayBuffer> {
-  const file = await db.get<Blob>("files", id);
-  if (!file) throw new Error("这本书的文件不在本地存储里");
-  return file.arrayBuffer();
+  const stored = await db.get<ArrayBuffer | Blob>("files", id);
+  if (!stored) throw new Error("这本书的文件不在本地存储里");
+  // Older rows hold the imported `File`; newer ones hold its bytes.
+  return stored instanceof Blob ? stored.arrayBuffer() : stored;
+}
+
+/**
+ * Saves the book's own file through the browser's download.
+ *
+ * The name comes from here because the row does. There is no save panel for
+ * the reader to type one into in this build, and the two fields it needs —
+ * the title and the format — are exactly what this function just read.
+ */
+export async function bookExport(id: string): Promise<null> {
+  const book = await bookRow(id);
+  downloadBytes(await bookFile(id), savedName(book));
+  return null;
+}
+
+/** What a saved copy is called: the title, cleaned, plus the format's own
+ *  extension — a book's format names itself except markdown, whose files are
+ *  `md`. */
+function savedName(book: StoredBook | null): string {
+  if (!book) return "book.bin";
+  const extension = book.format === "markdown" ? "md" : book.format;
+  return `${filename(book.title, "book")}.${extension}`;
 }
 
 /** Raw bytes of one image *inside* an EPUB. The web reader gets its images from
