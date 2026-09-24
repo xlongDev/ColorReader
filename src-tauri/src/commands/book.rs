@@ -94,6 +94,31 @@ pub async fn book_source_file(
     .map_err(|err| AppError::Message(format!("读取书籍文件被中断：{err}")))?
 }
 
+/// `book.export` — saves a copy of the book's own file wherever the reader
+/// asks for it.
+///
+/// The bytes are the ones that were imported, unchanged: an epub saved here
+/// opens in any other reader, a PDF in any PDF reader. That is the difference
+/// from `pack.export`, which writes a `.ctz` carrying the metadata and the
+/// highlights as well — richer, but only this app reads it back, so it is no
+/// use for handing a book to somebody else.
+///
+/// The path is read under the lock and the copy happens outside it: a 200 MB
+/// PDF is a slow write, and the library owns the app's single connection (see
+/// the note on `with`).
+#[tauri::command]
+#[specta::specta]
+pub async fn book_export(state: State<'_, AppState>, id: String, path: String) -> AppResult<()> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (file_path, _) = library.with(|conn| library::repository::source(conn, &id))?;
+        std::fs::copy(file_path, &path)?;
+        Ok(())
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("导出书籍文件被中断：{err}")))?
+}
+
 /// `book.source_url` — the protocol URL the reader streams the source file
 /// from. Pure: the origin is a compile-time constant per platform, so this
 /// does no I/O and answers instantly.

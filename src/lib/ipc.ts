@@ -39,6 +39,7 @@ const LOCAL_COMMANDS = [
   "bookSetFavorite",
   "bookUpdate",
   "bookCoverSave",
+  "bookExport",
   "readerToc",
   "readerChapter",
   "bookImages",
@@ -118,26 +119,6 @@ export const ipc = {
   bookFile(id: string): Promise<ArrayBuffer> {
     if (!isDesktopRuntime) return fromLocal("bookFile")(id) as Promise<ArrayBuffer>;
     return invoke<ArrayBuffer>("book_source_file", { id });
-  },
-
-  /**
-   * Saves a book's own file through the browser's download.
-   *
-   * Browser-only, like `bookImportFiles` and for the same reason: the desktop
-   * has somewhere to write and a panel to ask — and `pack_export` is the better
-   * answer there, since a `.ctz` carries the metadata and the highlights too —
-   * while the browser has neither. A download is the only way a book that was
-   * imported in the browser can leave again.
-   *
-   * No name is passed in: a browser has no save panel for the reader to type
-   * one into, so the side that holds the row (its title and its format) is the
-   * side that spells it.
-   */
-  bookExport(id: string): Promise<void> {
-    if (isDesktopRuntime) {
-      throw new Error("桌面端走 pack_export（书档），这里是浏览器端的入口");
-    }
-    return fromLocal("bookExport")(id) as Promise<void>;
   },
 
   /**

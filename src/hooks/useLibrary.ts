@@ -90,13 +90,13 @@ export function useImportFiles() {
   });
 }
 
-/** Saves a book's own file — the browser's way out for a book it imported.
- *  Nothing to invalidate: the shelf is untouched and the bytes are the ones
- *  that were already stored.
+/** Saves a book's own file: to the path the save dialog gave (desktop), or to
+ *  the downloads folder (browser, which ignores the path). Nothing to
+ *  invalidate — the shelf is untouched and the bytes were already stored.
  */
 export function useExportBookFile() {
   return useMutation({
-    mutationFn: (id: string) => ipc.bookExport(id),
+    mutationFn: ({ id, path = "" }: { id: string; path?: string }) => ipc.bookExport(id, path),
   });
 }
 

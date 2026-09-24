@@ -416,11 +416,12 @@ export async function bookFile(id: string): Promise<ArrayBuffer> {
 /**
  * Saves the book's own file through the browser's download.
  *
- * The name comes from here because the row does. There is no save panel for
- * the reader to type one into in this build, and the two fields it needs —
- * the title and the format — are exactly what this function just read.
+ * `path` is ignored — it is where the desktop writes, and this build has
+ * nowhere to write to. The signature is the command's, because one name has to
+ * answer on both sides; the name a download gets comes from here, since the row
+ * holds the two fields it needs and there is no save panel to ask in.
  */
-export async function bookExport(id: string): Promise<null> {
+export async function bookExport(id: string, _path: string): Promise<null> {
   const book = await bookRow(id);
   downloadBytes(await bookFile(id), savedName(book));
   return null;

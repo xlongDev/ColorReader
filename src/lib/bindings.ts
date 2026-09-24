@@ -163,6 +163,21 @@ export const commands = {
   bookImport: (paths: string[], password: string | null) =>
     __TAURI_INVOKE<ImportOutcome[]>("book_import", { paths, password }),
   /**
+   *  `book.export` — saves a copy of the book's own file wherever the reader
+   *  asks for it.
+   *
+   *  The bytes are the ones that were imported, unchanged: an epub saved here
+   *  opens in any other reader, a PDF in any PDF reader. That is the difference
+   *  from `pack.export`, which writes a `.ctz` carrying the metadata and the
+   *  highlights as well — richer, but only this app reads it back, so it is no
+   *  use for handing a book to somebody else.
+   *
+   *  The path is read under the lock and the copy happens outside it: a 200 MB
+   *  PDF is a slow write, and the library owns the app's single connection (see
+   *  the note on `with`).
+   */
+  bookExport: (id: string, path: string) => __TAURI_INVOKE<null>("book_export", { id, path }),
+  /**
    *  `pack.export` — writes one book to a `.ctz` or `.ctzx` file.
    *
    *  The destination extension picks the format: `.ctzx` requires `password` and
