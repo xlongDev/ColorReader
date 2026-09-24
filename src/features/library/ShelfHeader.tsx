@@ -1,5 +1,5 @@
 import { AnimatePresence, motion } from "motion/react";
-import { FilePlus, Globe, Highlighter, X } from "@phosphor-icons/react";
+import { FilePlus, Globe, Highlighter } from "@phosphor-icons/react";
 
 import { GlassButton } from "@/components/glass/button";
 import { DURATION, EASE_OUT, useMotion } from "@/lib/motion";
@@ -24,8 +24,6 @@ export function ShelfHeader({
   meta,
   now,
   importing,
-  webNotice,
-  onDismissNotice,
   onClippings,
   onSource,
   onImport,
@@ -34,8 +32,6 @@ export function ShelfHeader({
   meta: { title: string; subtitle: string };
   now: Date;
   importing: boolean;
-  webNotice: boolean;
-  onDismissNotice: () => void;
   onClippings: () => void;
   onSource: () => void;
   onImport: () => void;
@@ -69,29 +65,6 @@ export function ShelfHeader({
           </GlassButton>
         </div>
       </div>
-      <AnimatePresence>
-        {webNotice && (
-          <motion.div
-            initial={{ opacity: 0, y: m.reduce ? 0 : -6 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: m.reduce ? 0 : -6 }}
-            transition={{ duration: m.reduce ? 0 : DURATION.base }}
-            className="border-hairline glass-2 mt-4 flex items-center justify-between gap-3 rounded-2xl border px-4 py-2.5"
-          >
-            <p className="text-text-2 text-sm">
-              网页版仅用于界面预览，导入书籍需要下载桌面端应用（阅读数据保存在本机）。
-            </p>
-            <button
-              type="button"
-              aria-label="关闭提示"
-              className="text-text-3 hover:text-text-1 shrink-0 transition-colors"
-              onClick={onDismissNotice}
-            >
-              <X size={14} />
-            </button>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </header>
   );
 }

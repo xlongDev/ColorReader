@@ -1,3 +1,4 @@
+import type { DragEvent } from "react";
 import {
   Suspense,
   lazy,
@@ -15,7 +16,7 @@ import { Upload } from "@phosphor-icons/react";
 import { OverlayPortal } from "@/components/glass/overlay";
 import { ContinueReadingCard } from "@/features/library/ContinueReadingCard";
 import { ImportSummary } from "@/features/library/ImportSummary";
-import { pickFiles } from "@/features/library/importFiles";
+import { pickBookFiles, pickFiles } from "@/features/library/importFiles";
 import { ShelfBatchBar } from "@/features/library/ShelfBatchBar";
 import { ShelfGrid } from "@/features/library/ShelfGrid";
 import { ShelfHeader } from "@/features/library/ShelfHeader";
@@ -39,6 +40,7 @@ import {
   useDeleteBook,
   useExportPack,
   useImportBooks,
+  useImportFiles,
   useImportProgress,
   useLibraryStats,
   usePdfCovers,
@@ -211,7 +213,6 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   /** The import-clippings sheet; a file picker plus a preview lives inside. */
   const [clippingsOpen, setClippingsOpen] = useState(false);
   /** True when the import button was clicked in the browser, which has no backend. */
-  const [webNotice, setWebNotice] = useState(false);
   /** Books the label sheet is open for; one book = edit, several = add. */
   const [tagTarget, setTagTarget] = useState<BookSummary[] | null>(null);
   /** The book whose metadata sheet is open; one book at a time, since a title
@@ -237,6 +238,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const stats = useLibraryStats();
   const assignTags = useAssignTags();
   const importBooks = useImportBooks();
+  const importFiles = useImportFiles();
   const exportPack = useExportPack();
   const deleteBook = useDeleteBook();
   const setFavorite = useSetFavorite();
@@ -325,28 +327,58 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   // Tauri intercepts native drops and reports absolute file paths.
   const dragging = useDragDropImport((paths) => importPaths(paths));
 
-  // The browser build has no Rust backend: picking files would silently fail,
-  // so the button surfaces an explanation instead of doing nothing.
+  // The web build has no native drag-drop channel, but the page can see an
+  // HTML5 one: same overlay, same mutation, only the source of the files
+  // differs. `dragleave` fires for every child the pointer crosses, so it only
+  // counts when the pointer leaves the shelf itself.
+  const [dropping, setDropping] = useState(false);
+  const browserDrop = isDesktopRuntime
+    ? {}
+    : {
+        onDragOver: (event: DragEvent<HTMLDivElement>) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          setDropping(true);
+        },
+        onDragLeave: (event: DragEvent<HTMLDivElement>) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          setDropping(false);
+        },
+        onDrop: (event: DragEvent<HTMLDivElement>) => {
+          event.preventDefault();
+          setDropping(false);
+          const files = [...event.dataTransfer.files];
+          if (files.length > 0) {
+            importFiles.mutate(files, { onSuccess: (outcomes) => setLastOutcomes(outcomes) });
+          }
+        },
+      };
+
+  // Both builds import; they only differ in what the picker hands over. The
+  // desktop gets absolute paths from the native dialog, the browser gets the
+  // `File`s themselves, and the shelf stores the same book either way.
   const startImport = () => {
     if (!isDesktopRuntime) {
-      setWebNotice(true);
+      void pickBookFiles().then((files) => {
+        if (files.length > 0) {
+          importFiles.mutate(files, { onSuccess: (outcomes) => setLastOutcomes(outcomes) });
+        }
+      });
       return;
     }
     void pickFiles().then(importPaths);
   };
 
   const m = useMotion();
-  const picking = importBooks.isPending;
+  const picking = importBooks.isPending || importFiles.isPending;
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col" {...browserDrop}>
       <ShelfHeader
         filter={filter}
         meta={meta}
         now={now}
         importing={picking}
-        webNotice={webNotice}
-        onDismissNotice={() => setWebNotice(false)}
         onClippings={() => setClippingsOpen(true)}
         onSource={() => setSourceOpen(true)}
         onImport={startImport}
@@ -438,7 +470,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         </Suspense>
       )}
 
-      {dragging && (
+      {(dragging || dropping) && (
         <OverlayPortal>
           <motion.div
             initial={{ opacity: 0 }}

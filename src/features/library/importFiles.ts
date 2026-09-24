@@ -34,7 +34,33 @@ export async function pickFiles(): Promise<string[]> {
     if (picked === null) return [];
     return Array.isArray(picked) ? picked : [picked];
   } catch {
-    // Outside the Tauri shell there is no dialog; importing stays desktop-only.
+    // Outside the Tauri shell there is no dialog; the web build picks files
+    // through `pickBookFiles` instead.
     return [];
   }
+}
+
+/**
+ * The browser's own picker: an `<input type="file">`, same extension filter.
+ *
+ * A browser cannot hand over paths, so the web build imports the `File`s
+ * themselves — the bytes are what the shelf stores either way, and IndexedDB
+ * keeps them. Cancelling resolves empty rather than hanging.
+ */
+export function pickBookFiles(): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.accept = BOOK_EXTENSIONS.map((extension) => `.${extension}`).join(",");
+    const done = (files: File[]) => {
+      input.remove();
+      resolve(files);
+    };
+    input.addEventListener("change", () => done([...(input.files ?? [])]));
+    input.addEventListener("cancel", () => done([]));
+    input.style.display = "none";
+    document.body.append(input);
+    input.click();
+  });
 }
