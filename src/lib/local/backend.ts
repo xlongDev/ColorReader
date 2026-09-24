@@ -13,6 +13,8 @@
  * font and dictionary import from a path. Those keep their existing
  * "desktop only" stubs and say so in the UI where they are offered.
  */
+import type { PDFDocumentProxy } from "pdfjs-dist";
+
 import { MARK_END, MARK_START } from "@/types/ipc";
 import type {
   Annotation,
@@ -30,6 +32,7 @@ import type {
   TagSummary,
 } from "@/lib/bindings";
 
+import { countChars, pdfLines } from "@/lib/local/blocks";
 import * as db from "@/lib/local/db";
 import { loadDoc, renderFirstPagePng } from "@/lib/pdf";
 import { readBook } from "@/lib/local/import";
@@ -172,13 +175,44 @@ async function importOne(file: File, seen: Set<string>): Promise<ImportOutcome> 
  * are stored: that path reads the book through `bookFile`, which in this build
  * is IndexedDB.
  */
+/**
+ * Every page's lines, in reading order.
+ *
+ * pdf.js hands over positioned runs, not paragraphs: the runs that share a
+ * baseline are one line, and the document's own end-of-line markers say where a
+ * line stops. Both are used — a file that marks nothing still breaks where the
+ * baseline moves — and the result is one chapter per page, which is the shape
+ * the reader's page index already has.
+ *
+ * Blank pages keep their entry. A PDF is fixed layout, so page N of the reader
+ * has to stay page N of the document whatever its text did.
+ */
+async function pdfPages(doc: PDFDocumentProxy): Promise<ChapterContent[]> {
+  const chapters: ChapterContent[] = [];
+  for (let number = 1; number <= doc.numPages; number += 1) {
+    let paragraphs: string[] = [];
+    try {
+      const page = await doc.getPage(number);
+      paragraphs = pdfLines((await page.getTextContent()).items);
+      page.cleanup();
+    } catch {
+      // A page pdf.js will not decode is a blank page here; its number stays.
+    }
+    chapters.push({ idx: number - 1, title: `第 ${number} 页`, paragraphs });
+  }
+  return chapters;
+}
+
 async function describePdf(id: string): Promise<void> {
   try {
     const doc = await loadDoc(id);
-    const toc: ChapterMeta[] = Array.from({ length: doc.numPages }, (_, idx) => ({
-      idx,
-      title: `第 ${idx + 1} 页`,
-      chars: 0,
+    // The text first: it is what the page count is *for*, and the TOC's
+    // character counts are read off it rather than guessed at.
+    const chapters = await pdfPages(doc);
+    const toc: ChapterMeta[] = chapters.map((chapter) => ({
+      idx: chapter.idx,
+      title: chapter.title,
+      chars: countChars(chapter.paragraphs),
     }));
     let title: string | null = null;
     try {
@@ -189,6 +223,13 @@ async function describePdf(id: string): Promise<void> {
       // A document without an info dictionary keeps the file's own name.
     }
     await patchBook(id, title ? { toc, title } : { toc });
+    // A scanned book extracts to nothing but blank pages; storing them would
+    // only make every chapter look searchable and empty.
+    if (chapters.some((chapter) => chapter.paragraphs.length > 0)) {
+      await Promise.all(
+        chapters.map((chapter) => db.put("chapters", `${id}:${chapter.idx}`, chapter)),
+      );
+    }
     const png = await renderFirstPagePng(id);
     await bookCoverSave(id, [...new Uint8Array(png)]);
   } catch {
@@ -287,6 +328,25 @@ export async function bookCoverSave(id: string, bytes: number[]): Promise<void> 
 
 /* ------------------------------------------------------------------- reader */
 
+/** Every stored chapter of one book, in reading order. */
+async function chaptersOf(bookId: string): Promise<ChapterContent[]> {
+  const prefix = `${bookId}:`;
+  const keys = (await db.keys("chapters")).filter((key) => key.startsWith(prefix));
+  const rows = await Promise.all(keys.map((key) => db.get<ChapterContent>("chapters", key)));
+  return rows
+    .filter((row): row is ChapterContent => row !== null)
+    .toSorted((a, b) => a.idx - b.idx);
+}
+
+/**
+ * The chapters the reader pages through.
+ *
+ * The row's own table, which the importer wrote from the extracted prose — the
+ * desktop answers this from its own spine extraction, and the two have to be
+ * the same list: a chapter's index is what a search hit, a bookmark and the
+ * chapter list all address, and the reader's position is a fraction weighted by
+ * these character counts.
+ */
 export async function readerToc(bookId: string): Promise<ChapterMeta[]> {
   return (await bookRow(bookId))?.toc ?? [];
 }
@@ -579,7 +639,7 @@ function snippetAround(body: string, at: number, length: number): string {
  *
  * Only plain-text and markdown chapters are stored (see `local/import.ts`), so
  * a foliate book searches its chapter titles and no further — which is the
- * honest answer for a build that never extracted their text.
+ * honest answer for a book with no text to search.
  */
 export async function searchQuery(
   needle: string,
@@ -601,31 +661,49 @@ export async function searchQuery(
   return hits;
 }
 
-/** One book's hits, its titles and its stored chapter bodies. */
+/**
+ * One book's hits: a chapter's title first, then its text.
+ *
+ * Searched over the extracted chapters rather than the imported TOC, because
+ * the chapter index in a hit is the one the reader's `goTo` understands — the
+ * two would only agree on a book whose TOC happened to have one entry per
+ * spine document.
+ */
 async function hitsInBook(book: StoredBook, query: string, needle: string): Promise<SearchHit[]> {
-  const bodies = await Promise.all(
-    book.toc.map((entry) => db.get<ChapterContent>("chapters", `${book.id}:${entry.idx}`)),
-  );
+  const chapters = await chaptersOf(book.id);
   const hits: SearchHit[] = [];
-  book.toc.forEach((entry, index) => {
+  if (chapters.length === 0) {
+    // No text was extracted, so the titles are the honest answer.
+    for (const entry of book.toc) {
+      if (entry.title.toLowerCase().includes(query)) {
+        hits.push({
+          bookId: book.id,
+          bookTitle: book.title,
+          chapterIdx: entry.idx,
+          chapterTitle: entry.title,
+          snippet: entry.title,
+          offset: 0,
+        });
+      }
+    }
+    return hits;
+  }
+  for (const chapter of chapters) {
     const base = {
       bookId: book.id,
       bookTitle: book.title,
-      chapterIdx: entry.idx,
-      chapterTitle: entry.title,
+      chapterIdx: chapter.idx,
+      chapterTitle: chapter.title,
     };
-    if (entry.title.toLowerCase().includes(query)) {
-      hits.push({ ...base, snippet: entry.title, offset: 0 });
-      return;
+    if (chapter.title.toLowerCase().includes(query)) {
+      hits.push({ ...base, snippet: chapter.title, offset: 0 });
+      continue;
     }
-    // Bodies exist only where this build extracted them (plain text and
-    // markdown); a foliate book answers with its titles alone.
-    const body = bodies[index]?.paragraphs.join("\n");
-    if (!body) return;
+    const body = chapter.paragraphs.join("\n");
     const at = body.toLowerCase().indexOf(query);
-    if (at < 0) return;
+    if (at < 0) continue;
     hits.push({ ...base, snippet: snippetAround(body, at, needle.length), offset: at });
-  });
+  }
   return hits;
 }
 
