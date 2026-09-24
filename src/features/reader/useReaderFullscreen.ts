@@ -7,13 +7,42 @@ import { isDesktopRuntime } from "@/lib/ipc";
 /** How long the "press Esc to leave" hint stays up after entering fullscreen. */
 const EXIT_HINT_MS = 3000;
 
+/** Whether the page itself is fullscreen — the browser's own notion, which is
+ *  what `fullscreenchange` reports. */
+const pageIsFullscreen = (): boolean => document.fullscreenElement !== null;
+
 /**
- * The reader's fullscreen state, mirroring the OS window's.
+ * Enters or leaves the browser's fullscreen, answering what actually happened.
+ *
+ * The element API is not everywhere — iOS Safari offers `requestFullscreen` on
+ * nothing but a video — and a browser may refuse the request when it arrives
+ * outside a user gesture. Both cases fall back to the one thing this hook can
+ * always give: the chrome hidden, rather than a button that does nothing.
+ *
+ * The answer is read back from the document instead of assumed: the request
+ * resolves asynchronously, and the state is the browser's to set.
+ */
+async function togglePageFullscreen(current: boolean): Promise<boolean> {
+  const root = document.documentElement;
+  try {
+    if (pageIsFullscreen()) await document.exitFullscreen();
+    else if (typeof root.requestFullscreen === "function") await root.requestFullscreen();
+    else return !current;
+  } catch {
+    return !current;
+  }
+  return pageIsFullscreen();
+}
+
+/**
+ * The reader's fullscreen state, mirroring the window's.
  *
  * Mirroring, not owning: macOS can leave fullscreen without our toggle — the
  * traffic-light green dot or a native gesture — and the window resize that
  * follows is the only signal, so the real state is re-read there and both the
- * local flag and the shell's chrome flag are brought back in line.
+ * local flag and the shell's chrome flag are brought back in line. The browser
+ * has the same shape of problem, answered by `fullscreenchange` (Esc, a system
+ * gesture, or another script leaving it).
  *
  * The exit hint is part of this because it is a property of entering, not of
  * anything the reader does afterwards.
@@ -34,7 +63,7 @@ export function useReaderFullscreen() {
         next = !fullscreen;
       }
     } else {
-      next = !fullscreen;
+      next = await togglePageFullscreen(fullscreen);
     }
     setFullscreen(next);
     setReaderFullscreen(next);
@@ -57,7 +86,17 @@ export function useReaderFullscreen() {
   }, [fullscreen]);
 
   useEffect(() => {
-    if (!isDesktopRuntime) return;
+    if (!isDesktopRuntime) {
+      // Esc, a system gesture, or another script can all leave fullscreen
+      // without the toggle being pressed, and this event is the only notice.
+      const onChange = () => {
+        const actual = pageIsFullscreen();
+        setFullscreen(actual);
+        setReaderFullscreen(actual);
+      };
+      document.addEventListener("fullscreenchange", onChange);
+      return () => document.removeEventListener("fullscreenchange", onChange);
+    }
     const win = getCurrentWindow();
     let disposed = false;
     let unlisten: (() => void) | null = null;
