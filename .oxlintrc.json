@@ -78,6 +78,16 @@
         // be declared inside them. Hoisting them would break at runtime.
         "unicorn/consistent-function-scoping": "off"
       }
+    },
+    {
+      // Unpacking a book is one document at a time on purpose: every section
+      // is unzipped and parsed into a DOM, and `Promise.all` over a 300-chapter
+      // epub would hold all 300 trees at once. Sequential is not the missed
+      // optimisation here — it is the memory bound.
+      "files": ["src/lib/local/**"],
+      "rules": {
+        "no-await-in-loop": "off"
+      }
     }
   ],
   "ignorePatterns": [

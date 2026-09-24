@@ -3,17 +3,18 @@
  *
  * Two paths, because the shelf already has two: the formats foliate-js can open
  * (epub / mobi / azw3 / fb2 / cbz / pdf) are read by the same engine the reader
- * uses, so metadata, cover and table of contents come from it and agree with
- * what the reader will show; plain text and markdown are split here, the way
- * the Rust importer splits them on the desktop.
+ * uses, so metadata, cover, table of contents and chapter text all come from it
+ * and agree with what the reader will show; plain text and markdown are split
+ * here, the way the Rust importer splits them on the desktop.
  *
- * `ponytail:` the desktop importer also extracts every chapter's text for
- * search and read-aloud. On the web that is foliate's business — the reader
- * renders the file itself — so only text formats keep a body, and full-text
- * search over epub is desktop-only until someone needs it.
+ * Both paths end with the same thing: every chapter's text, in reading order.
+ * That table is what search, read-aloud and the progress bar address, so having
+ * it in the browser is what makes the two builds the same product rather than
+ * one of them a viewer.
  */
 import { makeBook } from "foliate-js/view.js";
 
+import { chapterFromBlocks, countChars, textBlocks } from "@/lib/local/blocks";
 import type { BookFormat, ChapterContent, ChapterMeta } from "@/lib/bindings";
 
 /** Formats the shelf accepts, and the extension that names each one. */
@@ -108,7 +109,7 @@ export type ParsedBook = {
   authors: string[];
   cover: Blob | null;
   toc: ChapterMeta[];
-  /** Kept only for the formats rendered from text; foliate formats carry none. */
+  /** `null` for a book with no prose to extract — a PDF, a comic archive. */
   chapters: ChapterContent[] | null;
 };
 
@@ -133,14 +134,55 @@ export function decodeText(bytes: ArrayBuffer): string {
 }
 
 /** Reads one picked file into everything the shelf and the reader need. */
+/** One spine entry: foliate's own section shape, as far as this file reads it. */
+type FoliateSection = {
+  id?: string;
+  /** Missing on formats that have no text of their own — a comic archive. */
+  createDocument?: () => Promise<Document>;
+};
+
 /** The bit of a foliate book this module reads: everything else belongs to the
  *  reader view. */
 type FoliateBookDoc = {
   metadata?: Record<string, unknown> | null;
   toc?: { label?: string; subitems?: unknown[] }[];
-  sections?: { id?: string }[];
+  sections?: FoliateSection[];
   getCover?: () => Promise<Blob | null> | Blob | null;
+  destroy?: () => void;
 };
+
+/**
+ * Every chapter's text, in the order the reader pages through them.
+ *
+ * foliate's sections are the spine, and the desktop extracts from the spine in
+ * the same order (`document::epub::read_chapters`) — so chapter n here is
+ * chapter n there, which is what makes a search hit found in the browser the
+ * same place the desktop would send the reader.
+ *
+ * A section with no prose is dropped rather than numbered, exactly as the
+ * desktop drops it: a pure-SVG cover is a spine entry that would otherwise
+ * become a chapter reading as a blank page.
+ *
+ * `null` when nothing could be extracted (a comic archive, a damaged
+ * container), which is also the shape a PDF keeps.
+ */
+async function extractChapters(book: FoliateBookDoc): Promise<ChapterContent[] | null> {
+  const chapters: ChapterContent[] = [];
+  for (const section of book.sections ?? []) {
+    if (typeof section.createDocument !== "function") continue;
+    try {
+      const blocks = textBlocks((await section.createDocument()).body);
+      if (blocks.length === 0) continue;
+      const { title, paragraphs } = chapterFromBlocks(blocks, `第 ${chapters.length + 1} 章`);
+      chapters.push({ idx: chapters.length, title, paragraphs });
+    } catch {
+      // A section that will not open is skipped, not fatal: the rest of the
+      // book still reads, and a chapter index that shifted by one is a smaller
+      // loss than refusing the file.
+    }
+  }
+  return chapters.length > 0 ? chapters : null;
+}
 
 export async function readBook(file: File): Promise<ParsedBook> {
   const format = detectFormat(file.name);
@@ -161,7 +203,7 @@ export async function readBook(file: File): Promise<ParsedBook> {
       toc: chapters.map((chapter) => ({
         idx: chapter.idx,
         title: chapter.title,
-        chars: chapter.paragraphs.reduce((total, text) => total + text.length, 0),
+        chars: countChars(chapter.paragraphs),
       })),
       chapters,
     };
@@ -209,6 +251,22 @@ export async function readBook(file: File): Promise<ParsedBook> {
   } catch {
     // A malformed cover is not a reason to refuse the book.
   }
+  // Navigation labels and section ids, read before the book is closed: what
+  // the chapter list falls back to when nothing could be extracted.
+  const labelsOrSections: ChapterMeta[] =
+    labels.length > 0
+      ? labels.map((title, idx) => ({ idx, title, chars: 0 }))
+      : (book.sections ?? []).map((section, idx) => ({
+          idx,
+          title: section.id ?? `第 ${idx + 1} 节`,
+          chars: 0,
+        }));
+  // Last, because it is the expensive part: every spine document is unzipped
+  // and parsed. It is done once, here, rather than on the first search — the
+  // reader is already waiting for the import, and a search that has to open the
+  // whole book before it can answer is a search that looks broken.
+  const chapters = await extractChapters(book);
+  book.destroy?.();
   return {
     format,
     title: meta.title?.trim() || stem,
@@ -218,15 +276,18 @@ export async function readBook(file: File): Promise<ParsedBook> {
     publisher: meta.publisher ?? null,
     authors,
     cover,
-    toc:
-      labels.length > 0
-        ? labels.map((title, idx) => ({ idx, title, chars: 0 }))
-        : (book.sections ?? []).map((section, idx) => ({
-            idx,
-            title: section.id ?? `第 ${idx + 1} 节`,
-            chars: 0,
-          })),
-    chapters: null,
+    // The extracted chapters are the table, not the container's navigation:
+    // this is the list the reader pages through, so its indices and its
+    // character counts have to be the ones a search hit and the progress bar
+    // address. Navigation is the fallback for a book with no text to extract.
+    toc: chapters
+      ? chapters.map((chapter) => ({
+          idx: chapter.idx,
+          title: chapter.title,
+          chars: countChars(chapter.paragraphs),
+        }))
+      : labelsOrSections,
+    chapters,
   };
 }
 
