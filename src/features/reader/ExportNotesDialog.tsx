@@ -4,6 +4,7 @@ import { FileText, NotePencil, Table } from "@phosphor-icons/react";
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useSavePath } from "@/hooks/useSavePath";
+import { isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
 import { filename } from "@/lib/filename";
 
@@ -40,7 +41,9 @@ interface ExportNotesDialogProps {
   error?: string | null;
   onCancel: () => void;
   /** Receives the path chosen by the native save dialog. */
-  onConfirm: (path: string) => void;
+  /** `path` is `null` in the browser: there is no save panel and nowhere to
+   *  write, so the file goes to a download under the name offered here. */
+  onConfirm: (path: string | null, format: string) => void;
 }
 
 /**
@@ -72,13 +75,17 @@ export function ExportNotesDialog({
   const message = error ?? panelError;
 
   const choose = async () => {
+    if (!isDesktopRuntime) {
+      onConfirm(null, format);
+      return;
+    }
     const path = await choosePath({
       title: "导出标注与笔记",
       defaultPath: `${filename(name, "标注与笔记")}.${format}`,
       filters: [{ name: format === "md" ? "Markdown" : "CSV 表格", extensions: [format] }],
     });
     if (path === null) return;
-    onConfirm(path);
+    onConfirm(path, format);
   };
 
   return (
@@ -129,7 +136,7 @@ export function ExportNotesDialog({
           取消
         </GlassButton>
         <GlassButton variant="primary" disabled={busy || empty} onClick={() => void choose()}>
-          {busy ? "正在导出…" : "选择保存位置"}
+          {busy ? "正在导出…" : isDesktopRuntime ? "选择保存位置" : "导出"}
         </GlassButton>
       </div>
     </GlassDialog>

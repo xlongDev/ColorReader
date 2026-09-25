@@ -124,6 +124,31 @@ export const ipc = {
     return invoke<ArrayBuffer>("book_source_file", { id });
   },
 
+  /** One book's highlights as a download. Browser-only, for the same reason as
+   *  the selection below. */
+  notesSave(bookId: string, name: string, format: string): Promise<null> {
+    if (isDesktopRuntime) throw new Error("桌面端走 notes_export（路径）");
+    return fromLocal("notesSave")(bookId, name, format) as Promise<null>;
+  },
+
+  /**
+   * The notes page's highlights as a download.
+   *
+   * Browser-only: the desktop's command takes a path from its save panel and
+   * reads the format off the extension, and a browser has neither. Everything
+   * about the *file* — the Markdown, the CSV columns — is the same code path as
+   * the desktop's, pinned by the tests on both sides.
+   */
+  notesSaveSelection(
+    bookIds: string[],
+    ids: string[],
+    name: string,
+    format: string,
+  ): Promise<null> {
+    if (isDesktopRuntime) throw new Error("桌面端走 notes_export_selection（路径）");
+    return fromLocal("notesSaveSelection")(bookIds, ids, name, format) as Promise<null>;
+  },
+
   /**
    * The browser's own archive: packs the library into a ZIP and downloads it.
    *

@@ -9,6 +9,14 @@ import { ExportNotesDialog } from "./ExportNotesDialog";
 const { save } = vi.hoisted(() => ({ save: vi.fn() }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ save }));
 
+// These cases are about what the panel is asked for and what happens when it is
+// dismissed, and there is no panel in a browser: the dialog's other branch (a
+// download, no question asked) is covered by the export's own round trip.
+vi.mock("@/lib/ipc", async (importOriginal) => ({
+  ...((await importOriginal()) as object),
+  isDesktopRuntime: true,
+}));
+
 // `restoreAllMocks` in the shared setup only covers `spyOn`, so the call log
 // of a plain `vi.fn()` would otherwise carry over between cases.
 beforeEach(() => {
@@ -57,7 +65,7 @@ describe("ExportNotesDialog", () => {
       defaultPath: "三体.md",
       filters: [{ name: "Markdown", extensions: ["md"] }],
     });
-    expect(onConfirm).toHaveBeenCalledWith("/tmp/notes.md");
+    expect(onConfirm).toHaveBeenCalledWith("/tmp/notes.md", "md");
   });
 
   it("switches the extension when the CSV table is picked", async () => {
@@ -119,7 +127,7 @@ describe("ExportNotesDialog", () => {
     await user.click(confirm());
 
     expect(screen.queryByText(/无法打开保存对话框/)).toBeNull();
-    expect(onConfirm).toHaveBeenCalledWith("/tmp/notes.md");
+    expect(onConfirm).toHaveBeenCalledWith("/tmp/notes.md", "md");
   });
 
   it("counts what will be written, and refuses when there is nothing", async () => {

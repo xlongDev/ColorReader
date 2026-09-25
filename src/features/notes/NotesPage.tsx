@@ -426,9 +426,14 @@ export function NotesPage() {
               setExporting(null);
               exportSelection.reset();
             }}
-            onConfirm={(path) =>
+            onConfirm={(path, format) =>
               exportSelection.mutate(
-                { ...exportPayload(target), path },
+                {
+                  ...exportPayload(target),
+                  path,
+                  name: target.length === 1 ? (target[0]?.book.title ?? "") : "笔记",
+                  format,
+                },
                 { onSuccess: () => setExporting(null) },
               )
             }

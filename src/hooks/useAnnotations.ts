@@ -244,10 +244,19 @@ export function useSetAnnotationNote(bookId: string | null) {
  */
 export function useExportNotes() {
   return useMutation({
-    mutationFn: ({ id, path }: { id: string; path: string }) => {
-      if (!isDesktopRuntime) return Promise.resolve();
-      return ipc.notesExport(id, path);
-    },
+    mutationFn: ({
+      id,
+      name,
+      path,
+      format,
+    }: {
+      id: string;
+      name: string;
+      /** Where the desktop writes, from its save panel. `null` in the browser,
+       *  whose file goes to a download instead — and takes `name`. */
+      path: string | null;
+      format: string;
+    }) => (path === null ? ipc.notesSave(id, name, format) : ipc.notesExport(id, path)),
   });
 }
 
@@ -262,9 +271,23 @@ export function useExportNotes() {
  */
 export function useExportNotesSelection() {
   return useMutation({
-    mutationFn: ({ bookIds, ids, path }: { bookIds: string[]; ids: string[]; path: string }) => {
-      if (!isDesktopRuntime) return Promise.resolve();
-      return ipc.notesExportSelection(bookIds, ids, path);
-    },
+    mutationFn: ({
+      bookIds,
+      ids,
+      name,
+      path,
+      format,
+    }: {
+      bookIds: string[];
+      ids: string[];
+      name: string;
+      /** Where the desktop writes, from its save panel. `null` in the browser,
+       *  whose file goes to a download instead — the name it gets is `name`. */
+      path: string | null;
+      format: string;
+    }) =>
+      path === null
+        ? ipc.notesSaveSelection(bookIds, ids, name, format)
+        : ipc.notesExportSelection(bookIds, ids, path),
   });
 }

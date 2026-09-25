@@ -36,6 +36,13 @@ import { countChars, pdfLines } from "@/lib/local/blocks";
 import { downloadBytes } from "@/lib/local/save";
 import { filename } from "@/lib/filename";
 import type { LocalFont } from "@/types/ipc";
+import {
+  renderCsv,
+  renderCsvMany,
+  renderMarkdown,
+  renderMarkdownMany,
+  type Notes,
+} from "@/lib/local/notes";
 import * as db from "@/lib/local/db";
 import { loadDoc, renderFirstPagePng } from "@/lib/pdf";
 import { entryBytes, zipTools } from "@/lib/local/zip";
@@ -884,3 +891,72 @@ export async function fontDelete(id: string): Promise<null> {
  *  implementation lives in its own file: it is a couple of hundred lines of
  *  archive work that the shelf never touches. */
 export { backupExport as backupSave, backupRestore as backupLoad } from "@/lib/local/backup";
+
+/* ------------------------------------------------------------------- notes */
+
+/** One book's highlights, in reading order — the order the desktop's own
+ *  `ORDER BY chapter_idx, start_char` gives, so both builds export a book the
+ *  same way round. */
+async function notesOf(bookId: string): Promise<Notes | null> {
+  const book = await bookRow(bookId);
+  if (!book) return null;
+  const rows = (await db.all<Annotation>("annotations"))
+    .filter((row) => row.bookId === bookId)
+    .toSorted((a, b) => a.chapterIdx - b.chapterIdx || a.startChar - b.startChar);
+  return {
+    id: bookId,
+    title: book.title,
+    authors: book.authors,
+    progress: book.progress ?? 0,
+    entries: rows.map((row) => ({
+      id: row.id,
+      chapterIdx: row.chapterIdx,
+      text: row.text,
+      note: row.note ?? null,
+      color: row.color ?? null,
+      style: row.style ?? null,
+    })),
+  };
+}
+
+const notesType = (format: string): string =>
+  format === "csv" ? "text/csv;charset=utf-8" : "text/markdown;charset=utf-8";
+
+/** One book's highlights as a download. The desktop's command takes a path and
+ *  reads the format off its extension; here the name the file gets is the one
+ *  its save panel would have offered. */
+export async function notesSave(bookId: string, name: string, format: string): Promise<null> {
+  const notes = await notesOf(bookId);
+  if (!notes) throw new Error("这本书不在库里");
+  const body = format === "csv" ? renderCsv(notes) : renderMarkdown(notes);
+  downloadBytes(
+    new Blob([body], { type: notesType(format) }),
+    `${filename(name, "标注与笔记")}.${format}`,
+  );
+  return null;
+}
+
+/** The notes page exports what it is *showing*: `ids` decides which rows
+ *  survive, and `bookIds` carries the page's own order, so the file groups the
+ *  way the screen does — the same contract as the desktop's selection export. */
+export async function notesSaveSelection(
+  bookIds: string[],
+  ids: string[],
+  name: string,
+  format: string,
+): Promise<null> {
+  const wanted = new Set(ids);
+  const books: Notes[] = [];
+  for (const bookId of bookIds) {
+    const notes = await notesOf(bookId);
+    if (!notes) continue;
+    notes.entries = notes.entries.filter((entry) => wanted.has(entry.id));
+    if (notes.entries.length > 0) books.push(notes);
+  }
+  const body = format === "csv" ? renderCsvMany(books) : renderMarkdownMany(books);
+  downloadBytes(
+    new Blob([body], { type: notesType(format) }),
+    `${filename(name, "笔记")}.${format}`,
+  );
+  return null;
+}

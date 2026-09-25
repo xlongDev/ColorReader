@@ -3076,9 +3076,9 @@ function ReaderView({
               setExportingNotes(false);
               exportNotes.reset();
             }}
-            onConfirm={(path) =>
+            onConfirm={(path, exportFormat) =>
               exportNotes.mutate(
-                { id: bookId, path },
+                { id: bookId, name: title, path, format: exportFormat },
                 { onSuccess: () => setExportingNotes(false) },
               )
             }
