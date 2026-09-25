@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime, onRagProgress } from "@/lib/ipc";
+import { desktopQuery, ipc, onRagProgress } from "@/lib/ipc";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { RagProgress } from "@/types/ipc";
 
@@ -10,10 +10,9 @@ export function useRagStatus(bookId: string) {
   return useQuery({
     queryKey: ["rag", "status", bookId],
     queryFn: () => {
-      if (!isDesktopRuntime) {
-        return Promise.resolve({ bookChunks: 0, libraryChunks: 0, embeddingModel: "" });
-      }
-      return ipc.ragStatus(bookId);
+      return desktopQuery({ bookChunks: 0, libraryChunks: 0, embeddingModel: "" }, () =>
+        ipc.ragStatus(bookId),
+      )();
     },
     staleTime: 5_000,
   });

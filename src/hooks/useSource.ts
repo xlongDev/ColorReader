@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime, onSourceProgress } from "@/lib/ipc";
+import { desktopQuery, ipc, onSourceProgress } from "@/lib/ipc";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
+import type { SourceEntry } from "@/lib/bindings";
 import type { SourceProgress, SourceRules } from "@/types/ipc";
 
 /** Every stored source, definitions included. */
@@ -10,8 +11,8 @@ export function useSources() {
   return useQuery({
     queryKey: ["sources"],
     queryFn: () => {
-      if (!isDesktopRuntime) return Promise.resolve([]);
-      return ipc.sourceList();
+      // Online sources are the desktop's: the shelf's own import is the browser's.
+      return desktopQuery([] as SourceEntry[], () => ipc.sourceList())();
     },
   });
 }

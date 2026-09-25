@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime, onGraphProgress } from "@/lib/ipc";
+import { desktopQuery, ipc, onGraphProgress } from "@/lib/ipc";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { GraphProgress } from "@/types/ipc";
 
@@ -10,10 +10,11 @@ export function useGraphStatus(bookId: string) {
   return useQuery({
     queryKey: ["graph", "status", bookId],
     queryFn: () => {
-      if (!isDesktopRuntime) {
-        return Promise.resolve({ entities: 0, relations: 0, model: "" });
-      }
-      return ipc.graphStatus(bookId);
+      // The graph lives in the desktop's own store; the browser has no copy,
+      // and this is what it reports rather than pretending to have asked.
+      return desktopQuery({ entities: 0, relations: 0, model: "" }, () =>
+        ipc.graphStatus(bookId),
+      )();
     },
     staleTime: 5_000,
   });
@@ -24,10 +25,7 @@ export function useGraphQuery(bookId: string, entity: string | null) {
   return useQuery({
     queryKey: ["graph", "view", bookId, entity],
     queryFn: () => {
-      if (!isDesktopRuntime) {
-        return Promise.resolve({ entities: [], relations: [] });
-      }
-      return ipc.graphQuery(bookId, entity);
+      return desktopQuery({ entities: [], relations: [] }, () => ipc.graphQuery(bookId, entity))();
     },
     staleTime: 5_000,
   });
