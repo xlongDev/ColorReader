@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { commands } from "@/lib/bindings";
 import type { LocalFont } from "@/types/ipc";
-import type { BackupSummary } from "@/lib/bindings";
+import type { BackupSummary, Outcome } from "@/lib/bindings";
 import type {
   AiDelta,
   GraphProgress,
@@ -147,6 +147,14 @@ export const ipc = {
   ): Promise<null> {
     if (isDesktopRuntime) throw new Error("桌面端走 notes_export_selection（路径）");
     return fromLocal("notesSaveSelection")(bookIds, ids, name, format) as Promise<null>;
+  },
+
+  /** Reads a clippings file back in. Browser-only: the desktop's command takes
+   *  a path from its own picker. Only this app's own Markdown and CSV are
+   *  understood — a Kindle `My Clippings.txt` is refused, not guessed at. */
+  clippingsImportFile(file: File, dryRun: boolean): Promise<Outcome> {
+    if (isDesktopRuntime) throw new Error("桌面端走 clippings_import（路径）");
+    return fromLocal("clippingsImportFile")(file, dryRun) as Promise<Outcome>;
   },
 
   /**

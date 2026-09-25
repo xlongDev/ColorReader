@@ -5,6 +5,8 @@ import { CheckCircle, FileText, Warning } from "@phosphor-icons/react";
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { Reveal } from "@/components/motion/Reveal";
+import { isDesktopRuntime } from "@/lib/ipc";
+import { acceptOf, pickFiles as pickBrowserFiles } from "@/lib/pickFile";
 import { useClippings } from "@/hooks/useClippings";
 import type { ClippingsOutcome } from "@/types/ipc";
 
@@ -33,18 +35,21 @@ interface ClippingsDialogProps {
 }
 
 /** The file's base name, for the line that confirms what was picked. */
-function baseName(path: string): string {
-  const parts = path.split(/[\\/]/);
-  return parts[parts.length - 1] || path;
+function baseName(picked: string | File): string {
+  if (typeof picked !== "string") return picked.name;
+  const parts = picked.split(/[\\/]/);
+  return parts[parts.length - 1] || picked;
 }
 
 export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps) {
   const { preview, commit } = useClippings();
-  const [path, setPath] = useState("");
+  /** What the reader picked: a path from the desktop's panel, or the file
+   *  itself in the browser. */
+  const [picked, setPicked] = useState<string | File | null>(null);
   const [done, setDone] = useState<ClippingsOutcome | null>(null);
 
   const close = () => {
-    setPath("");
+    setPicked(null);
     setDone(null);
     preview.reset();
     commit.reset();
@@ -52,19 +57,32 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
   };
 
   const pick = async () => {
-    const picked = await open({
+    // The browser has no dialog of its own for this: it takes the file, which is
+    // what the backend reads anyway.
+    if (!isDesktopRuntime) {
+      const [file] = await pickBrowserFiles(acceptOf(["txt", "md", "markdown", "csv"]));
+      if (!file) return;
+      setDone(null);
+      commit.reset();
+      preview.reset();
+      setPicked(file);
+      preview.mutate(file);
+      return;
+    }
+    const path = await open({
       multiple: false,
       directory: false,
       filters: [{ name: "摘录文件", extensions: ["txt", "md", "markdown", "csv"] }],
     });
-    if (typeof picked !== "string") return;
+    if (typeof path !== "string") return;
+    const chosen: string | File = path;
     setDone(null);
     // Both sides reset: a previous run's numbers must not sit next to a new
     // file's error, and a failed pick must not leave the old report on screen.
     commit.reset();
     preview.reset();
-    setPath(picked);
-    preview.mutate(picked);
+    setPicked(chosen);
+    preview.mutate(chosen);
   };
 
   const report = done ?? preview.data ?? null;
@@ -100,7 +118,7 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
           role belongs to, and it carries the polite live region implicitly. */}
       <output className="sr-only">{status}</output>
 
-      {!path ? (
+      {!picked ? (
         <div className="flex flex-col items-start gap-3">
           <GlassButton variant="primary" size="md" onClick={() => void pick()}>
             <FileText size={15} /> 选择摘录文件
@@ -114,8 +132,11 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
       ) : (
         <div className="flex flex-col gap-3">
           <div className="border-hairline bg-surface-1 flex items-center justify-between gap-3 rounded-2xl border px-3 py-2">
-            <span className="text-text-2 min-w-0 truncate text-xs" title={path}>
-              {baseName(path)}
+            <span
+              className="text-text-2 min-w-0 truncate text-xs"
+              title={typeof picked === "string" ? picked : picked.name}
+            >
+              {baseName(picked)}
             </span>
             <button
               type="button"
@@ -200,10 +221,10 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
         <GlassButton variant="subtle" onClick={close} disabled={busy}>
           {done ? "关闭" : "取消"}
         </GlassButton>
-        {path && !done && (
+        {picked && !done && (
           <GlassButton
             variant="primary"
-            onClick={() => commit.mutate(path, { onSuccess: (outcome) => setDone(outcome) })}
+            onClick={() => commit.mutate(picked, { onSuccess: (outcome) => setDone(outcome) })}
             disabled={busy || !report || report.imported === 0}
           >
             {busy ? "正在导入…" : `导入 ${report?.imported ?? 0} 条`}

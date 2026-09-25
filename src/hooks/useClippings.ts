@@ -10,15 +10,22 @@ import { ipc } from "@/lib/ipc";
  * are the numbers the reader gets — and the shelf is only invalidated after a
  * commit, never after a look.
  */
+/** A clippings run: a path from the desktop's picker, or the file itself in the
+ *  browser. Two steps, one call — `dryRun` reports what it would write. */
+const run = (dryRun: boolean) => (target: string | File) =>
+  typeof target === "string"
+    ? ipc.clippingsImport(target, dryRun)
+    : ipc.clippingsImportFile(target, dryRun);
+
 export function useClippings() {
   const queryClient = useQueryClient();
 
   const preview = useMutation({
-    mutationFn: (path: string) => ipc.clippingsImport(path, true),
+    mutationFn: run(true),
   });
 
   const commit = useMutation({
-    mutationFn: (path: string) => ipc.clippingsImport(path, false),
+    mutationFn: run(false),
     onSuccess: () => {
       // Highlights are per book and the reader may be open behind the dialog.
       void queryClient.invalidateQueries({ queryKey: ["annotations"] });
