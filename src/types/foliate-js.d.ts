@@ -226,3 +226,10 @@ declare module "foliate-js/progress.js" {
     getSection(fraction: number): [number, number];
   }
 }
+
+/** The vendored zip reader, loaded on demand for archive work outside the
+ *  reader (pulling one picture out of an EPUB, say). */
+declare module "foliate-js/vendor/zip.js" {
+  const tools: unknown;
+  export = tools;
+}

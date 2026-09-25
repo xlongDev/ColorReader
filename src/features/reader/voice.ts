@@ -237,8 +237,12 @@ export function edgeVoices(system: readonly EdgeVoice[]): Voice[] {
 /** Base language subtag, lowercased and normalised (`zh-CN-liaoning` → `zh`;
  *  macOS locales may use `_` instead of `-`). */
 const baseLang = (tag: string): string => {
-  const head = tag.toLowerCase().replace(/_/g, "-").split("-")[0];
-  return head ?? tag;
+  // Coerced, not assumed: a container's language is not always a string (a MOBI
+  // handed over `["zh"]`), and a book imported before that was normalised still
+  // carries one. One `toLowerCase` on a list took the whole reading page down,
+  // which is a poor trade for a voice picker.
+  const text = typeof tag === "string" ? tag : String(tag ?? "");
+  return text.toLowerCase().replace(/_/g, "-").split("-")[0] ?? text;
 };
 
 /** True when a voice's locale can read a book of `bookLang`: the base subtags

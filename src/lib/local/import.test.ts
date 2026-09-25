@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { decodeText, detectFormat, splitChapters } from "@/lib/local/import";
+import { decodeText, detectFormat, metadataText, splitChapters } from "@/lib/local/import";
 
 /** The formats the shelf accepts, by extension. */
 describe("detectFormat", () => {
@@ -63,5 +63,31 @@ describe("splitChapters", () => {
     const chapters = splitChapters("", "空书");
     expect(chapters).toHaveLength(1);
     expect(chapters[0]!.paragraphs).toHaveLength(1);
+  });
+});
+
+/**
+ * A container's metadata is not typed, and its readers do not agree on the
+ * shape: EPUB answers with strings where MOBI hands over lists. Settling that
+ * here is what keeps a MOBI's `["zh"]` from reaching `language.toLowerCase()`
+ * and taking the whole reading page down with it.
+ */
+describe("metadataText", () => {
+  it("takes a string as it is", () => {
+    expect(metadataText("zh")).toBe("zh");
+  });
+
+  it("takes the first entry of a list, which is what a MOBI hands over", () => {
+    expect(metadataText(["zh"])).toBe("zh");
+    expect(metadataText(["zh", "en"])).toBe("zh");
+  });
+
+  it("answers null for the shapes that carry no text", () => {
+    expect(metadataText(null)).toBeNull();
+    expect(metadataText(undefined)).toBeNull();
+    expect(metadataText(9)).toBeNull();
+    expect(metadataText({})).toBeNull();
+    expect(metadataText([])).toBeNull();
+    expect(metadataText("   ")).toBeNull();
   });
 });

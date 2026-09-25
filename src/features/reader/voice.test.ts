@@ -253,6 +253,10 @@ describe("book language filtering", () => {
     expect(matchesBookLang("ZH-CN", "zh")).toBe(true);
     expect(matchesBookLang("yue-HK", "zh")).toBe(false);
     expect(matchesBookLang("zh-CN", "ja")).toBe(false);
+    // A MOBI imported before the field was normalised still carries a list;
+    // taking the page down for it is not a trade worth making.
+    expect(matchesBookLang("zh-CN", ["zh"] as unknown as string)).toBe(true);
+    expect(matchesBookLang("en-US", ["zh"] as unknown as string)).toBe(false);
   });
 
   it("keeps every voice of the book's language, both engines", () => {

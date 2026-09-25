@@ -16,6 +16,7 @@ import { makeBook } from "foliate-js/view.js";
 
 import { chapterFromBlocks, countChars, textBlocks } from "@/lib/local/blocks";
 import type { BookFormat, ChapterContent, ChapterMeta } from "@/lib/bindings";
+import type { BookImage } from "@/types/ipc";
 
 /** Formats the shelf accepts, and the extension that names each one. */
 const BY_EXTENSION: Record<string, BookFormat> = {
@@ -111,6 +112,8 @@ export type ParsedBook = {
   toc: ChapterMeta[];
   /** `null` for a book with no prose to extract — a PDF, a comic archive. */
   chapters: ChapterContent[] | null;
+  /** Every picture the book shows, in reading order, keyed by container path. */
+  images: BookImage[];
 };
 
 /**
@@ -139,6 +142,9 @@ type FoliateSection = {
   id?: string;
   /** Missing on formats that have no text of their own — a comic archive. */
   createDocument?: () => Promise<Document>;
+  /** Turns a reference inside this document into a container path. EPUB only —
+   *  MOBI addresses its pictures by record index instead. */
+  resolveHref?: (href: string) => string;
 };
 
 /** The bit of a foliate book this module reads: everything else belongs to the
@@ -166,12 +172,43 @@ type FoliateBookDoc = {
  * `null` when nothing could be extracted (a comic archive, a damaged
  * container), which is also the shape a PDF keeps.
  */
-async function extractChapters(book: FoliateBookDoc): Promise<ChapterContent[] | null> {
+async function extractChapters(
+  book: FoliateBookDoc,
+): Promise<{ chapters: ChapterContent[]; images: BookImage[] } | null> {
   const chapters: ChapterContent[] = [];
+  // Every picture the book shows, in reading order, keyed the way the lightbox
+  // looks them up. The documents are already being parsed for the prose, so the
+  // walk costs nothing extra — and it is the only place the whole book's
+  // pictures are ever in hand at once.
+  const images: BookImage[] = [];
   for (const section of book.sections ?? []) {
     if (typeof section.createDocument !== "function") continue;
     try {
-      const blocks = textBlocks((await section.createDocument()).body);
+      const doc = await section.createDocument();
+      const chapterIdx = chapters.length;
+      for (const node of doc.querySelectorAll("img[src], image[href], img[recindex]")) {
+        // MOBI carries its pictures by record index, and foliate stamps the
+        // rendered copy with the same `kindle:recindex:N` path the lightbox
+        // keys on; EPUB refers to them by relative path, which the section's
+        // own resolver turns into a container path.
+        const recindex = node.getAttribute("recindex");
+        const raw = recindex
+          ? `kindle:recindex:${recindex}`
+          : metadataText(node.getAttribute("src") ?? node.getAttribute("href"));
+        if (raw === null) continue;
+        let path = raw;
+        if (!recindex) {
+          try {
+            path = section.resolveHref ? String(section.resolveHref(raw)) : raw;
+          } catch {
+            // An unresolvable reference keeps the raw path: a wrong key is a
+            // picture that will not open, while dropping it loses the row.
+          }
+        }
+        if (images.some((image) => image.path === path)) continue;
+        images.push({ chapterIdx, path });
+      }
+      const blocks = textBlocks(doc.body);
       if (blocks.length === 0) continue;
       const { title, paragraphs } = chapterFromBlocks(blocks, `第 ${chapters.length + 1} 章`);
       chapters.push({ idx: chapters.length, title, paragraphs });
@@ -181,7 +218,22 @@ async function extractChapters(book: FoliateBookDoc): Promise<ChapterContent[] |
       // loss than refusing the file.
     }
   }
-  return chapters.length > 0 ? chapters : null;
+  return chapters.length > 0 ? { chapters, images } : null;
+}
+
+/**
+ * One text field of a container's metadata, as a string.
+ *
+ * foliate's readers do not agree on the shape: EPUB answers with strings, MOBI
+ * hands over lists (`language: ["zh"]`), and a field that is missing can be
+ * anything at all. The reader's own types say `string`, so the shape is settled
+ * here, once, instead of being defended against everywhere it is read — a MOBI
+ * whose language was a list took the whole reading page down on
+ * `language.toLowerCase()`.
+ */
+export function metadataText(value: unknown): string | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" && first.trim() ? first.trim() : null;
 }
 
 export async function readBook(file: File): Promise<ParsedBook> {
@@ -206,6 +258,8 @@ export async function readBook(file: File): Promise<ParsedBook> {
         chars: countChars(chapter.paragraphs),
       })),
       chapters,
+      // Plain text has no container and so no pictures to enumerate.
+      images: [],
     };
   }
 
@@ -227,6 +281,9 @@ export async function readBook(file: File): Promise<ParsedBook> {
       cover: null,
       toc: [],
       chapters: null,
+      // The page images come from `describePdf`'s own pipeline, not from a
+      // container listing.
+      images: [],
     };
   }
 
@@ -265,15 +322,16 @@ export async function readBook(file: File): Promise<ParsedBook> {
   // and parsed. It is done once, here, rather than on the first search — the
   // reader is already waiting for the import, and a search that has to open the
   // whole book before it can answer is a search that looks broken.
-  const chapters = await extractChapters(book);
+  const extracted = await extractChapters(book);
+  const chapters = extracted?.chapters ?? null;
   book.destroy?.();
   return {
     format,
-    title: meta.title?.trim() || stem,
-    subtitle: meta.subtitle ?? null,
-    description: meta.description ?? null,
-    language: meta.language ?? null,
-    publisher: meta.publisher ?? null,
+    title: metadataText(meta.title) ?? stem,
+    subtitle: metadataText(meta.subtitle),
+    description: metadataText(meta.description),
+    language: metadataText(meta.language),
+    publisher: metadataText(meta.publisher),
     authors,
     cover,
     // The extracted chapters are the table, not the container's navigation:
@@ -288,6 +346,7 @@ export async function readBook(file: File): Promise<ParsedBook> {
         }))
       : labelsOrSections,
     chapters,
+    images: extracted?.images ?? [],
   };
 }
 

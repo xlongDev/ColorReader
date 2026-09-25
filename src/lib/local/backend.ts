@@ -38,10 +38,16 @@ import { filename } from "@/lib/filename";
 import type { LocalFont } from "@/types/ipc";
 import * as db from "@/lib/local/db";
 import { loadDoc, renderFirstPagePng } from "@/lib/pdf";
+import { assetMime } from "@/features/reader/assets";
 import { readBook } from "@/lib/local/import";
 
 /** A shelf row as it is stored: `BookSummary` minus the cover, plus the TOC. */
-type StoredBook = Omit<BookSummary, "coverUrl"> & { toc: ChapterMeta[] };
+type StoredBook = Omit<BookSummary, "coverUrl"> & {
+  toc: ChapterMeta[];
+  /** Every picture the book shows, collected at import. The lightbox walks it;
+   *  the desktop keeps the same list in its own database. */
+  images: BookImage[];
+};
 
 /**
  * An image in the store: the bytes plus the type to read them back as.
@@ -55,7 +61,9 @@ type StoredImage = { type: string; bytes: ArrayBuffer };
 /** One finished reading stretch, the raw material of the stats page. */
 type Session = { day: string; bookId: string; seconds: number };
 
-const SUMMARY_KEYS = ["toc"] as const;
+/** Row fields that never belong to a `BookSummary`: the table of contents and
+ *  the picture list both stay in the row. */
+const SUMMARY_KEYS = ["toc", "images"] as const;
 
 const now = () => Math.floor(Date.now() / 1000);
 const newId = () =>
@@ -94,7 +102,7 @@ async function coverUrlOf(id: string, cover: Blob | null): Promise<string | null
 
 async function summaryOf(book: StoredBook): Promise<BookSummary> {
   const cover = await coverOf(book.id);
-  const { toc: _toc, ...rest } = book;
+  const { toc: _toc, images: _images, ...rest } = book;
   return { ...rest, coverUrl: await coverUrlOf(book.id, cover) };
 }
 
@@ -168,6 +176,7 @@ async function importOne(file: File, seen: Set<string>): Promise<ImportOutcome> 
       authors: parsed.authors,
       tags: [],
       toc: parsed.toc,
+      images: parsed.images,
     };
     await db.put("books", id, row);
     // 🔴 The bytes, not the `File`. WebKit will not store a `File` object in
@@ -386,11 +395,11 @@ export async function readerChapter(bookId: string, idx: number): Promise<Chapte
   return db.get<ChapterContent>("chapters", `${bookId}:${idx}`);
 }
 
-/** A foliate book keeps its images inside foliate, which renders them itself;
- *  the lightbox browser lists none rather than lying about what it has.
- *  `ponytail:` enumerate the archive when the in-book image list is missed. */
-export async function bookImages(_bookId: string): Promise<BookImage[]> {
-  return [];
+export async function bookImages(bookId: string): Promise<BookImage[]> {
+  // Collected during import, when every section's document was parsed anyway.
+  // A row written before that existed has none, and reads as a book with no
+  // pictures until it is imported again.
+  return (await bookRow(bookId))?.images ?? [];
 }
 
 export async function readerSetProgress(
@@ -437,12 +446,58 @@ function savedName(book: StoredBook | null): string {
   return `${filename(book.title, "book")}.${extension}`;
 }
 
-/** Raw bytes of one image *inside* an EPUB. The web reader gets its images from
- *  foliate instead, so this is reachable only from the prose path's copy of the
- *  book, which the browser does not build. */
-export async function bookAsset(_id: string, _path: string): Promise<ArrayBuffer> {
-  return new ArrayBuffer(0);
+/**
+ * Raw bytes of one entry inside a book.
+ *
+ * The desktop reads it off disk through its own archive reader. The browser
+ * has the container's bytes in the store, so it opens the EPUB and pulls the
+ * entry out — every picture the lightbox lists is reached this way. A MOBI
+ * addresses its pictures by record index, which would mean a second reader of
+ * that format here; those keep the URL foliate decoded when the page was
+ * rendered, and this refuses rather than guessing.
+ */
+export async function bookAsset(id: string, path: string): Promise<ArrayBuffer> {
+  if (path.startsWith("kindle:")) throw new Error("Kindle 书的图片请在正文里点开");
+  const bytes = await bookFile(id);
+  const { configure, ZipReader, BlobReader, BlobWriter } = await zipTools();
+  configure({ useWebWorkers: false });
+  const reader = new ZipReader(new BlobReader(new Blob([bytes])));
+  try {
+    const entries = await reader.getEntries();
+    const decoded = decodeURIComponent(path);
+    const entry =
+      entries.find((candidate) => candidate.filename === path) ??
+      entries.find((candidate) => decodeURIComponent(candidate.filename) === decoded) ??
+      entries.find(
+        (candidate) =>
+          candidate.filename.slice(candidate.filename.lastIndexOf("/") + 1) ===
+          decoded.slice(decoded.lastIndexOf("/") + 1),
+      );
+    if (!entry?.getData) throw new Error("书里没有这张图");
+    const blob = await entry.getData(new BlobWriter(assetMime(path)));
+    return await blob.arrayBuffer();
+  } finally {
+    await reader.close().catch(() => {});
+  }
 }
+
+/** zip.js lives in foliate's vendored bundle; loaded on demand so it stays in
+ *  the chunk that already carries the reader. */
+const zipTools = () =>
+  import("foliate-js/vendor/zip.js") as unknown as Promise<{
+    configure: (options: { useWebWorkers: boolean }) => void;
+    ZipReader: new (reader: unknown) => {
+      getEntries: () => Promise<
+        {
+          filename: string;
+          getData?: (writer: unknown) => Promise<Blob>;
+        }[]
+      >;
+      close: () => Promise<void>;
+    };
+    BlobReader: new (blob: Blob) => unknown;
+    BlobWriter: new (type?: string) => unknown;
+  }>;
 
 export async function annotationList(bookId: string): Promise<Annotation[]> {
   const rows = await db.all<Annotation>("annotations");
@@ -765,7 +820,7 @@ async function hitsInBook(book: StoredBook, query: string, needle: string): Prom
 /** The `BookSummary` shape without its table of contents, for callers that
  *  build one by hand (tests). */
 export function stripRow(book: StoredBook): Omit<StoredBook, (typeof SUMMARY_KEYS)[number]> {
-  const { toc: _toc, ...rest } = book;
+  const { toc: _toc, images: _images, ...rest } = book;
   return rest;
 }
 
