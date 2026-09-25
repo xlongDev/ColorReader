@@ -546,11 +546,16 @@ function BackupSection() {
 
   const onExport = async () => {
     setStatus(null);
-    const path = await choose({
-      defaultPath: `colorreader-backup-${stamp()}.zip`,
-      filters: [{ name: "书库备份", extensions: ["zip"] }],
-    });
-    if (!path) return;
+    // The browser has no panel to ask and nowhere to write: its archive is its
+    // own (the stores have no desktop shape) and goes straight to a download.
+    let path: string | null = null;
+    if (isDesktopRuntime) {
+      path = await choose({
+        defaultPath: `colorreader-backup-${stamp()}.zip`,
+        filters: [{ name: "书库备份", extensions: ["zip"] }],
+      });
+      if (!path) return;
+    }
     setBusy("export");
     backup.mutate(path, {
       onSuccess: (summary) =>
@@ -565,19 +570,35 @@ function BackupSection() {
 
   const onRestore = async () => {
     setStatus(null);
-    const picked = await open({
-      multiple: false,
-      directory: false,
-      filters: [{ name: "书库备份", extensions: ["zip"] }],
-    });
-    if (typeof picked !== "string") return;
+    let target: string | File | null = null;
+    if (isDesktopRuntime) {
+      const picked = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "书库备份", extensions: ["zip"] }],
+      });
+      target = typeof picked === "string" ? picked : null;
+    } else {
+      target = (await pickBrowserFiles(acceptOf(["zip"])))[0] ?? null;
+      // The desktop keeps the displaced library as `<data dir>-previous`, so a
+      // restore it regrets can be undone. Here the stores are emptied first and
+      // the archive the reader is holding is the only way back — worth asking.
+      const go =
+        target !== null &&
+        window.confirm("恢复会用备份里的内容替换当前书库，现在的书、标注和书签都会清掉。继续？");
+      if (!go) return;
+    }
+    if (target === null) return;
     setBusy("restore");
-    restore.mutate(picked, {
+    restore.mutate(target, {
       onSuccess: (summary) => {
-        setStatus({ tone: "ok", text: `已展开 ${summary.files} 个文件，正在重启…` });
-        // The swap can only happen before the database is opened, which is
-        // during startup — so the app restarts itself rather than asking.
-        void relaunch();
+        setStatus({ tone: "ok", text: `已恢复 ${summary.files} 个文件。` });
+        // The desktop can only swap directories before the database is opened,
+        // which is during startup, so it restarts itself. The browser's stores
+        // were written back directly — but everything the shelf is showing came
+        // from queries, and a reload is the honest way to show the new library.
+        if (isDesktopRuntime) void relaunch();
+        else window.location.reload();
       },
       onError: (error) => {
         setStatus({ tone: "bad", text: String(error) });
@@ -591,30 +612,42 @@ function BackupSection() {
       id="backup"
       icon={Archive}
       title="书库备份"
-      description="把书文件、封面、词典、字体与阅读记录打包成一个 zip；WebDAV 同步只覆盖进度、标注与书签，不带这些。"
+      description={
+        isDesktopRuntime
+          ? "把书文件、封面、词典、字体与阅读记录打包成一个 zip；WebDAV 同步只覆盖进度、标注与书签，不带这些。"
+          : "把书、标注、书签与阅读记录打包成一个 zip 下载到本机。浏览器的存储可能被系统清理掉，这份文件是唯一的备份。"
+      }
     >
       <Row
         label="备份"
-        hint="整库打包，含导入的词典与字体。备份里带有 AI 与同步的本地凭据，请按密钥一样保管。"
+        hint={
+          isDesktopRuntime
+            ? "整库打包，含导入的词典与字体。备份里带有 AI 与同步的本地凭据，请按密钥一样保管。"
+            : "整库打包：书的原文件、封面、标注、书签与阅读记录。本机的浏览器数据被清掉时，用它恢复。"
+        }
       >
         <GlassButton
           variant="subtle"
           size="sm"
           onClick={() => void onExport()}
-          disabled={busy !== null || !isDesktopRuntime}
+          disabled={busy !== null}
         >
           {busy === "export" ? "正在备份…" : "导出备份"}
         </GlassButton>
       </Row>
       <Row
         label="恢复"
-        hint="替换当前书库，并重启应用生效。被替换的书库会保留在数据目录旁的 -previous 目录里。"
+        hint={
+          isDesktopRuntime
+            ? "替换当前书库，并重启应用生效。被替换的书库会保留在数据目录旁的 -previous 目录里。"
+            : "替换当前书库（会先问一次），恢复完页面重新载入。当前的书、标注与书签会被清掉。"
+        }
       >
         <GlassButton
           variant="subtle"
           size="sm"
           onClick={() => void onRestore()}
-          disabled={busy !== null || !isDesktopRuntime}
+          disabled={busy !== null}
         >
           {busy === "restore" ? "正在恢复…" : "从备份恢复"}
         </GlassButton>

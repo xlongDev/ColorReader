@@ -38,7 +38,7 @@ import { filename } from "@/lib/filename";
 import type { LocalFont } from "@/types/ipc";
 import * as db from "@/lib/local/db";
 import { loadDoc, renderFirstPagePng } from "@/lib/pdf";
-import { assetMime } from "@/features/reader/assets";
+import { entryBytes, zipTools } from "@/lib/local/zip";
 import { readBook } from "@/lib/local/import";
 
 /** A shelf row as it is stored: `BookSummary` minus the cover, plus the TOC. */
@@ -459,9 +459,9 @@ function savedName(book: StoredBook | null): string {
 export async function bookAsset(id: string, path: string): Promise<ArrayBuffer> {
   if (path.startsWith("kindle:")) throw new Error("Kindle 书的图片请在正文里点开");
   const bytes = await bookFile(id);
-  const { configure, ZipReader, BlobReader, BlobWriter } = await zipTools();
-  configure({ useWebWorkers: false });
-  const reader = new ZipReader(new BlobReader(new Blob([bytes])));
+  const tools = await zipTools();
+  tools.configure({ useWebWorkers: false });
+  const reader = new tools.ZipReader(new tools.BlobReader(new Blob([bytes])));
   try {
     const entries = await reader.getEntries();
     const decoded = decodeURIComponent(path);
@@ -473,31 +473,13 @@ export async function bookAsset(id: string, path: string): Promise<ArrayBuffer> 
           candidate.filename.slice(candidate.filename.lastIndexOf("/") + 1) ===
           decoded.slice(decoded.lastIndexOf("/") + 1),
       );
-    if (!entry?.getData) throw new Error("书里没有这张图");
-    const blob = await entry.getData(new BlobWriter(assetMime(path)));
-    return await blob.arrayBuffer();
+    const payload = entry ? await entryBytes(entry, tools) : null;
+    if (!payload) throw new Error("书里没有这张图");
+    return payload;
   } finally {
     await reader.close().catch(() => {});
   }
 }
-
-/** zip.js lives in foliate's vendored bundle; loaded on demand so it stays in
- *  the chunk that already carries the reader. */
-const zipTools = () =>
-  import("foliate-js/vendor/zip.js") as unknown as Promise<{
-    configure: (options: { useWebWorkers: boolean }) => void;
-    ZipReader: new (reader: unknown) => {
-      getEntries: () => Promise<
-        {
-          filename: string;
-          getData?: (writer: unknown) => Promise<Blob>;
-        }[]
-      >;
-      close: () => Promise<void>;
-    };
-    BlobReader: new (blob: Blob) => unknown;
-    BlobWriter: new (type?: string) => unknown;
-  }>;
 
 export async function annotationList(bookId: string): Promise<Annotation[]> {
   const rows = await db.all<Annotation>("annotations");
@@ -895,3 +877,10 @@ export async function fontDelete(id: string): Promise<null> {
   }
   return null;
 }
+
+/* ------------------------------------------------------------------ backup */
+
+/** The browser's own backup, re-exported so `fromLocal` can reach it. The
+ *  implementation lives in its own file: it is a couple of hundred lines of
+ *  archive work that the shelf never touches. */
+export { backupExport as backupSave, backupRestore as backupLoad } from "@/lib/local/backup";

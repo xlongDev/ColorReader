@@ -10,15 +10,20 @@ import { ipc } from "@/lib/ipc";
  */
 export function useExportBackup() {
   return useMutation({
-    mutationFn: (path: string) => ipc.backupExport(path),
+    // A path from the desktop's save panel, or `null` in the browser, whose
+    // archive is its own and goes straight to a download.
+    mutationFn: (target: string | null) =>
+      target === null ? ipc.backupSave() : ipc.backupExport(target),
     meta: { silent: true },
   });
 }
 
-/** Unpacks the archive; the library is only swapped in on the next start. */
+/** Unpacks the archive; on the desktop the library is only swapped in on the
+ *  next start, while the browser's own stores are written back at once. */
 export function useStageBackup() {
   return useMutation({
-    mutationFn: (path: string) => ipc.backupStage(path),
+    mutationFn: (target: string | File) =>
+      typeof target === "string" ? ipc.backupStage(target) : ipc.backupLoad(target),
     meta: { silent: true },
   });
 }

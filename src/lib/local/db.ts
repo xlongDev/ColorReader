@@ -116,6 +116,11 @@ export function del(store: StoreName, key: string): Promise<void> {
   return run<void>(store, "readwrite", (object) => object.delete(key));
 }
 
+/** Empties one store. Used by a restore, which replaces rather than merges. */
+export function clear(store: StoreName): Promise<void> {
+  return run<void>(store, "readwrite", (object) => object.clear());
+}
+
 export function all<T>(store: StoreName): Promise<T[]> {
   return run<T[]>(store, "readonly", (object) => object.getAll());
 }

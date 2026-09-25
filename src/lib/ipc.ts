@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { commands } from "@/lib/bindings";
 import type { LocalFont } from "@/types/ipc";
+import type { BackupSummary } from "@/lib/bindings";
 import type {
   AiDelta,
   GraphProgress,
@@ -39,7 +40,6 @@ const LOCAL_COMMANDS = [
   "bookDelete",
   "bookSetFavorite",
   "bookUpdate",
-  "bookAsset",
   "bookCoverSave",
   "bookExport",
   "bookImages",
@@ -47,7 +47,6 @@ const LOCAL_COMMANDS = [
   "fontDelete",
   "readerToc",
   "readerChapter",
-  "bookImages",
   "readerSetProgress",
   "annotationList",
   "annotationCreate",
@@ -67,7 +66,6 @@ const LOCAL_COMMANDS = [
   "tagDelete",
   "searchQuery",
   "bookFile",
-  "bookAsset",
 ] as const;
 
 /** One browser command, resolved when it is first called. Loose on purpose:
@@ -124,6 +122,26 @@ export const ipc = {
   bookFile(id: string): Promise<ArrayBuffer> {
     if (!isDesktopRuntime) return fromLocal("bookFile")(id) as Promise<ArrayBuffer>;
     return invoke<ArrayBuffer>("book_source_file", { id });
+  },
+
+  /**
+   * The browser's own archive: packs the library into a ZIP and downloads it.
+   *
+   * Browser-only. The desktop's archive is its data directory verbatim — a
+   * SQLite file, the fonts, the dictionaries — and there is no browser shape of
+   * that to write. What both keep is the thing that matters: a file the reader
+   * can put somewhere else and put back.
+   */
+  backupSave(): Promise<BackupSummary> {
+    if (isDesktopRuntime) throw new Error("桌面端走 backup_export（数据目录）");
+    return fromLocal("backupSave")() as Promise<BackupSummary>;
+  },
+
+  /** Puts one of those archives back. Replaces the library, as the desktop
+   *  does: a merge would have to decide what two rows with one id mean. */
+  backupLoad(file: File): Promise<BackupSummary> {
+    if (isDesktopRuntime) throw new Error("桌面端走 backup_stage（路径）");
+    return fromLocal("backupLoad")(file) as Promise<BackupSummary>;
   },
 
   /**
