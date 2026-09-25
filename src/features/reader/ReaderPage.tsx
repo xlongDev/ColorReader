@@ -159,7 +159,6 @@ const GESTURE_GAP = 200;
  * Stand-in for the book's image list while the query is in flight. A fresh
  * `[]` per render would re-create every callback that reads it.
  */
-const NO_IMAGES: BookImage[] = [];
 
 /**
  * Stand-in for the imported fonts while the query is in flight. A fresh `[]`
@@ -812,7 +811,17 @@ function ReaderView({
     [chapterData, chapterIdx, chapters, densityKey],
   );
   const bookImagesQuery = useBookImages(bookId);
-  const bookImages = bookImagesQuery.data ?? NO_IMAGES;
+  // The browser has no `book_images`/`book_asset` behind it: pictures arrive
+  // already decoded by foliate, so each click registers its entry path, the
+  // blob URL foliate made and the section it lives in, and the lightbox reads
+  // the URL back instead of fetching. The desktop's own list is used whenever
+  // it has one.
+  const [webImages, setWebImages] = useState<{
+    list: BookImage[];
+    urls: Record<string, string>;
+  }>({ list: [], urls: {} });
+  const bookImages =
+    bookImagesQuery.data && bookImagesQuery.data.length > 0 ? bookImagesQuery.data : webImages.list;
   const fontsQuery = useFonts();
   const fonts = fontsQuery.data ?? NO_FONTS;
   // A picture clicked inside the book's own rendering. foliate reports the
@@ -821,7 +830,21 @@ function ReaderView({
   // An entry the importer skipped (rare: an image used only by the book's own
   // CSS) has no row here, and nothing opens.
   const openBookImage = useCallback(
-    (path: string) => {
+    (path: string, src?: string, section?: number) => {
+      // The browser branch runs first and returns: its registration *is* the
+      // open, so the lightbox's index is computed against the list that is
+      // about to be rendered.
+      if (src !== undefined) {
+        const known = webImages.list.some((image) => image.path === path);
+        const list = known
+          ? webImages.list
+          : [...webImages.list, { chapterIdx: section ?? 0, path }].toSorted(
+              (a, b) => a.chapterIdx - b.chapterIdx,
+            );
+        setWebImages({ list, urls: { ...webImages.urls, [path]: src } });
+        setLightboxIdx(list.findIndex((image) => image.path === path));
+        return;
+      }
       const exact = bookImages.findIndex((image) => image.path === path);
       // The importer stores the entry name as it appears in the container
       // while foliate decodes percent escapes before resolving, so a CJK or
@@ -844,7 +867,7 @@ function ReaderView({
             );
       if (index >= 0) setLightboxIdx(index);
     },
-    [bookImages],
+    [bookImages, webImages],
   );
 
   // Read-aloud units for the prose path: the chapter split into sentences. The
@@ -3023,6 +3046,7 @@ function ReaderView({
             <ImageLightbox
               bookId={bookId}
               images={bookImages}
+              urls={webImages.urls}
               chapters={chapters}
               index={Math.min(lightboxIdx, bookImages.length - 1)}
               onClose={() => setLightboxIdx(null)}

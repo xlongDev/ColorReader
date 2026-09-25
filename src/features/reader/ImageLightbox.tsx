@@ -65,6 +65,7 @@ export function ImageLightbox({
   onClose,
   onIndex,
   onJump,
+  urls,
 }: {
   bookId: string;
   images: BookImage[];
@@ -73,11 +74,22 @@ export function ImageLightbox({
   onClose: () => void;
   onIndex: (next: number) => void;
   onJump: (chapterIdx: number) => void;
+  /** Entry path → the URL to paint it from. The browser build passes this —
+   *  foliate already decoded the picture, so its blob URL is used as handed
+   *  over instead of `book_asset`, which has no browser answer. */
+  urls?: Record<string, string>;
 }) {
   const reduce = useReducedMotion();
-  const [src, setSrc] = useState<string | null>(null);
+  // The browser build's URL is a prop, so it takes no state at all; only the
+  // desktop's fetch needs one.
+  const [fetched, setFetched] = useState<string | null>(null);
   const current = images[index]!;
   const path = current.path;
+  // The handed-over URL is the view's own — revoking it here would break the
+  // picture the book page is still painting — so only the fetched blob gets
+  // revoked in the effect below.
+  const direct = urls?.[path];
+  const src = direct ?? fetched;
   const location = chapters[current.chapterIdx]?.title ?? `第 ${current.chapterIdx + 1} 章`;
 
   // Viewer transform state: wheel/buttons zoom, the button spins, and a zoomed
@@ -127,6 +139,7 @@ export function ImageLightbox({
   };
 
   useEffect(() => {
+    if (direct) return;
     let alive = true;
     let url: string | null = null;
     ipc
@@ -139,14 +152,14 @@ export function ImageLightbox({
         const bytes =
           buffer instanceof ArrayBuffer ? new Uint8Array(buffer) : Uint8Array.from(buffer);
         url = URL.createObjectURL(new Blob([bytes], { type: assetMime(path) }));
-        setSrc(url);
+        setFetched(url);
       })
       .catch(() => {});
     return () => {
       alive = false;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [bookId, path]);
+  }, [bookId, path, direct]);
 
   const arrowClass =
     "focus-visible:focus-ring glass-solid shadow-panel text-text-1 flex h-9 w-9 items-center justify-center rounded-full transition-opacity hover:opacity-90";

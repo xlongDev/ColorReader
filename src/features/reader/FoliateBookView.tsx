@@ -243,6 +243,12 @@ const TTS_KEY = "colorreader-tts";
  * clicked. Below this a picture is decoration — a rule, a bullet, a heading
  * ornament — and opening a full-screen viewer over it would be noise.
  */
+/**
+ * Which section a section document belongs to. Keyed weakly: a document dies
+ * with its iframe, and the entry with it.
+ */
+const sectionOfDoc = new WeakMap<Document, number>();
+
 const MIN_VIEWABLE_IMAGE = 48;
 
 /**
@@ -319,8 +325,13 @@ type Props = {
    * A click on a picture in the book, with its archive entry path — the key
    * `book_images` hands out. Only raised for images big enough to be worth
    * opening; icons and rules are ignored.
+   *
+   * The browser build gets two more arguments and needs both: `src`, the blob
+   * URL foliate decoded the picture into (the desktop loads the entry back
+   * through `book_asset`, which has no browser answer), and `section`, the
+   * section index the lightbox's chapter label and jump key address.
    */
-  onImageOpen?: (path: string) => void;
+  onImageOpen?: (path: string, src?: string, section?: number) => void;
   onLocationChange?: (location: FoliateLocation) => void;
   /** Called once the book is open, with the flattened table of contents. */
   onTocLoaded?: (entries: FoliateTocEntry[]) => void;
@@ -935,7 +946,9 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     const box = image.getBoundingClientRect();
     if (box.width < MIN_VIEWABLE_IMAGE || box.height < MIN_VIEWABLE_IMAGE) return;
     const path = image.getAttribute("data-path");
-    if (path) imageReport.current?.(path);
+    if (!path) return;
+    const doc = image.ownerDocument;
+    imageReport.current?.(path, image.getAttribute("src") ?? undefined, sectionOfDoc.get(doc));
   }, []);
 
   /**
@@ -965,9 +978,13 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   const verticalRef = useRef(style.vertical);
   const attachSection = useCallback(
     (event: Event) => {
-      const doc = (event as CustomEvent<{ doc?: Document }>).detail?.doc;
+      // foliate announces which section a document belongs to; the lightbox's
+      // chapter label and jump key are answered from it.
+      const detail = (event as CustomEvent<{ doc?: Document; index?: number }>).detail;
+      const doc = detail?.doc;
       if (!doc || hookedRef.current.has(doc)) return;
       hookedRef.current.add(doc);
+      if (typeof detail.index === "number") sectionOfDoc.set(doc, detail.index);
       // A book can pin its own colour scheme with a meta tag, and that form
       // outranks the `color-scheme: normal` our stylesheet sets: WebKit then
       // paints the iframe's transparent-root canvas opaque and the page goes
