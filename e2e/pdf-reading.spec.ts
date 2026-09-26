@@ -167,6 +167,94 @@ test("a turn with no warm raster still lands on the right page", async ({ page }
   await expect(layerOf(page, 2)).toContainText("Page 2");
 });
 
+/**
+ * The turn overlay, counted as it happens.
+ *
+ * The overlay exists for one animation and is gone before a locator can poll
+ * for it, so the only witness that works is an observer installed before the
+ * key is pressed. What it has to establish is that the *real* turn path builds
+ * one at all: it is made of a selector (`[data-pdf-page] canvas`) and a
+ * measured box, and a wrong one silently produces nothing — the page still
+ * turns, just without the animation, which is exactly how the paged PDF
+ * behaved before this existed.
+ */
+type TurnWitness = { count: number; canvases: number };
+
+async function watchTurns(page: Page) {
+  await page.evaluate(() => {
+    const host = document.querySelector("[data-reading-viewport]");
+    if (!host) throw new Error("没有阅读视口");
+    const seen: TurnWitness = { count: 0, canvases: 0 };
+    (window as unknown as { turnWitness: TurnWitness }).turnWitness = seen;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node instanceof HTMLElement && node.hasAttribute("data-pdf-turn")) {
+            seen.count += 1;
+            seen.canvases = node.querySelectorAll("canvas").length;
+          }
+        }
+      }
+    }).observe(host, { childList: true });
+  });
+}
+
+function turnSeen(page: Page): Promise<TurnWitness> {
+  return page.evaluate(() => (window as unknown as { turnWitness: TurnWitness }).turnWitness);
+}
+
+test("a paged PDF turn animates the page it is leaving, then clears it away", async ({ page }) => {
+  await openPdf(page, "单页");
+  await letPrefetchSettle(page);
+  await watchTurns(page);
+
+  await page.keyboard.press("ArrowRight");
+  await expect(pageView(page, 2)).toHaveAttribute("data-pdf-raster", "cached", {
+    timeout: 10_000,
+  });
+
+  // One overlay, carrying the one page that was on screen.
+  const seen = await turnSeen(page);
+  expect(seen.count).toBe(1);
+  expect(seen.canvases).toBe(1);
+
+  // ...and it does not outlive the turn: an overlay left behind would swallow
+  // every click and every selection on the page underneath it.
+  await expect(page.locator("[data-pdf-turn]")).toHaveCount(0);
+});
+
+test("a reduced-motion turn puts no overlay on the page", async ({ page, browser }) => {
+  // Two contexts, not two halves of one page: the reader reads the motion
+  // preference once, as initial state, so a page that has already mounted
+  // never follows `emulateMedia` changing under it.
+  //
+  // The unreduced context is the control. A test that only ever ran under the
+  // preference would pass just as well against a turn that animates nothing at
+  // all — which is what a paged PDF did before this existed.
+  const context = await browser.newContext({ reducedMotion: "reduce" });
+  const still = await context.newPage();
+  await openPdf(still, "单页");
+  await letPrefetchSettle(still);
+  await watchTurns(still);
+
+  await still.keyboard.press("ArrowRight");
+  await expect(pageView(still, 2)).toHaveAttribute("data-pdf-raster", "cached", {
+    timeout: 10_000,
+  });
+  expect((await turnSeen(still)).count).toBe(0);
+  await context.close();
+
+  await openPdf(page, "单页");
+  await letPrefetchSettle(page);
+  await watchTurns(page);
+
+  await page.keyboard.press("ArrowRight");
+  await expect(pageView(page, 2)).toHaveAttribute("data-pdf-raster", "cached", {
+    timeout: 10_000,
+  });
+  expect((await turnSeen(page)).count).toBe(1);
+});
+
 test("a theme change repaints the page instead of reusing the paper it was rasterised on", async ({
   page,
 }) => {
