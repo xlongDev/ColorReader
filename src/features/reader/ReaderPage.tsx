@@ -737,8 +737,19 @@ function ReaderView({
     fraction,
     chapterIsPage,
   ]);
-  /** Book image opened in the lightbox viewer, an index into the book-wide `bookImages`. */
-  const [lightboxIdx, setLightboxIdx] = useState<number | null>(null);
+  /**
+   * The picture the lightbox viewer is on, by the container path it came from
+   * rather than by its position in a list.
+   *
+   * A position is only meaningful against one list, and this side has two: the
+   * book's own, which the importer collects, and the one built from what has
+   * been clicked, for a row written before the book's list existed. Keeping a
+   * position meant the click computed it against one and the viewer rendered
+   * the other, so clicking the third picture opened the first. A path is also
+   * what survives the book's list *arriving* — `bookImages` is a query — where
+   * an index would silently point at whatever moved into its place.
+   */
+  const [lightboxPath, setLightboxPath] = useState<string | null>(null);
   const flipHintTimer = useRef<number | null>(null);
   // WebKit synthesizes mousemoves when content scrolls under a resting cursor
   // (keyboard and wheel flips), which would wake the flip chrome. Only real
@@ -822,27 +833,63 @@ function ReaderView({
   }>({ list: [], urls: {} });
   const bookImages =
     bookImagesQuery.data && bookImagesQuery.data.length > 0 ? bookImagesQuery.data : webImages.list;
+  /** Where `lightboxPath` sits in the list the viewer renders — the only list
+   *  its position can mean anything against. `-1` for a path that is not in it
+   *  (a picture registered from a click before the book's list arrived, or one
+   *  the importer skipped), which closes the viewer rather than showing
+   *  somebody else's picture. */
+  const lightboxIdx =
+    lightboxPath === null ? null : bookImages.findIndex((image) => image.path === lightboxPath);
+
+  /** Opens the picture at `at` — a position in the same list the viewer
+   *  renders, which is what the prose path's taps and the viewer's own arrows
+   *  both hand over. */
+  const openImageAt = useCallback(
+    (at: number) => setLightboxPath(bookImages[at]?.path ?? null),
+    [bookImages],
+  );
+
+  /** Steps the viewer `delta` pictures through the book, staying inside it. */
+  const stepLightbox = useCallback(
+    (delta: number) => {
+      setLightboxPath((current) => {
+        if (current === null) return null;
+        const at = bookImages.findIndex((image) => image.path === current);
+        const next = bookImages[Math.min(Math.max(at + delta, 0), bookImages.length - 1)];
+        return next?.path ?? current;
+      });
+    },
+    [bookImages],
+  );
+
   const fontsQuery = useFonts();
   const fonts = fontsQuery.data ?? NO_FONTS;
   // A picture clicked inside the book's own rendering. foliate reports the
   // archive entry it came from (see `FoliateBookView`), which is what the
-  // book-wide list is keyed by; the entry itself is the lightbox's position.
-  // An entry the importer skipped (rare: an image used only by the book's own
-  // CSS) has no row here, and nothing opens.
+  // book-wide list is keyed by — and, since the entry *is* what the viewer
+  // holds, also what it opens on. An entry the importer skipped (rare: an image
+  // used only by the book's own CSS) has no row here, and nothing opens rather
+  // than the first picture opening in its place.
   const openBookImage = useCallback(
     (path: string, src?: string, section?: number) => {
-      // The browser branch runs first and returns: its registration *is* the
-      // open, so the lightbox's index is computed against the list that is
-      // about to be rendered.
+      // The browser branch runs first and returns. The URL foliate decoded for
+      // this very picture is the one thing this side has that the book's own
+      // list does not, so registering it is the whole branch: where the viewer
+      // opens is `lightboxPath`'s business, and the list it lands in is
+      // `bookImages`'.
       if (src !== undefined) {
-        const known = webImages.list.some((image) => image.path === path);
-        const list = known
-          ? webImages.list
-          : [...webImages.list, { chapterIdx: section ?? 0, path }].toSorted(
-              (a, b) => a.chapterIdx - b.chapterIdx,
-            );
-        setWebImages({ list, urls: { ...webImages.urls, [path]: src } });
-        setLightboxIdx(list.findIndex((image) => image.path === path));
+        setWebImages((current) => {
+          const known = current.list.some((image) => image.path === path);
+          return {
+            list: known
+              ? current.list
+              : [...current.list, { chapterIdx: section ?? 0, path }].toSorted(
+                  (a, b) => a.chapterIdx - b.chapterIdx,
+                ),
+            urls: { ...current.urls, [path]: src },
+          };
+        });
+        setLightboxPath(path);
         return;
       }
       const exact = bookImages.findIndex((image) => image.path === path);
@@ -865,9 +912,9 @@ function ReaderView({
                 image.path.slice(image.path.lastIndexOf("/") + 1) ===
                 decoded(path).slice(path.lastIndexOf("/") + 1),
             );
-      if (index >= 0) setLightboxIdx(index);
+      if (index >= 0) setLightboxPath(bookImages[index]!.path);
     },
-    [bookImages, webImages],
+    [bookImages],
   );
 
   // Read-aloud units for the prose path: the chapter split into sentences. The
@@ -1208,13 +1255,13 @@ function ReaderView({
   // Keyboard paging.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (lightboxIdx !== null) {
+      if (lightboxPath !== null) {
         if (event.key === "Escape") {
-          setLightboxIdx(null);
+          setLightboxPath(null);
         } else if (event.key === "ArrowRight") {
-          setLightboxIdx(Math.min(lightboxIdx + 1, bookImages.length - 1));
+          stepLightbox(1);
         } else if (event.key === "ArrowLeft") {
-          setLightboxIdx(Math.max(lightboxIdx - 1, 0));
+          stepLightbox(-1);
         } else {
           return;
         }
@@ -1327,13 +1374,12 @@ function ReaderView({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
-    bookImages.length,
     // The ruler's scroll-layout step is one block of the reader's own leading.
     fontSize,
     flip,
     fullscreen,
     lineHeightIdx,
-    lightboxIdx,
+    lightboxPath,
     lookup,
     panel,
     paged,
@@ -1345,6 +1391,7 @@ function ReaderView({
     settings.readingRuler,
     settings.rulerLines,
     stepChapter,
+    stepLightbox,
     toggleFullscreen,
   ]);
 
@@ -2660,7 +2707,7 @@ function ReaderView({
             margin={margin}
             blockMargin={blockMargin}
             images={bookImages}
-            onOpenImage={setLightboxIdx}
+            onOpenImage={openImageAt}
             foliateRef={foliateRef}
             pdf={{
               gap: pdfGap,
@@ -3042,17 +3089,17 @@ function ReaderView({
       {/* Lightbox viewer: blank areas close, Esc closes, arrows flip the book's images. */}
       <OverlayPortal>
         <AnimatePresence>
-          {lightboxIdx !== null && bookImages.length > 0 && (
+          {lightboxIdx !== null && lightboxIdx >= 0 && (
             <ImageLightbox
               bookId={bookId}
               images={bookImages}
               urls={webImages.urls}
               chapters={chapters}
-              index={Math.min(lightboxIdx, bookImages.length - 1)}
-              onClose={() => setLightboxIdx(null)}
-              onIndex={setLightboxIdx}
+              index={lightboxIdx}
+              onClose={() => setLightboxPath(null)}
+              onIndex={openImageAt}
               onJump={(target) => {
-                setLightboxIdx(null);
+                setLightboxPath(null);
                 goTo(target);
               }}
             />

@@ -54,7 +54,7 @@ import * as db from "@/lib/local/db";
 import { loadDoc, renderFirstPagePng } from "@/lib/pdf";
 import { parseClippings } from "@/lib/local/clippings";
 import { entryBytes, zipTools } from "@/lib/local/zip";
-import { readBook } from "@/lib/local/import";
+import { readBook, readBookImages } from "@/lib/local/import";
 
 // `logger`, not the `log` this module's convention would suggest: `log` is
 // already the reading session log inside two of the functions below.
@@ -415,10 +415,25 @@ export async function readerChapter(bookId: string, idx: number): Promise<Chapte
 }
 
 export async function bookImages(bookId: string): Promise<BookImage[]> {
+  const row = await bookRow(bookId);
+  if (!row) return [];
   // Collected during import, when every section's document was parsed anyway.
-  // A row written before that existed has none, and reads as a book with no
-  // pictures until it is imported again.
-  return (await bookRow(bookId))?.images ?? [];
+  if (row.images) return row.images;
+
+  // A row written before that existed has none, and there is nowhere else to
+  // get one: the browser's chapter text carries no image markers the way the
+  // desktop's does (see `blocks.ts`), so the list is rebuilt from the book's
+  // own bytes. That is a whole-book parse, so it happens once per book and the
+  // answer is kept — an empty list included, which is what stops a book with no
+  // pictures from being walked again on every open.
+  const images = await readBookImages(
+    new File([await bookFile(bookId)], `${row.title}.${row.format}`),
+  );
+  // Straight to the store rather than through `patchBook`: `updatedAt` is what
+  // the shelf sorts a freshly-touched book by, and opening a book is not an
+  // edit.
+  await db.put("books", bookId, { ...row, images });
+  return images;
 }
 
 export async function readerSetProgress(

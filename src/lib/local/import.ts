@@ -186,25 +186,7 @@ async function extractChapters(
     try {
       const doc = await section.createDocument();
       const chapterIdx = chapters.length;
-      for (const node of doc.querySelectorAll("img[src], image[href], img[recindex]")) {
-        // MOBI carries its pictures by record index, and foliate stamps the
-        // rendered copy with the same `kindle:recindex:N` path the lightbox
-        // keys on; EPUB refers to them by relative path, which the section's
-        // own resolver turns into a container path.
-        const recindex = node.getAttribute("recindex");
-        const raw = recindex
-          ? `kindle:recindex:${recindex}`
-          : metadataText(node.getAttribute("src") ?? node.getAttribute("href"));
-        if (raw === null) continue;
-        let path = raw;
-        if (!recindex) {
-          try {
-            path = section.resolveHref ? String(section.resolveHref(raw)) : raw;
-          } catch {
-            // An unresolvable reference keeps the raw path: a wrong key is a
-            // picture that will not open, while dropping it loses the row.
-          }
-        }
+      for (const path of imagesInDocument(doc, section)) {
         if (images.some((image) => image.path === path)) continue;
         images.push({ chapterIdx, path });
       }
@@ -219,6 +201,84 @@ async function extractChapters(
     }
   }
   return chapters.length > 0 ? { chapters, images } : null;
+}
+
+/**
+ * The pictures one section document shows, keyed the way the lightbox looks
+ * them up.
+ *
+ * Shared by the import walk and the on-demand one (`readBookImages`) so the two
+ * lists cannot drift: a book imported today and a book whose list is built
+ * later have to answer the same paths, or a click names a picture the list does
+ * not have and the viewer opens something else.
+ */
+function imagesInDocument(doc: Document, section: FoliateSection): string[] {
+  const paths: string[] = [];
+  for (const node of doc.querySelectorAll("img[src], image[href], img[recindex]")) {
+    // MOBI carries its pictures by record index, and foliate stamps the
+    // rendered copy with the same `kindle:recindex:N` path the lightbox keys
+    // on; EPUB refers to them by relative path, which the section's own
+    // resolver turns into a container path.
+    const recindex = node.getAttribute("recindex");
+    const raw = recindex
+      ? `kindle:recindex:${recindex}`
+      : metadataText(node.getAttribute("src") ?? node.getAttribute("href"));
+    if (raw === null) continue;
+    let path = raw;
+    if (!recindex) {
+      try {
+        path = section.resolveHref ? String(section.resolveHref(raw)) : raw;
+      } catch {
+        // An unresolvable reference keeps the raw path: a wrong key is a
+        // picture that will not open, while dropping it loses the row.
+      }
+    }
+    if (!paths.includes(path)) paths.push(path);
+  }
+  return paths;
+}
+
+/**
+ * A whole book's pictures, in reading order — for a row that has none.
+ *
+ * The import collects this while it is already parsing every section for the
+ * prose (see `extractChapters`); this is that walk on its own, for the rows
+ * written before the list was collected. It is the expensive half of an import
+ * — every spine document is opened and parsed — so a caller runs it once and
+ * keeps the answer rather than asking twice.
+ */
+export async function readBookImages(file: File): Promise<BookImage[]> {
+  const format = detectFormat(file.name);
+  // The formats with no container to walk: exactly the three `readBook` answers
+  // without opening the book.
+  if (!format || format === "pdf" || format === "txt" || format === "markdown") return [];
+
+  const book = (await makeBook(file)) as FoliateBookDoc;
+  const images: BookImage[] = [];
+  // The chapter a picture is filed under is the index of the chapters the
+  // reader pages through, which skips a section with no prose — the same count
+  // `extractChapters` keeps.
+  let chapterIdx = 0;
+  try {
+    for (const section of book.sections ?? []) {
+      if (typeof section.createDocument !== "function") continue;
+      try {
+        const doc = await section.createDocument();
+        for (const path of imagesInDocument(doc, section)) {
+          if (images.some((image) => image.path === path)) continue;
+          images.push({ chapterIdx, path });
+        }
+        if (textBlocks(doc.body).length > 0) chapterIdx++;
+      } catch {
+        // A section that will not open is skipped, not fatal: the rest of the
+        // book still lists, and one missing picture is a smaller loss than
+        // refusing the book.
+      }
+    }
+  } finally {
+    book.destroy?.();
+  }
+  return images;
 }
 
 /**
