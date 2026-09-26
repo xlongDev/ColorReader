@@ -36,6 +36,7 @@ import { usePdfZoom } from "@/features/reader/usePdfZoom";
 import { useReaderFullscreen } from "@/features/reader/useReaderFullscreen";
 import { FULLSCREEN_MARGIN_BONUS, useReaderLayout } from "@/features/reader/useReaderLayout";
 import { applyPosition, columnPitch, flipPage } from "@/features/reader/paging";
+import { snapshotPdfTurn } from "@/features/reader/pdfTurn";
 import { ImageLightbox } from "@/features/reader/ImageLightbox";
 import { ReaderFooterControls, ReaderHeaderBar } from "@/features/reader/ReaderChrome";
 import { ReaderPanels } from "@/features/reader/ReaderPanels";
@@ -1176,6 +1177,15 @@ function ReaderView({
       if (isPdf) {
         // A PDF page fills the viewport exactly — there is no column to
         // slide, so a flip is a page step (two at a time in the spread).
+        //
+        // The page being left has to be copied out before the step: it lives
+        // in the canvas pdf.js is about to redraw, so once the number changes
+        // there is nothing left to animate. The copy rides over the incoming
+        // page until the turn is done (see `pdfTurn.ts`). Scroll layout skips
+        // it — there the step is a scroll through a continuous strip.
+        if (layoutModeRef.current !== "scroll") {
+          snapshotPdfTurn(viewportRef.current, dir, pageTransition, reduce);
+        }
         goTo(chapterIdx + dir * (layoutModeRef.current === "double" ? 2 : 1));
         return;
       }

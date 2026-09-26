@@ -135,6 +135,7 @@ gl_Position.z = -lift·0.5              // 抬起的部分画在上层
 | `src/features/reader/FoliateBookView.tsx` | `slide → turn-style="slide"`；补全顶部注释，写明 `pan` = readest 的 Push、`slide/fade/paper` = 分层 VT                    |
 | `src/features/reader/paging.ts`           | 纯文本 / MD 通路新增 `slide`：`translateX(±100%) → none`，300ms，曲线沿用 VT keyframes 的 `cubic-bezier(.25,.46,.45,.94)` |
 | `src/features/reader/paging.test.ts`      | 新增一条：前进从右进、后退从左进                                                                                          |
+| `src/features/reader/pdfTurn.ts`          | **paged PDF 通路**：`goTo` 之前把当前 canvas 拷成 overlay，动画出场后移除。见下文                                         |
 
 门禁：`tsc --noEmit` 0 · `oxlint` 0/0 · `vitest` 398 passed · `vite build` OK · `prettier --check` OK。
 
@@ -180,6 +181,23 @@ gl_Position.z = -lift·0.5              // 抬起的部分画在上层
 **收益**：仿真从"书脊翻转"升级为"真卷曲（圆柱包裹 + 背面主题纸 + 捏角倾斜）"。
 
 > 我没有在本轮直接写这块原生代码 —— 它不是能靠 typecheck/lint 验证的改动，而项目门禁要求 `cargo clippy -D warnings` 全绿。要不要上，请你拍板；上面的剖析已经把它拆到可以直接开工的粒度。
+
+### PDF 通路：同一个形状，但快照是免费的
+
+paged PDF 不走 foliate —— 它是我们自己的 `PdfPageView`（pdf.js 的一张 canvas），所以 VT 那套对它完全不适用。但它恰好把 readest 最贵的一步变成了零成本：
+
+| readest 捕获通路                                  | 我们                                 |
+| ------------------------------------------------- | ------------------------------------ |
+| 原生 webview 截图（macOS / Android / iOS 各一份） | `drawImage(src)` —— 页面本来就是像素 |
+| 预烤表面、GPU 预算、每次 await 后复核 rect/dpr    | 不需要：同步，中间没有 await         |
+| 模态遮挡门禁、捕获期布局变化                      | 不需要：拷的是自己的 canvas          |
+| WebGL 网格卷曲 / 2D canvas 平移                   | WAAPI 变换一张 overlay canvas        |
+
+`src/features/reader/pdfTurn.ts` 就是这份差价，约 130 行。它只做**出场**动画：paged PDF 的 canvas 跨页存活（挂 `key` 会闪白，见 `pdf.md`），所以任何入场动画都会淡入上一页的位图 —— 这也是之前「paged PDF 没有翻页动画」这条注释的由来。
+
+顺带绕开了 WebKit 的门：readest 的分层 VT 在 WebKit 上被 `CSS.supports('view-transition-group', 'nearest')` 挡掉（iOS 18 有 API，但分层快照会崩 WebContent 进程），而这套方案不依赖 VT，桌面端 WKWebView 上一样跑。
+
+没做的：手指跟手 scrub、双页中缝铰接的叶片模型、WebGL 真卷曲。前两个是观感细节，第三个要上面那块原生截图。
 
 ---
 
