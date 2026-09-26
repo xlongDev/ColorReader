@@ -223,7 +223,7 @@ const kindleBook: BookSummary = {
   language: "zh",
   publisher: null,
   format: "azw3",
-  fileSize: 2_906,
+  fileSize: 2_916,
   coverUrl: cover(5, PALETTES[2]![0], PALETTES[0]![1]),
   addedAt: 0,
   updatedAt: 0,

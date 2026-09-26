@@ -35,6 +35,16 @@ owns document parsing) and its `<foliate-view>` integration informed the design
 of `src/features/reader/FoliateBookView.tsx`; its MIT-licensed foliate-js fork
 is vendored (see above). readest's own AGPL source files are not shipped.
 
+## 霞鹜文楷 / LXGW WenKai — SIL OFL 1.1
+
+- Project: <https://github.com/lxgw/LxgwWenKai> (webfont packaging:
+  <https://github.com/chawyehsu/lxgw-wenkai-webfont>, MIT)
+- License: SIL Open Font License 1.1 — `node_modules/lxgw-wenkai-webfont/OFL.txt`
+- Copyright (c) 2021 Klee One contributors / 落霞孤鹜
+
+Bundled as the reading surface's default CJK face. One subset is also copied to
+`e2e/fixtures/sample-font.woff2` as the font-import fixture.
+
 ## pdf.js — Apache-2.0
 
 - Project: <https://github.com/mozilla/pdf.js>

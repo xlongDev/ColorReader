@@ -36,6 +36,14 @@ Three things the byte layout has to get right, all of them read by
   second code path, and `huffcdic` would need a Huffman table; neither is what
   this fixture is for.
 
+**An EXTH 524 record**, which is what pins a defect of its own. foliate marks
+that record `many` (`EXTH_RECORD_TYPE[524]`), so a file that carries it answers
+`language: ["zh"]` — a *list*, where every other reader in the app hands over a
+string. Stored as it arrived, the list reached a `String` method a page later
+and took the reading surface down, which is what `metadataText` in
+`lib/local/import.ts` exists to settle. Real Kindle files carry it, so this one
+does too — see `e2e/book-import.spec.ts`.
+
 The body is explanatory prose on purpose, in the style of the other two
 fixtures: the text of a fixture is the one thing a reader sees when something
 goes wrong, and a paragraph about what the file is beats "lorem ipsum" as a
@@ -157,6 +165,10 @@ def header_record(title: str, text_length: int) -> bytes:
         [
             (100, "样书"),  # creator
             (503, title),  # title
+            # 524 is a `many` record, so foliate answers with a list rather
+            # than the string every other reader hands over — see the module
+            # docstring.
+            (524, "zh"),
             # The record number the KF8 half starts at. `0xffffffff` is "there
             # is none", which is what keeps foliate from trying to open a KF8
             # half of this file.
