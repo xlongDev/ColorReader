@@ -27,6 +27,8 @@ export type StoreName =
   | "bookmarks"
   /** One imported font's bytes, keyed by font id. */
   | "fonts"
+  /** One imported dictionary's bytes, keyed by dictionary id. */
+  | "dictionaries"
   /** One small document per key: the session log, the tag names. */
   | "meta";
 
@@ -37,13 +39,14 @@ const STORES: StoreName[] = [
   "annotations",
   "bookmarks",
   "fonts",
+  "dictionaries",
   "meta",
 ];
 
 const NAME = "colorreader";
 /** Bumped when a store is added: `onupgradeneeded` creates the missing ones and
  *  leaves the rest alone, so an older library keeps its books. */
-const VERSION = 2;
+const VERSION = 3;
 
 let opening: Promise<IDBDatabase> | null = null;
 

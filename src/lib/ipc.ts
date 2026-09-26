@@ -2,7 +2,7 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 import { commands } from "@/lib/bindings";
-import type { LocalFont } from "@/types/ipc";
+import type { LocalDictionary, LocalFont } from "@/types/ipc";
 import type { BackupSummary, Outcome } from "@/lib/bindings";
 import type {
   AiDelta,
@@ -29,8 +29,8 @@ export const isDesktopRuntime: boolean = isTauri();
  * for all of this — should not carry 25 kB of it in its main chunk.
  *
  * The ones left out are the ones that need a real backend (AI, RAG, graph,
- * sync, book sources, backup packs) or a filesystem (font and dictionary
- * import); those keep their existing "desktop only" behaviour.
+ * sync, book sources, backup packs) or a filesystem (importing from a path);
+ * those keep their existing "desktop only" behaviour.
  */
 const LOCAL_COMMANDS = [
   "bookImportFiles",
@@ -45,6 +45,9 @@ const LOCAL_COMMANDS = [
   "bookImages",
   "fontList",
   "fontDelete",
+  "dictionaryList",
+  "dictionaryDelete",
+  "lookupDictionary",
   "readerToc",
   "readerChapter",
   "readerSetProgress",
@@ -190,6 +193,24 @@ export const ipc = {
       throw new Error("桌面端走 font_import（路径），这里是浏览器端的入口");
     }
     return fromLocal("fontImportFile")(file) as Promise<LocalFont>;
+  },
+
+  /**
+   * Imports a dictionary the *browser* picked.
+   *
+   * Browser-only, and for the same reason as `fontImportFile`: the desktop
+   * takes a path from its native dialog (`dictionaryImport`), the browser can
+   * only hand over the file itself.
+   *
+   * Only `.mdx` is accepted — a StarDict bundle is three files that the desktop
+   * finds next to each other on disk, and a file picker has no directory to
+   * offer. The refusal is the backend's, and it names the format.
+   */
+  dictionaryImportFile(file: File): Promise<LocalDictionary> {
+    if (isDesktopRuntime) {
+      throw new Error("桌面端走 dictionary_import（路径），这里是浏览器端的入口");
+    }
+    return fromLocal("dictionaryImportFile")(file) as Promise<LocalDictionary>;
   },
 
   /**

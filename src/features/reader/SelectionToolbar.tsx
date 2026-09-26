@@ -20,7 +20,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { useAiChat, useAiConfig } from "@/hooks/useAi";
-import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { ipc } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
 import { OverlayPortal } from "@/components/glass/overlay";
 import type { Annotation, AnnotationStyle } from "@/types/ipc";
@@ -690,15 +690,16 @@ function AiLookup({
   );
 }
 
-/** Browser dev mode has no backend; the panel goes straight to the AI path. */
-const OFFLINE_LOOKUP = { status: "unavailable" } as const;
-
 /**
  * 词典: the platform's own dictionary and the imported ones, in that order —
  * offline, key-free, instant. Only when neither has an entry (or the platform
  * ships no dictionary and nothing is imported) does the AI answer take over,
  * which is also where a selection longer than a headword always lands. The
  * entry is rendered verbatim; it arrives as plain text.
+ *
+ * The browser answers the same command: it has no platform dictionary to ask,
+ * but it has the imported ones, and `unavailable` is the answer it gives when
+ * it has neither.
  */
 function DictLookup({
   text,
@@ -713,8 +714,7 @@ function DictLookup({
 }) {
   const entry = useQuery({
     queryKey: ["dictionary", text],
-    queryFn: () =>
-      isDesktopRuntime ? ipc.lookupDictionary(text) : Promise.resolve(OFFLINE_LOOKUP),
+    queryFn: () => ipc.lookupDictionary(text),
     // An entry is a pure function of the term, so it never goes stale.
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,

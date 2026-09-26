@@ -1,13 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { desktopQuery, ipc } from "@/lib/ipc";
+import { ipc } from "@/lib/ipc";
 import type { LocalDictionary } from "@/types/ipc";
 
 /** The imported dictionaries. Only this page and the import dialog change them. */
 export function useDictionaries() {
   return useQuery<LocalDictionary[]>({
     queryKey: ["dictionaries"],
-    queryFn: desktopQuery([], () => ipc.dictionaryList()),
+    queryFn: () => ipc.dictionaryList(),
     staleTime: 30_000,
   });
 }
@@ -27,11 +27,19 @@ function useDictionaryInvalidation() {
   };
 }
 
-/** Imports the bundle whose `.ifo` sits at `path`. */
+/**
+ * Imports one dictionary.
+ *
+ * A path on the desktop (its dialog hands one over, and a StarDict bundle's
+ * siblings are found next to it) and the `File` itself in the browser. The
+ * browser takes `.mdx` only — one file, which is the only shape a file picker
+ * can ask for — and says so when it is handed anything else.
+ */
 export function useImportDictionary() {
   const invalidate = useDictionaryInvalidation();
   return useMutation({
-    mutationFn: (path: string) => ipc.dictionaryImport(path),
+    mutationFn: (source: string | File) =>
+      typeof source === "string" ? ipc.dictionaryImport(source) : ipc.dictionaryImportFile(source),
     meta: { silent: true },
     onSuccess: invalidate,
   });

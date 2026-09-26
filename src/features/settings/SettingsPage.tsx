@@ -956,13 +956,22 @@ function DictionarySection() {
   const pick = async () => {
     setStatus(null);
     try {
-      const picked = await open({
-        multiple: false,
-        directory: false,
-        filters: [{ name: "词典", extensions: ["ifo", "mdx"] }],
-      });
-      if (typeof picked !== "string") return;
-      upload.mutate(picked, {
+      // The desktop's dialog answers with a path; the browser can only answer
+      // with the file itself — and only with an `.mdx`, since a StarDict
+      // bundle's other two files have no way to come along.
+      let chosen: string | File | null = null;
+      if (isDesktopRuntime) {
+        const picked = await open({
+          multiple: false,
+          directory: false,
+          filters: [{ name: "词典", extensions: ["ifo", "mdx"] }],
+        });
+        chosen = typeof picked === "string" ? picked : null;
+      } else {
+        chosen = (await pickBrowserFiles(acceptOf(["mdx"])))[0] ?? null;
+      }
+      if (chosen === null) return;
+      upload.mutate(chosen, {
         onSuccess: (added) => setStatus({ tone: "ok", text: `已导入《${added.name}》。` }),
         onError: (error) => setStatus({ tone: "bad", text: String(error) }),
       });
@@ -980,7 +989,11 @@ function DictionarySection() {
       id="dictionary"
       icon={BookOpenText}
       title="本地词典"
-      description="导入 StarDict（.ifo、.idx、.dict 放在同一目录）或 MDict（.mdx）。划词查词先用系统词典，再用这里导入的，都不收录才交给 AI；全部离线，不需要 Key。"
+      description={
+        isDesktopRuntime
+          ? "导入 StarDict（.ifo、.idx、.dict 放在同一目录）或 MDict（.mdx）。划词查词先用系统词典，再用这里导入的，都不收录才交给 AI；全部离线，不需要 Key。"
+          : "浏览器端只能导入 MDict（.mdx）——它是单个文件；StarDict 的三个文件在浏览器里没法一起选中。划词查词先问这里导入的词典，都不收录才交给 AI；全部离线，不需要 Key。"
+      }
     >
       {list.length === 0 ? (
         <Row label="已导入" hint="还没有导入词典。" />
