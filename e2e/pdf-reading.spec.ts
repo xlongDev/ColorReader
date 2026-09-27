@@ -178,13 +178,13 @@ test("a turn with no warm raster still lands on the right page", async ({ page }
  * turns, just without the animation, which is exactly how the paged PDF
  * behaved before this existed.
  */
-type TurnWitness = { count: number; canvases: number };
+type TurnWitness = { count: number; canvases: number; curl: boolean };
 
 async function watchTurns(page: Page) {
   await page.evaluate(() => {
     const host = document.querySelector("[data-reading-viewport]");
     if (!host) throw new Error("没有阅读视口");
-    const seen: TurnWitness = { count: 0, canvases: 0 };
+    const seen: TurnWitness = { count: 0, canvases: 0, curl: false };
     (window as unknown as { turnWitness: TurnWitness }).turnWitness = seen;
     new MutationObserver((records) => {
       for (const record of records) {
@@ -192,6 +192,7 @@ async function watchTurns(page: Page) {
           if (node instanceof HTMLElement && node.hasAttribute("data-pdf-turn")) {
             seen.count += 1;
             seen.canvases = node.querySelectorAll("canvas").length;
+            seen.curl = node.querySelector("[data-pdf-curl]") !== null;
           }
         }
       }
@@ -202,6 +203,91 @@ async function watchTurns(page: Page) {
 function turnSeen(page: Page): Promise<TurnWitness> {
   return page.evaluate(() => (window as unknown as { turnWitness: TurnWitness }).turnWitness);
 }
+
+/**
+ * One horizontal wheel event over the reading area — a trackpad nudge, without
+ * the burst of inertial events a real swipe (or Playwright's `mouse.wheel`)
+ * carries, so a test can say exactly how far the sheet was dragged.
+ */
+async function swipe(page: Page, deltaX: number) {
+  await page.evaluate((distance) => {
+    const el = document.querySelector("[data-reading-content]");
+    el?.dispatchEvent(
+      new WheelEvent("wheel", { deltaX: distance, deltaY: 0, bubbles: true, cancelable: true }),
+    );
+  }, deltaX);
+}
+
+/** Picks a page-turn style the way a reader would. */
+async function setTransition(page: Page, label: string) {
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.getByRole("button", { name: label, exact: true }).click();
+  await page.keyboard.press("Escape");
+}
+
+test("the paper turn bends the sheet on the GPU, and leaves nothing behind", async ({ page }) => {
+  await openPdf(page, "单页");
+  await setTransition(page, "仿真");
+  await letPrefetchSettle(page);
+
+  // Which renderer runs is decided by whether this engine hands out a WebGL
+  // context at all, so the assertion is the two of them agreeing rather than
+  // one fixed answer. A shader that fails to compile would fall back to the
+  // flat fold silently — and show up here as a mismatch.
+  const webgl = await page.evaluate(() => {
+    const probe = document.createElement("canvas");
+    return probe.getContext("webgl") !== null;
+  });
+  await watchTurns(page);
+
+  await page.keyboard.press("ArrowRight");
+  await expect(pageView(page, 2)).toHaveAttribute("data-pdf-raster", "cached", {
+    timeout: 10_000,
+  });
+
+  const seen = await turnSeen(page);
+  expect(seen.count).toBe(1);
+  expect(seen.curl).toBe(webgl);
+
+  await expect(page.locator("[data-pdf-turn]")).toHaveCount(0);
+});
+
+test("a swipe too short to finish springs the sheet back instead of turning", async ({ page }) => {
+  await openPdf(page, "单页");
+  await setTransition(page, "仿真");
+  await letPrefetchSettle(page);
+
+  // Past the travel that starts a turn, nowhere near far enough to finish one.
+  // Before the wheel could hold a sheet this turned the page outright: any
+  // swipe past 48px was a page, whatever the reader meant by it.
+  // One nudge: past the travel that starts a turn, nowhere near far enough to
+  // finish one. Dispatched as a single event rather than through
+  // `mouse.wheel`, which arrives as a burst with the browser's own inertia
+  // on top of it and would carry the sheet past the point of no return.
+  await swipe(page, 120);
+  await page.waitForTimeout(700);
+
+  await expect(pageView(page, 1)).toBeVisible();
+  // ...and it left nothing on top of the page it gave back.
+  await expect(page.locator("[data-pdf-turn]")).toHaveCount(0);
+});
+
+test("a swipe that carries the sheet far enough turns the page", async ({ page }) => {
+  await openPdf(page, "单页");
+  await setTransition(page, "仿真");
+  await letPrefetchSettle(page);
+  await watchTurns(page);
+
+  // Far enough to carry the sheet past the point of no return.
+  await swipe(page, 600);
+  await page.waitForTimeout(900);
+
+  await expect(pageView(page, 2)).toHaveAttribute("data-pdf-raster", /^(cached|rendered)$/, {
+    timeout: 10_000,
+  });
+  expect((await turnSeen(page)).count).toBe(1);
+  await expect(page.locator("[data-pdf-turn]")).toHaveCount(0);
+});
 
 test("a paged PDF turn animates the page it is leaving, then clears it away", async ({ page }) => {
   await openPdf(page, "单页");
