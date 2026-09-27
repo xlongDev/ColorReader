@@ -1,3 +1,4 @@
+import { createCurl, startCurl, type CurlShot, type CurlTurn } from "./pdfCurl";
 import type { PageTransition } from "./theme";
 
 /**
@@ -26,6 +27,9 @@ const FOLD_DEG = 88;
 /** The soft edge under a sliding sheet, so it reads as paper leaving the
     window rather than a picture scrolling away. */
 const SHEET_SHADOW = "0 0 24px rgba(0, 0, 0, 0.28)";
+
+/** How long the mesh curl takes, matching foliate's own curl keyframes. */
+const CURL_MS = 420;
 
 export interface PdfTurn {
   frames: Keyframe[];
@@ -60,8 +64,11 @@ export function pdfTurn(mode: PageTransition, dir: 1 | -1): PdfTurn | null {
       return { frames: [{ opacity: 1 }, { opacity: 0 }], duration: 300, shadow: false };
     case "flip":
     case "paper": {
-      // Forward: the sheet lifts by its outer edge and swings away from the
-      // reader about the spine on the left. Backward is the mirror.
+      // The flat fold: the sheet lifts by its outer edge and swings away from
+      // the reader about the spine on the left. Backward is the mirror.
+      //
+      // "仿真" prefers `pdfCurl.ts` and only reaches this when WebGL is
+      // unavailable; "翻牌" is this fold by design.
       const away = dir === 1 ? -1 : 1;
       return {
         frames: [
@@ -93,17 +100,15 @@ export function snapshotPdfTurn(
   mode: PageTransition,
   /** `null` while the motion preference is undetermined; treated as motion. */
   reduced: boolean | null,
-): void {
-  if (!host || reduced || mode === "none") return;
-  const turn = pdfTurn(mode, dir);
-  if (!turn) return;
+): CurlTurn | null {
+  if (!host || reduced || mode === "none") return null;
   // A held arrow key turns faster than the animation lasts, and two overlays
   // of page-sized bitmaps is memory the reader never gets to see. The older
   // one goes first.
   host.querySelector("[data-pdf-turn]")?.remove();
 
   const hostBox = host.getBoundingClientRect();
-  const shots: HTMLCanvasElement[] = [];
+  const shots: { copy: HTMLCanvasElement; shot: CurlShot }[] = [];
   for (const src of host.querySelectorAll<HTMLCanvasElement>("[data-pdf-page] canvas")) {
     if (src.width === 0 || src.height === 0) continue;
     const box = src.getBoundingClientRect();
@@ -114,26 +119,61 @@ export function snapshotPdfTurn(
     const context = copy.getContext("2d");
     if (!context) continue;
     context.drawImage(src, 0, 0);
-    // The real page's own border and corner radius: a bare bitmap sliding
-    // over a rounded page reads as a second, wrong page underneath it.
+    // The real page's own border and corner radius: a bare bitmap sliding over
+    // a rounded page reads as a second, wrong page underneath it.
     copy.className = src.className;
-    copy.style.position = "absolute";
-    copy.style.left = `${box.left - hostBox.left}px`;
-    copy.style.top = `${box.top - hostBox.top}px`;
-    copy.style.width = `${box.width}px`;
-    copy.style.height = `${box.height}px`;
-    if (turn.shadow) copy.style.boxShadow = SHEET_SHADOW;
-    shots.push(copy);
+    shots.push({
+      copy,
+      shot: {
+        canvas: copy,
+        x: box.left - hostBox.left,
+        y: box.top - hostBox.top,
+        w: box.width,
+        h: box.height,
+      },
+    });
   }
-  if (shots.length === 0) return;
+  if (shots.length === 0) return null;
 
   const layer = document.createElement("div");
   layer.dataset.pdfTurn = "";
-  // Clipped to the viewport: the sheet is on its way out of the window, and
-  // an unclipped overlay would carry it over the sidebar on the way.
+  // Clipped to the viewport: the sheet is on its way out of the window, and an
+  // unclipped overlay would carry it over the sidebar on the way.
   layer.className = "pointer-events-none absolute inset-0 overflow-hidden";
+
+  // "仿真" bends the sheet on the GPU. Where WebGL is refused — a headless
+  // WebKit, a blocked GPU — the flat fold below is what the reader gets
+  // instead: half a turn is worse than a plainer one.
+  if (mode === "paper") {
+    const curl = createCurl(
+      host,
+      shots.map((entry) => entry.shot),
+      dir,
+    );
+    if (curl) {
+      layer.append(curl.canvas);
+      host.append(layer);
+      // Handed back unfinished: a gesture holds it with `set` and lets go with
+      // `finish`, and a turn with no gesture behind it just finishes at once.
+      return startCurl(layer, curl, CURL_MS);
+    }
+  }
+
+  const turn = pdfTurn(mode, dir);
+  if (!turn) {
+    layer.remove();
+    return null;
+  }
+  for (const { copy, shot } of shots) {
+    copy.style.position = "absolute";
+    copy.style.left = `${shot.x}px`;
+    copy.style.top = `${shot.y}px`;
+    copy.style.width = `${shot.w}px`;
+    copy.style.height = `${shot.h}px`;
+    if (turn.shadow) copy.style.boxShadow = SHEET_SHADOW;
+  }
   if (turn.origin) layer.style.transformOrigin = turn.origin;
-  layer.append(...shots);
+  layer.append(...shots.map((entry) => entry.copy));
   host.append(layer);
 
   const animation = layer.animate(turn.frames, {
@@ -146,4 +186,6 @@ export function snapshotPdfTurn(
   const drop = () => layer.remove();
   animation.addEventListener("finish", drop);
   animation.addEventListener("cancel", drop);
+  // The flat fold is a fixed animation: there is nothing for a gesture to hold.
+  return null;
 }

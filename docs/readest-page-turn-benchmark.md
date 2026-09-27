@@ -197,7 +197,18 @@ paged PDF 不走 foliate —— 它是我们自己的 `PdfPageView`（pdf.js 的
 
 顺带绕开了 WebKit 的门：readest 的分层 VT 在 WebKit 上被 `CSS.supports('view-transition-group', 'nearest')` 挡掉（iOS 18 有 API，但分层快照会崩 WebContent 进程），而这套方案不依赖 VT，桌面端 WKWebView 上一样跑。
 
-没做的：手指跟手 scrub、双页中缝铰接的叶片模型、WebGL 真卷曲。前两个是观感细节，第三个要上面那块原生截图。
+### 落地到了哪一步
+
+`pdfCurl.ts` 就是上面这份差价：**WebGL 网格卷曲**（48×48 顶点绕折痕包裹 + 镜像翻过 + 背面纸色取自页面角落像素），
+`paper`（仿真）优先走它，WebGL 不可用回落折叠。**没有用上那块原生截图** —— 页面本来就是位图。
+
+**触控板横滑跟手**也做了，而且比 readest 简单一个量级：readest 的跟手要 `pause()` + `updateTiming()`
+来 scrub 一个 CSS/VT 动画，我们的 curl 是 rAF 逐帧渲染，`set(progress)` 直接就是跟手。
+松手时 `finish(commit)`：过了 35% 就播完，否则回弹 —— 回弹在**覆盖层还盖着的时候**把页翻回去，
+读者看不到旧页在底下重新渲染。
+
+没做的：**鼠标拖拽翻页**（桌面鼠标拖拽是划词选择语义，会和 PDF 文本层打架）、
+**双页中缝铰接的叶片模型**（只在「双页 + 仿真」这个交叉组合下可见，等真机看过再定）。
 
 ---
 

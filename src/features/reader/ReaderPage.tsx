@@ -37,6 +37,7 @@ import { useReaderFullscreen } from "@/features/reader/useReaderFullscreen";
 import { FULLSCREEN_MARGIN_BONUS, useReaderLayout } from "@/features/reader/useReaderLayout";
 import { applyPosition, columnPitch, flipPage } from "@/features/reader/paging";
 import { snapshotPdfTurn } from "@/features/reader/pdfTurn";
+import type { CurlTurn } from "@/features/reader/pdfCurl";
 import { ImageLightbox } from "@/features/reader/ImageLightbox";
 import { ReaderFooterControls, ReaderHeaderBar } from "@/features/reader/ReaderChrome";
 import { ReaderPanels } from "@/features/reader/ReaderPanels";
@@ -155,6 +156,16 @@ const RULER_SETTLE_MS = 520;
 
 /** Wheel silence (ms) that ends one trackpad gesture and re-arms paging. */
 const GESTURE_GAP = 200;
+
+/** Wheel travel that starts a turn. Below this a nudge is not a gesture. */
+const WHEEL_START_PX = 48;
+
+/**
+ * How far a dragged sheet has to travel before letting go turns the page.
+ * Low, because a trackpad's own inertia carries a flick well past halfway on
+ * its own — waiting for half would make a normal swipe spring back.
+ */
+const SCRUB_COMMIT = 0.35;
 
 /**
  * Stand-in for the book's image list while the query is in flight. A fresh
@@ -980,6 +991,17 @@ function ReaderView({
   // position effect below once the next chapter has rendered.
   const autoAdvance = useRef(false);
 
+  /**
+   * The page the reader is on, read by `goTo` rather than the page number it
+   * closes over. A held turn reverts through a `goTo` built *before* the turn
+   * moved the page, and one reading its own captured number answers "already
+   * there" to the very page it is being asked to go back to.
+   */
+  const chapterIdxRef = useRef(chapterIdx);
+  useEffect(() => {
+    chapterIdxRef.current = chapterIdx;
+  }, [chapterIdx]);
+
   const goTo = useCallback(
     (idx: number) => {
       const clamped = Math.max(0, Math.min(idx, chapters.length - 1));
@@ -996,10 +1018,10 @@ function ReaderView({
         foliateRef.current?.goToFraction(at);
         return;
       }
-      if (clamped === chapterIdx) return;
+      if (clamped === chapterIdxRef.current) return;
       // A chapter switch invalidates the paragraph queue the voice is walking.
       stop();
-      setNav(clamped > chapterIdx ? 1 : -1);
+      setNav(clamped > chapterIdxRef.current ? 1 : -1);
       setChapterIdx(clamped);
       if (isPdf) {
         // A paged PDF has no scrollable overflow, so its fraction rides on
@@ -1024,7 +1046,7 @@ function ReaderView({
       setAutoScrolling(false);
       if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
     },
-    [chapters, chapterIdx, isPdf, layoutModeRef, setProgress, stop, useFoliate],
+    [chapterIdxRef, chapters, isPdf, layoutModeRef, setProgress, stop, useFoliate],
   );
 
   /** Jumps to a fraction inside a chapter, used by bookmarks. */
@@ -1148,8 +1170,14 @@ function ReaderView({
   }, [chapterData, applyPending, measureTail]);
 
   /** Flips one page in a paged layout; rolls into the neighbouring chapter at the edges. */
+  /**
+   * One page turn. `scrub` asks for the turn to be left open so a gesture can
+   * drive it — the handle comes back instead of the animation being started —
+   * and is only honoured where there is a sheet to hold (a paged PDF turning
+   * with the mesh curl). Everywhere else the turn plays out on its own.
+   */
   const flip = useCallback(
-    (dir: 1 | -1) => {
+    (dir: 1 | -1, scrub = false): CurlTurn | null => {
       if (useFoliate) {
         // At the first/last page of the current section, roll explicitly into
         // the neighbouring section (foliate's implicit next()/prev() cross only
@@ -1157,17 +1185,17 @@ function ReaderView({
         // otherwise turn the page normally. This makes "last page + next ->
         // next chapter" deterministic for keyboard paging.
         const handle = foliateRef.current;
-        if (!handle) return;
+        if (!handle) return null;
         // Same handover as the prose turn below: out of the way while the page
         // moves, back on the page that arrives (foliate relays that itself, with
         // the direction it was flipped).
         relayRulerTurn(viewportRef.current, dir);
         if (handle.atEdge(dir)) handle.section(dir);
         else handle.flip(dir);
-        return;
+        return null;
       }
       const el = scrollRef.current;
-      if (!el) return;
+      if (!el) return null;
       // A prose page turn is a page the reader arrives on: the ruler is told the
       // turn has started — it steps out of the way rather than riding this page
       // down to its last line — and meets the new page at the far edge when the
@@ -1183,21 +1211,35 @@ function ReaderView({
         // there is nothing left to animate. The copy rides over the incoming
         // page until the turn is done (see `pdfTurn.ts`). Scroll layout skips
         // it — there the step is a scroll through a continuous strip.
-        if (layoutModeRef.current !== "scroll") {
-          snapshotPdfTurn(viewportRef.current, dir, pageTransition, reduce);
+        const step = layoutModeRef.current === "double" ? 2 : 1;
+        const turn =
+          layoutModeRef.current !== "scroll"
+            ? snapshotPdfTurn(viewportRef.current, dir, pageTransition, reduce)
+            : null;
+        goTo(chapterIdx + dir * step);
+        if (!turn) return null;
+        // Held open for a gesture. Letting go without committing puts the page
+        // back: `chapterIdx` is where this turn started, and the revert runs
+        // while the sheet still covers the page, so the reader never watches it
+        // re-render.
+        if (!scrub) {
+          turn.finish(true);
+          return null;
         }
-        goTo(chapterIdx + dir * (layoutModeRef.current === "double" ? 2 : 1));
-        return;
+        return {
+          set: turn.set,
+          finish: (commit: boolean) => turn.finish(commit, () => goTo(chapterIdx)),
+        };
       }
       const max = el.scrollWidth - el.clientWidth;
       const pos = el.scrollLeft;
       if (dir === 1 && pos >= max - 2) {
         goTo(chapterIdx + 1);
-        return;
+        return null;
       }
       if (dir === -1 && pos <= 2) {
         goTo(chapterIdx - 1);
-        return;
+        return null;
       }
       // Snap to an exact column boundary: the viewport width includes the page
       // margins, so scrolling by clientWidth drifts and slices the next column.
@@ -1207,10 +1249,11 @@ function ReaderView({
       const page = pitch > 0 ? (mode === "double" ? 2 : 1) : 0;
       if (page === 0 || pitch <= 0) {
         flipPage(el, pos + dir * el.clientWidth, pageTransition, dir, reduce);
-        return;
+        return null;
       }
       const target = (Math.round(pos / pitch) + dir * page) * pitch;
       flipPage(el, Math.max(0, Math.min(target, max)), pageTransition, dir, reduce);
+      return null;
     },
     [chapterIdx, goTo, isPdf, layoutModeRef, marginRef, useFoliate, pageTransition, reduce],
   );
@@ -1227,6 +1270,24 @@ function ReaderView({
     [chapterIdx, goTo, useFoliate],
   );
 
+  /**
+   * The wheel gesture, held across rebuilds of the handler below.
+   *
+   * A drag starts a turn, and starting a turn changes the page number — which
+   * rebuilds `flip`, which re-runs the effect. Anything the handler kept in its
+   * own locals would be dropped on the very event that began the gesture: the
+   * accumulator would start over and the sheet would be lost with the page
+   * already turned, with nothing left holding it.
+   */
+  const dragState = useRef({
+    acc: 0,
+    at: 0,
+    flipped: false,
+    progress: 0,
+    timer: 0,
+    drag: null as CurlTurn | null,
+  });
+
   // In paged modes the wheel flips whole pages instead of nudging pixels:
   // free pixel scrolling always ends between two columns. A zoomed PDF pans
   // natively instead, and a pinch scales rather than flips.
@@ -1235,9 +1296,28 @@ function ReaderView({
     if (isPdf && pdfZoom !== 1) return;
     const el = scrollRef.current;
     if (!el) return;
-    let acc = 0;
-    let lastEventAt = 0;
-    let flipped = false;
+    const state = dragState.current;
+
+    /**
+     * How far the wheel has dragged the sheet. Measured from where the turn was
+     * claimed, not from zero: the travel that earned the turn is spent, and
+     * counting it again would jump the sheet the moment it appears.
+     */
+    const travelled = (acc: number, width: number) =>
+      Math.min(1, Math.max(0, (Math.abs(acc) - WHEEL_START_PX) / Math.max(1, width)));
+
+    /** The gesture is over: let the sheet go, one way or the other. */
+    const settle = () => {
+      window.clearTimeout(state.timer);
+      state.timer = 0;
+      state.acc = 0;
+      state.flipped = false;
+      const held = state.drag;
+      state.drag = null;
+      if (!held) return;
+      held.finish(state.progress > SCRUB_COMMIT);
+    };
+
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey) return;
       event.preventDefault();
@@ -1245,20 +1325,42 @@ function ReaderView({
       // One gesture = one page. Trackpad inertia keeps firing events long
       // after the flip, so a fixed cooldown would turn one swipe into two
       // pages; instead, only silence longer than GESTURE_GAP re-arms flipping.
-      if (now - lastEventAt > GESTURE_GAP) {
-        acc = 0;
-        flipped = false;
+      if (now - state.at > GESTURE_GAP) settle();
+      state.at = now;
+      state.acc += event.deltaY + event.deltaX;
+      if (state.drag) {
+        state.progress = travelled(state.acc, el.clientWidth);
+        state.drag.set(state.progress);
+        window.clearTimeout(state.timer);
+        state.timer = window.setTimeout(settle, GESTURE_GAP);
+        return;
       }
-      lastEventAt = now;
-      if (flipped) return;
-      acc += event.deltaY + event.deltaX;
-      if (Math.abs(acc) >= 48) {
-        flip(acc > 0 ? 1 : -1);
-        acc = 0;
-        flipped = true;
+      if (state.flipped) return;
+      if (Math.abs(state.acc) >= WHEEL_START_PX) {
+        // A turn that can be held — a paged PDF turning with the mesh curl —
+        // is handed over to the wheel from here, and the sheet follows the
+        // gesture instead of stepping a whole page at once.
+        const held = flip(state.acc > 0 ? 1 : -1, true);
+        if (!held) {
+          state.acc = 0;
+          state.flipped = true;
+          return;
+        }
+        state.drag = held;
+        // Where this event already dragged it — a fast swipe arrives as one
+        // large delta, and the sheet has to answer it on the spot rather than
+        // waiting for a second event that may never come.
+        state.progress = travelled(state.acc, el.clientWidth);
+        held.set(state.progress);
+        window.clearTimeout(state.timer);
+        state.timer = window.setTimeout(settle, GESTURE_GAP);
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
+    // The drag is deliberately not settled on teardown: starting one changes
+    // the page number, which rebuilds `flip` and re-runs this effect, and
+    // settling there would commit a page the reader still has hold of. The
+    // overlay lives inside the viewport, so an unmount takes it with it.
     return () => el.removeEventListener("wheel", onWheel);
   }, [flip, isPdf, layoutMode, pdfZoom]);
 
