@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { BookSummary } from "@/types/ipc";
 
 import {
+  authorLine,
   formatFileSize,
   isFoliateFormat,
   pickContinueReading,
@@ -72,6 +73,17 @@ describe("titleForFilter", () => {
     expect(all.title).toBe("书库");
     expect(all.subtitle.length).toBeGreaterThan(0);
   });
+
+  /**
+   * The 最近 shelf's subtitle used to read 「继续阅读的地方」, but the
+   * `ContinueReadingCard` that would justify it renders on the 书库 shelf only
+   * (`LibraryPage`, `filter === "all"`). A subtitle naming something the page
+   * does not have is the kind of copy that quietly stops matching the code, so
+   * the value is pinned here.
+   */
+  it("does not promise the 最近 shelf a card it does not render", () => {
+    expect(titleForFilter("recent").subtitle).toBe("最近读过的书");
+  });
 });
 
 describe("sortOptions", () => {
@@ -134,5 +146,41 @@ describe("pickContinueReading", () => {
 
   it("returns undefined for an empty shelf", () => {
     expect(pickContinueReading([])).toBeUndefined();
+  });
+});
+
+describe("authorLine", () => {
+  it("joins several authors", () => {
+    expect(authorLine(makeBook({ authors: ["Steve Klabnik", "Carol Nichols"] }))).toBe(
+      "Steve Klabnik / Carol Nichols",
+    );
+  });
+
+  /**
+   * Calibre-converted books carry a `dc:creator` of `Unknown`, and the shelf
+   * printed it verbatim — an English placeholder in an otherwise Chinese UI,
+   * which reads as an error rather than as metadata (seen on a real 39-book
+   * shelf). Dropping it is what lets `BookCard` take its empty-author branch,
+   * which is in turn what keeps the format/size block on the tile's right edge.
+   */
+  it("drops the placeholders a converter leaves behind", () => {
+    for (const placeholder of ["Unknown", "unknown", "N/A", "null", "佚名", "未知作者", "不详"]) {
+      expect(authorLine(makeBook({ authors: [placeholder] }))).toBe("");
+    }
+  });
+
+  it("keeps a real name that merely looks short", () => {
+    // `na` and `none` are surnames; a dropped author is worse than a
+    // placeholder one, so they are deliberately not in the list.
+    expect(authorLine(makeBook({ authors: ["Na"] }))).toBe("Na");
+    expect(authorLine(makeBook({ authors: ["None"] }))).toBe("None");
+  });
+
+  it("drops a placeholder but keeps the real authors beside it", () => {
+    expect(authorLine(makeBook({ authors: ["Unknown", "刘慈欣"] }))).toBe("刘慈欣");
+  });
+
+  it("trims entries and drops the empty ones", () => {
+    expect(authorLine(makeBook({ authors: ["  刘慈欣  ", ""] }))).toBe("刘慈欣");
   });
 });

@@ -15,11 +15,11 @@ import {
   ArrowSquareOut,
   BookOpen,
   Check,
+  CheckSquare,
   Export,
   MagnifyingGlass,
   Notebook,
   NotePencil,
-  SquaresFour,
   Trash,
   X,
 } from "@phosphor-icons/react";
@@ -552,7 +552,7 @@ function Toolbar({
         disabled={!managing && visible.highlights === 0}
         onClick={onToggleManaging}
       >
-        <SquaresFour size={14} /> {managing ? "退出管理" : "批量管理"}
+        <CheckSquare size={14} /> {managing ? "退出管理" : "批量管理"}
       </GlassButton>
 
       {/* A resident live region carrying one sentence, rather than a region

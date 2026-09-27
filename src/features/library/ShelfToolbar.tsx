@@ -2,6 +2,7 @@ import { motion, useReducedMotion } from "motion/react";
 import {
   ArrowDown,
   CaretDown,
+  CheckSquare,
   MagnifyingGlass,
   Rows,
   SquaresFour,
@@ -95,7 +96,7 @@ export function ShelfToolbar({
         )}
       </div>
 
-      <div className="border-hairline bg-surface-1 relative inline-flex h-9 items-center rounded-md border">
+      <div className="border-hairline bg-surface-1 focus-within:focus-ring relative inline-flex h-9 items-center rounded-md border">
         <select
           aria-label="排序方式"
           value={sort}
@@ -171,7 +172,7 @@ export function ShelfToolbar({
           control — four options, each two to four characters, which is more
           than a stadium holds. The icon is what tells the two dropdowns apart
           at a glance, since they read the same otherwise. */}
-      <div className="border-hairline bg-surface-1 relative inline-flex h-9 items-center rounded-md border">
+      <div className="border-hairline bg-surface-1 focus-within:focus-ring relative inline-flex h-9 items-center rounded-md border">
         <StackSimple
           size={13}
           className="text-text-3 pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
@@ -250,7 +251,7 @@ export function ShelfToolbar({
       </div>
 
       <GlassButton size="md" variant={managing ? "primary" : "subtle"} onClick={onToggleManaging}>
-        <SquaresFour size={15} /> {managing ? "退出管理" : "批量管理"}
+        <CheckSquare size={15} /> {managing ? "退出管理" : "批量管理"}
       </GlassButton>
 
       {stats && stats.total > 0 && !managing && (

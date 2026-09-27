@@ -452,6 +452,10 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           onEditTags={(target) => setTagTarget([target])}
           onEditMeta={setMetaTarget}
           onImport={startImport}
+          // The shelf's own way out of a search that matched nothing. It used
+          // to be the 13px ✕ inside the search field and nothing else, so a
+          // reader who searched from the 标签 shelf had no visible next step.
+          onClearSearch={() => update({ search: "" })}
         />
       </div>
 

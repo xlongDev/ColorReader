@@ -238,12 +238,22 @@ export function BookCard({
               only ever shown for a book with no author at all. The author now
               marquees on hover when the name is longer than the slot. */}
           <p className="text-text-3 mt-0.5 flex items-center gap-1.5 text-xs">
-            {authors && (
+            {/* The author slot stays in the line even for a book with no author
+                at all. It is `flex-1`, so it is the thing holding the
+                format/size block against the tile's right edge: leaving it out
+                put `PDF · 17.1 MB` at the *left* edge of a book with no author
+                while its neighbour in the same row had `PDF · 11.0 MB` at the
+                right one (measured on the 6-column shelf). An empty slot keeps
+                every row's second line lined up with the tiles beside it — the
+                same reason `reserveTags` keeps an empty label line. */}
+            {authors ? (
               // `flex-1` claims the rest of the line; `min-w-0` lets the flex
               // actually shrink the slot — without it the inner span would
               // measure wider than its parent and the marquee would never
               // see overflow.
               <MarqueeText className="min-w-0 flex-1">{authors}</MarqueeText>
+            ) : (
+              <span className="min-w-0 flex-1" aria-hidden="true" />
             )}
             <span className="shrink-0 text-[11px] tracking-wide">
               {book.format.toUpperCase()}

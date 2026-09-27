@@ -126,7 +126,7 @@ function SearchView({ onManage }: { onManage: () => void }) {
           aria-label="选择书源"
           value={activeId}
           onChange={(event) => setSourceId(event.target.value)}
-          className="border-hairline bg-surface-1 text-text-1 h-9 min-w-0 flex-1 rounded-md border px-3 text-sm outline-none [&>option]:text-black"
+          className="border-hairline bg-surface-1 text-text-1 focus-visible:border-accent focus-visible:bg-surface-2 h-9 min-w-0 flex-1 rounded-md border px-3 text-sm outline-none [&>option]:text-black"
         >
           {list.length === 0 && <option value="">还没有书源</option>}
           {list.map((entry) => (
@@ -299,7 +299,7 @@ function SourceEditor({ editor, onBack }: { editor: Editor; onBack: () => void }
         onChange={(event) => setText(event.target.value)}
         spellCheck={false}
         aria-label="书源规则"
-        className="border-hairline bg-surface-1 text-text-1 h-72 w-full rounded-xl border p-3 font-mono text-[12px] leading-relaxed outline-none"
+        className="border-hairline bg-surface-1 text-text-1 focus-visible:border-accent focus-visible:bg-surface-2 h-72 w-full rounded-xl border p-3 font-mono text-[12px] leading-relaxed outline-none"
       />
       {error && <p className="text-text-2 text-[12.5px] break-all">{error}</p>}
       <div className="flex items-center justify-end gap-2">

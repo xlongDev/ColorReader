@@ -104,4 +104,21 @@ describe("BookCard — format / file size row (T2/T3)", () => {
     renderCard({ authors: [] });
     expect(screen.getByText(/EPUB/)).toBeInTheDocument();
   });
+
+  it("keeps the format/size block against the right edge when there is no author", () => {
+    renderCard({ authors: [], fileSize: 4_500_000 });
+
+    // The author slot is `flex-1`, so it is what pushes the format/size block
+    // to the tile's right edge. Rendering nothing in its place put the block at
+    // the *left* edge for a book with no author while the tile beside it in the
+    // same row kept it at the right one — two alignments on one line, measured
+    // on the 6-column shelf. The slot has to exist even when it is empty.
+    const row = screen.getByText(/EPUB/).closest("p");
+    expect(row).not.toBeNull();
+    const slot = row!.firstElementChild as HTMLElement;
+    expect(slot.className).toContain("flex-1");
+    expect(slot.className).toContain("min-w-0");
+    // And the block it holds right is still the last thing on the line.
+    expect(row!.lastElementChild!.textContent).toMatch(/4\.3 MB/);
+  });
 });

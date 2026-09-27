@@ -5,7 +5,12 @@ export type ShelfFilter = "all" | "recent" | "favorites" | "tags";
 
 const TITLES: Record<ShelfFilter, { title: string; subtitle: string }> = {
   all: { title: "书库", subtitle: "所有导入的书籍" },
-  recent: { title: "最近", subtitle: "继续阅读的地方" },
+  // The subtitle says what the shelf actually does. It used to read
+  // 「继续阅读的地方」, but the `ContinueReadingCard` that would justify it
+  // renders on the 书库 shelf only (`LibraryPage`, `filter === "all"`), so the
+  // copy promised a card this page does not have. This shelf is already
+  // ordered by 最近阅读, which is what the card was standing in for.
+  recent: { title: "最近", subtitle: "最近读过的书" },
   favorites: { title: "收藏", subtitle: "标星的书" },
   tags: { title: "标签", subtitle: "按标签浏览" },
 };
@@ -62,8 +67,36 @@ export function isFoliateFormat(format: BookFormat): boolean {
   return FOLIATE_FORMATS.has(format);
 }
 
+/**
+ * Author names that are really "the file did not say".
+ *
+ * Calibre-converted books routinely carry a `dc:creator` of `Unknown`, and the
+ * shelf printed it verbatim — in an otherwise Chinese UI it reads as an error
+ * message rather than as metadata (measured: the first tile of a real 39-book
+ * shelf showed `Unknown · PDF · 11.0 MB`). Matched case-insensitively; the
+ * Chinese placeholders are unaffected by the fold.
+ *
+ * `na` and `none` are deliberately absent: both are real surnames, and a
+ * dropped author is worse than a placeholder one.
+ */
+const PLACEHOLDER_AUTHORS = new Set([
+  "unknown",
+  "n/a",
+  "null",
+  "anonymous",
+  "佚名",
+  "未知",
+  "未知作者",
+  "无名",
+  "作者不详",
+  "不详",
+]);
+
 export function authorLine(book: BookSummary): string {
-  return book.authors.join(" / ");
+  return book.authors
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0 && !PLACEHOLDER_AUTHORS.has(name.toLowerCase()))
+    .join(" / ");
 }
 
 /**

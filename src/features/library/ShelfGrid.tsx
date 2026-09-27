@@ -1,5 +1,5 @@
 import type { RefObject } from "react";
-import { BookOpen, CaretDown, Sparkle } from "@phosphor-icons/react";
+import { BookOpen, CaretDown, Sparkle, X } from "@phosphor-icons/react";
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton } from "@/components/glass/button";
@@ -39,6 +39,7 @@ export function ShelfGrid({
   onEditTags,
   onEditMeta,
   onImport,
+  onClearSearch,
 }: {
   pending: boolean;
   error: unknown;
@@ -62,6 +63,8 @@ export function ShelfGrid({
   onEditTags: (book: BookSummary) => void;
   onEditMeta: (book: BookSummary) => void;
   onImport: () => void;
+  /** Clear the shelf's search, from the empty state that search produced. */
+  onClearSearch: () => void;
 }) {
   const m = useMotion();
 
@@ -88,7 +91,24 @@ export function ShelfGrid({
             : "把 EPUB、TXT 或 Markdown 文件拖进窗口，或者点击右上角的导入按钮。"
         }
         action={
-          !search && (
+          // A search that matched nothing used to offer nothing at all: the
+          // action was suppressed when `search` was set, which left the 13px ✕
+          // inside the search field as the only way back to the whole shelf.
+          // The empty state now carries the way out itself.
+          //
+          // The label is 「清空搜索条件」 rather than 「清除搜索」 on purpose —
+          // the search field's own ✕ is already named 清除搜索, and a second
+          // button whose name contains it would make every unscoped
+          // `getByRole("button", { name: "清除搜索" })` ambiguous. That is the
+          // failure mode the notes page's 批量管理 locator already hit once.
+          //
+          // It clears the *search*, not the label filter, so it cannot say
+          // 「显示全部书籍」: on the 标签 shelf the tag narrowing stays put.
+          search ? (
+            <GlassButton size="md" onClick={onClearSearch}>
+              <X size={14} /> 清空搜索条件
+            </GlassButton>
+          ) : (
             <GlassButton variant="primary" size="md" onClick={onImport}>
               <Sparkle size={14} /> 导入书籍
             </GlassButton>
