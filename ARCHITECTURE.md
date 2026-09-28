@@ -37,16 +37,16 @@
 
 单 crate（`src-tauri`），按职责分模块：
 
-| 模块          | 职责                                                                                                                                                                                                                                                                                             |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `commands/`   | Tauri 命令，按域分文件（`system.rs` / `book.rs` / `reader.rs` / `annotation.rs` / `search.rs` / `export.rs` / `ai.rs` / `rag.rs` / `graph.rs` / `source.rs` / `sync.rs`），在 `lib.rs` 统一注册                                                                                                  |
-| `db/`         | SQLite 连接（WAL、单写者 `Arc<Mutex<Connection>>`）+ `user_version` 迁移运行器                                                                                                                                                                                                                   |
-| `ai/`         | AI 配置仓储（`settings` KV 表）+ OpenAI 兼容流式聊天客户端（SSE 解析为纯函数）+ embedding 客户端（批量、归一化、f32 序列化）+ rerank 客户端（Cohere 兼容）                                                                                                                                       |
-| `library/`    | 导入管线（去重、文件落盘、元数据提取）+ 书籍仓储（查询 / 统计）+ 章节仓储 + 标注仓储 + 全文检索 + 书档（导入 / 导出 / 加密）+ 笔记导出（Markdown / CSV）+ RAG（组块 / 索引 / 暴力检索）+ 知识图谱（LLM 抽取 / 存储 / 邻域查询）+ 书源（JSON 规则 / 搜索 / 下载）+ WebDAV 同步（进度 / LWW 合并） |
-| `document/`   | 七种格式的元数据、封面与章节正文提取：`epub`（OPF / spine）、`pdf`（逐页文本）、`mobi`（PDB 容器 + PalmDOC / HUFF-CDIC + EXTH）、`fb2`（XML，含 `.fb2.zip`）、`cbz`（图片页）、`plain`（TXT / Markdown），`html.rs` 为前三者共用的 HTML → 段落解析器                                             |
-| `resource.rs` | `colorreader://` 自定义协议：封面图片按 id 从 Rust 流式返回                                                                                                                                                                                                                                      |
-| `error.rs`    | `AppError`：thiserror 定义，实现 `Serialize`，统一转成 `{ message }` 交给前端                                                                                                                                                                                                                    |
-| `state.rs`    | `AppState`（启动时间、数据目录布局、书库句柄），通过 `app.manage` 注入                                                                                                                                                                                                                           |
+| 模块          | 职责                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `commands/`   | Tauri 命令，按域分文件，**共 21 个域 —— 目录本身就是这份清单**。这里以前手列过 11 个文件名，漏掉 10 个（`backup` / `bookmark` / `clippings` / `dictionary` / `font` / `lookup` / `stats` / `tag` / `tts` / `webview`），凡是手写的清单都会这样漂，所以不再抄一遍。在 `lib.rs` 统一注册                                                                                                                                                                                                                 |
+| `db/`         | SQLite 连接（WAL、单写者 `Arc<Mutex<Connection>>`）+ `user_version` 迁移运行器                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `ai/`         | AI 配置仓储（`settings` KV 表）+ OpenAI 兼容流式聊天客户端（SSE 解析为纯函数）+ embedding 客户端（批量、归一化、f32 序列化）+ rerank 客户端（Cohere 兼容）                                                                                                                                                                                                                                                                                                                                             |
+| `library/`    | 导入管线（去重、文件落盘、元数据提取）+ 书籍仓储（查询 / 统计）+ 章节仓储 + 标注仓储 + 全文检索 + 书档（导入 / 导出 / 加密）+ 笔记导出（Markdown / CSV）+ RAG（组块 / 索引 / 暴力检索）+ 知识图谱（LLM 抽取 / 存储 / 邻域查询）+ 书源（JSON 规则 / 搜索 / 下载）+ WebDAV 同步（进度 / LWW 合并）。**现在是一个 23 个文件的平铺桶**，里面至少五类互不相关的领域（词典解析 / 检索与 AI / 同步备份 / 导出 / 书源），按本文自己的模块标准已经该分层了 —— 见 `docs/improvement-plan-2026-09-28.md` 的 P2-15 |
+| `document/`   | 七种格式的元数据、封面与章节正文提取：`epub`（OPF / spine）、`pdf`（逐页文本）、`mobi`（PDB 容器 + PalmDOC / HUFF-CDIC + EXTH）、`fb2`（XML，含 `.fb2.zip`）、`cbz`（图片页）、`plain`（TXT / Markdown），`html.rs` 为前三者共用的 HTML → 段落解析器                                                                                                                                                                                                                                                   |
+| `resource.rs` | `colorreader://` 自定义协议：封面图片按 id 从 Rust 流式返回                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `error.rs`    | `AppError`：thiserror 定义，实现 `Serialize`，统一转成 `{ message }` 交给前端                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `state.rs`    | `AppState`（启动时间、数据目录布局、书库句柄），通过 `app.manage` 注入                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 ### 数据层
 
@@ -411,7 +411,7 @@ Tauri 命令名在 Rust 里是 snake_case，前端通过 `src/lib/ipc.ts` 的单
 
 ### 绑定由 Rust 生成（tauri-specta）
 
-71 个命令里 69 个由 `#[specta::specta]` 标注生成，2 个例外见下。生成产物 `src/lib/bindings.ts`
+76 个命令里 73 个由 `#[specta::specta]` 标注生成，3 个例外见下。生成产物 `src/lib/bindings.ts`
 **要提交**，改动 Rust 签名后重新生成：
 
 ```sh
@@ -421,9 +421,11 @@ pnpm exec prettier --write src/lib/bindings.ts   # 生成物未格式化，pre-c
 
 几条不能忘的约定：
 
-- **派发仍是 `tauri::generate_handler!`**，`tauri-specta` 只当类型生成器。`book_asset` / `book_source_file`
-  返回 `tauri::ipc::Response`（二进制通道），specta 建不了模；而 `tauri::ipc::Invoke` 没有 `Clone`，
-  两个 invoke handler 拼不起来。代价是命令清单写两遍，但漏加会让 `tsc` 直接报错，不会静默漂移。
+- **派发仍是 `tauri::generate_handler!`**，`tauri-specta` 只当类型生成器。`book_asset` /
+  `book_source_file` / `webview_capture_region` 返回 `tauri::ipc::Response`（二进制通道），specta
+  建不了模；而 `tauri::ipc::Invoke` 没有 `Clone`，两个 invoke handler 拼不起来。代价是命令清单写两遍：
+  漏在 `collect_commands!` 会让该命令从生成的 `commands` 对象里消失（`tsc` 直接报错），漏在
+  `generate_handler!` 则只有运行时才炸 —— 两个方向都要核，改完这两处各数一遍。
 - `.error_handling(ErrorHandlingMode::Throw)`：生成的 `Promise<T>` 在 `Err` 时 reject，TanStack Query 的
   `onError` 语义不变（默认的 Result 联合类型会逼所有调用点改错误处理）。
 - `.dangerously_cast_bigints_to_number()` 必开，否则 `u64`/`usize` 拒绝导出。

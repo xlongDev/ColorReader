@@ -198,9 +198,10 @@ pub fn run() -> tauri::Result<()> {
 /// generated artefact.
 ///
 /// Dispatch deliberately stays on `tauri::generate_handler!` (see `run`):
-/// `book_asset` and `book_source_file` return `tauri::ipc::Response` — raw
-/// bytes over the binary channel — which Specta cannot describe, so they are
-/// excluded here and hand-written in `src/lib/ipc.ts`.
+/// `book_asset`, `book_source_file` and `webview_capture_region` return
+/// `tauri::ipc::Response` — raw bytes over the binary channel — which Specta
+/// cannot describe, so they are excluded here and hand-written in
+/// `src/lib/ipc.ts`.
 ///
 /// ponytail: the command list is therefore spelled out twice. That duplication
 /// cannot drift silently: a command missing from `collect_commands!` stops

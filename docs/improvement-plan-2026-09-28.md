@@ -40,18 +40,18 @@ SQLite WAL · FTS5(trigram) · 向量走 Rust 暴力点积
 
 ### 1.2 规模
 
-| 区域                                     | 实测                                                                                                         |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| 前端 `src/`（不含 vendor）               | 214 个 ts/tsx，43,727 行                                                                                     |
-| `src/vendor/foliate-js/`（readest fork） | 13,699 行                                                                                                    |
-| Rust `src-tauri/src/`                    | 21,895 行；22 个 `commands/`、23 个 `library/`、9 个 `document/`                                             |
-| 单文件最大（前端）                       | `ReaderPage.tsx` 3382 · `FoliateBookView.tsx` 1580 · `SettingsPage.tsx` 1271 · `lib/local/backend.ts` 1225   |
-| 单文件最大（Rust）                       | `document/mobi.rs` 1809 · `library/clippings.rs` 1597 · `library/repository.rs` 1092 · `library/sync.rs` 970 |
-| IPC                                      | 71 个命令（68 由 specta 生成，3 个二进制通道手写）+ 5 个事件                                                 |
-| 测试                                     | 53 个单测文件 / 214 个源文件；Rust 421 个 `#[test]`；e2e 33 个 spec / 5076 行 / chromium+webkit 双引擎       |
-| 构建产物                                 | `dist` 33 MB：woff2 582 个共 29 MB、JS 46 个共 1.9 MB、CSS 604 KB（含 582 条 `@font-face`）                  |
-| 最大 chunk                               | `pdf` 431 KB、`index` 413 KB，均低于 500 KB 红线                                                             |
-| 代码标记                                 | `TODO`/`FIXME`/`HACK` 0 处，`@ts-ignore` 0 处，`as any` 3 处                                                 |
+| 区域                                     | 实测                                                                                                                       |
+| ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 前端 `src/`（不含 vendor）               | 214 个 ts/tsx，43,727 行                                                                                                   |
+| `src/vendor/foliate-js/`（readest fork） | 13,699 行                                                                                                                  |
+| Rust `src-tauri/src/`                    | 21,895 行；22 个 `commands/`、23 个 `library/`、9 个 `document/`                                                           |
+| 单文件最大（前端）                       | `ReaderPage.tsx` 3382 · `FoliateBookView.tsx` 1580 · `SettingsPage.tsx` 1271 · `lib/local/backend.ts` 1225                 |
+| 单文件最大（Rust）                       | `document/mobi.rs` 1809 · `library/clippings.rs` 1597 · `library/repository.rs` 1092 · `library/sync.rs` 970               |
+| IPC                                      | 76 个命令（73 由 specta 生成，3 个二进制通道手写：`book_asset` / `book_source_file` / `webview_capture_region`）+ 5 个事件 |
+| 测试                                     | 53 个单测文件 / 214 个源文件；Rust 421 个 `#[test]`；e2e 33 个 spec / 5076 行 / chromium+webkit 双引擎                     |
+| 构建产物                                 | `dist` 33 MB：woff2 582 个共 29 MB、JS 46 个共 1.9 MB、CSS 604 KB（含 582 条 `@font-face`）                                |
+| 最大 chunk                               | `pdf` 431 KB、`index` 413 KB，均低于 500 KB 红线                                                                           |
+| 代码标记                                 | `TODO`/`FIXME`/`HACK` 0 处，`@ts-ignore` 0 处，`as any` 3 处                                                               |
 
 ### 1.3 技术栈（与文档一致，无漂移）
 
@@ -253,10 +253,17 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 - **收益**：以极小的当前成本，把一个未来的大改动降级成中改动。
 - **验证**：无（结构性改动）。
 
-### P2-19 文档漂移：`ARCHITECTURE.md` 的命令表与例外数已经过期
+### P2-19 文档漂移：`ARCHITECTURE.md` 的命令表与例外数已经过期　【已修复】
 
 - **问题**：文档写「71 个命令里 69 个由 specta 生成，**2 个例外**」，但 `ipc.ts` 现在有 **3 个**手写二进制命令（`book_asset` / `book_source_file` / `webview_capture_region`，后者是仿真翻页那轮加的，`commands/webview.rs` 存在且注册在 `generate_handler!` 里）。文档的 `commands/` 域表列了 11 个域，实际有 **22 个**文件（`backup` / `bookmark` / `clippings` / `dictionary` / `font` / `lookup` / `notes` / `pack` / `stats` / `tag` / `tts` / `webview` 都没进表）。`library/` 表列了 12 项，实际 23 个模块。
-- **位置**：`ARCHITECTURE.md` §2 模块表、§4 IPC 契约
+- **位置**：`ARCHITECTURE.md` §2 模块表、§4 IPC 契约；`src-tauri/src/lib.rs` 里 `collect_commands!` 上方的注释
+- **已修（2026-09-28）**，数字都是重新量的，不是照旧文推算：
+  - 命令数 **76**（`generate_handler!` 76 条 = `collect_commands!` 73 条 + 3 条二进制手写）。旧文的「71 / 69 / 2」三处全改。
+  - 例外从 2 条补成 3 条：`webview_capture_region`（仿真翻页那轮加的）也是二进制通道，`lib.rs` 的注释和 §4 的约定条目一起补上。
+  - `commands/` 那一行**不再手列文件名**：目录本身就是清单（21 个域，旧文列了 11 个）。手写清单必然漂，改成让它自己说。
+  - `library/` 那一行补上「现在是一个 23 个文件的平铺桶」并指向本节的 P2-15。
+  - 顺带核了一件事：用脚本比对了两个清单，**没有「只进 `collect_commands!`、没进 `generate_handler!`」的命令**——那种命令能通过 `tsc`、只在运行时炸，是这类双清单最容易埋的雷。这条双向核对写进了 §4 的约定。
+  - 本报告自己也抄了过期的「71 / 68」，一并改。
 - **方向**：① 命令表改成「按域列目录」而不是手写清单，让 `ls commands/` 就是唯一事实来源；② 例外数改成 3 并在 `collect_commands!` 的注释里点名 `webview_capture_region`（那里的注释目前只提了 2 个）；③ 文档已经 600 行且混着现状与历史（比如「历史：最早从屏幕上一个单元直接外推，报过 493/977/805 页」），把历史决策挪到 `docs/decisions.md`，`ARCHITECTURE.md` 只留现状。
 - **收益**：文档重新变成可以信的入口；新人照着表找代码不会扑空。
 - **验证**：无。
