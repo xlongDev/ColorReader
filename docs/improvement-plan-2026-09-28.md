@@ -27,7 +27,9 @@
 
 **第四批第七笔已落地**（2026-09-29，改动留在工作区，未提交）：foliate 桥量完确认过的那笔大活 —— 它的**位置/目录那一半** → `src/features/reader/useFoliateBook.ts`，`ReaderPage.tsx` 删 173 / 加 72（2666 → 2565）。详见 P2-14 的 PR#10。**同一轮把那条 flake 治了**（`selection-toolbar.spec.ts:101`：第一次导航不再等 `load`，并加一次重试），见下面那节。
 
-**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— 已落地 ④ 朗读引擎、⑤ 实测页数、⑥ 自动滚动、⑦ 图片/灯箱、⑧ 搜索/AI 跳转、⑨ foliate 样式对象、⑩ foliate 桥的位置/目录那一半。**foliate 桥剩下的一小块不抽**：`foliateRef` 是导航 / 标尺 / 朗读共用的句柄，`clearPaintedMatches` 与 `foliateRulerLines` 只是它的两个窄封装 —— 抽走等于换个名字，不减少任何耦合。**下一个候选是 PDF**，但出口 24 里有 8 处在脊柱里（`goTo` 直接写 `el.scrollTop = clamped * pdfSlotH.current`，`applyPending` 读 `suppressPdfPending`），要做就得像自动滚动那样让脊柱改调 hook，收益与风险得先量。**「位置与导航」「标注桥接」整簇不做**（分别是脊柱与页面中心 UI 状态）。**那条 flake 已治**，见下一节。
+**补做 P1-9 已落地**（2026-09-29，改动留在工作区，未提交）：书架的失败态不再把后端原始错误当正文，改成「人话 + 重试 + 折叠的诊断信息」。这是清单里第一件没被任何批次覆盖的 P1，见下面那节。
+
+**待做**：第三批只剩 P1-8（真机验证原生下拉配色，**要真机**）；第四批是结构性的（P2-14 起）—— 已落地 ④ 朗读引擎、⑤ 实测页数、⑥ 自动滚动、⑦ 图片/灯箱、⑧ 搜索/AI 跳转、⑨ foliate 样式对象、⑩ foliate 桥的位置/目录那一半。**foliate 桥剩下的一小块不抽**：`foliateRef` 是导航 / 标尺 / 朗读共用的句柄，`clearPaintedMatches` 与 `foliateRulerLines` 只是它的两个窄封装 —— 抽走等于换个名字，不减少任何耦合。**下一个候选是 PDF**，但出口 24 里有 8 处在脊柱里（`goTo` 直接写 `el.scrollTop = clamped * pdfSlotH.current`，`applyPending` 读 `suppressPdfPending`），要做就得像自动滚动那样让脊柱改调 hook，收益与风险得先量。**「位置与导航」「标注桥接」整簇不做**（分别是脊柱与页面中心 UI 状态）。**那条 flake 已治**，见下一节。**清单里还剩下的**：P1-12（侧边栏两个按钮做同一件事 —— 要你先在「合并成一个」和「保留两个但视觉分家」之间选一个）、P2-15/16/17/18（Rust 拆分阈值、`backend.ts` 规模、29 MB 字体子集、没有 i18n）。
 
 ### 实施中发现的两条 flake（与本次改动无关，但值得记）
 
@@ -280,13 +282,16 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 - **收益**：不管结论是哪个，都会让「为什么这里有个 `text-black`」从谜团变成记录；如果是情况 ②，这是深色主题下唯一的硬伤。
 - **验证**：`pnpm tauri build --bundles app` 后打开，系统外观切深色，截排序下拉的图。
 
-### P1-9 错误状态把后端原始错误直接贴给用户
+### P1-9 错误状态把后端原始错误直接贴给用户　【已修复】
 
 - **问题**：`ShelfGrid` 的错误分支把 `String(error)` 当成 `description` 渲染。数据库锁、文件缺失、迁移失败都会原样出现在「书架暂时打不开」下面。
 - **位置**：`src/features/library/ShelfGrid.tsx:69-78`
 - **方向**：给一句人话 + 一个「重试」按钮（`refetch`），原始错误收进可展开的 `<details>` 或「复制诊断信息」。`ErrorBoundary` 的 `scope` 已有，可以复用同一种语气。
 - **收益**：失败时用户知道下一步做什么，而不是读一段英文。
 - **验证**：临时让 `book_list` 返回 `Err` 看一眼。
+- **实际做法**：方向原样落地 —— 人话 + 主按钮「重试」+ `<details>诊断信息</details>`，异常走 `describeError()`（`lib/log.ts` 已有的那个，它把 unknown `throw` 收成 `{name, message}`，所以一个被 throw 的字符串也能读出「Error: …」而不是丢掉标签）。「重试」接的是 `books.refetch()`：**这里没有地址栏可以刷新，重发那次查询是读者唯一能做的事**。
+  **一个补充判断**：`<details>` 里那行诊断**不是**「随便塞进去就行」—— 第一版漏了 `text-left`，折行后逐行居中，而异常是「一句话里带一个路径」，居中折行恰恰是最难读的一种排法。截图核对时才发现，单测看不见这个。
+- **验证（按方向里那句「看一眼」做的）**：`page.addInitScript` 把 `books` 存储的只读事务改成抛错（写事务放行，所以应用照常启动，坏的是书架这一次读取），跑起来截了两张图 —— 收起时可见文本里**没有**原始错误，展开后出现 `UnknownError: simulated: …`。另外 `src/features/library/ShelfGrid.test.tsx` 新增 4 条单测钉住分工：人话是 description、重试接 `onRetry`、异常被折叠但仍在、字符串 throw 也能读。四次定向变异全被抓（把 `String(error)` 放回 description / 去掉 `onClick` / 删掉整个 `<details>` / 折叠里改回 `String(error)`）。
 
 ### P1-10 搜索无结果时没有出口　【已修复】
 
