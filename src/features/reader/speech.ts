@@ -177,6 +177,45 @@ export function washSpan(
   return { start: unit.start + trim + span.start, end: unit.start + trim + span.end };
 }
 
+/** A run to wash, tagged with the block whose text it is measured against. */
+export interface WashSpan extends Span {
+  source: number;
+}
+
+/**
+ * The needle a PDF's text layer is anchored on: the run the voice is on,
+ * re-expressed as offsets into the block's own trimmed text.
+ *
+ * The two extraction pipelines disagree on whitespace — the text layer keeps
+ * the leading spaces HTML pretty-printing leaves behind, the spoken block is
+ * already trimmed — so the wash cannot be handed over as-is: the page anchors
+ * on the block's *trimmed* text and paints the offsets within it, which means
+ * shifting by the leading whitespace and clipping to the trailing one.
+ *
+ * `block` is the paragraph's raw text, needed only at paragraph level, where
+ * the needle is the whole block rather than the utterance: a sentence-level
+ * wash is measured against the utterance's own text, so its offsets already
+ * start at the utterance's zero.
+ */
+export function pdfWashNeedle(
+  wash: WashSpan | null,
+  unit: SpeechUnit,
+  block: string | undefined,
+  wholeBlock: boolean,
+): { text: string; from: number; to: number } | null {
+  // A wash belonging to another block is not this page's to paint.
+  if (wash === null || wash.source !== unit.source) return null;
+  const raw = wholeBlock ? (block ?? unit.text) : unit.text;
+  const origin = wholeBlock ? 0 : unit.start;
+  const lead = raw.length - raw.trimStart().length;
+  const trail = raw.length - raw.trimEnd().length;
+  const from = Math.max(wash.start - origin, lead) - lead;
+  const to = Math.min(wash.end - origin, raw.length - trail) - lead;
+  const text = raw.trim();
+  if (text.length === 0 || from < 0 || to <= from || to > text.length) return null;
+  return { text, from, to };
+}
+
 /** One word of an utterance, and where it starts. */
 export interface WordCue extends Span {
   /** Seconds from the start of the clip. */

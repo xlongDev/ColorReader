@@ -4,6 +4,7 @@ import { segmentText } from "./selection";
 import {
   cursorAt,
   formatClock,
+  pdfWashNeedle,
   queuePosition,
   speechSeconds,
   speechUnits,
@@ -185,6 +186,70 @@ describe("washSpan", () => {
     // The blind-voice fallback: the engine hands its whole text over.
     const span = washSpan(0, UNIT, { unit: 0, charIndex: 0, charLength: 24 }, "word");
     expect(span).toEqual({ start: 0, end: 24 });
+  });
+});
+
+describe("pdfWashNeedle", () => {
+  /** A block as the extracted text layer holds it: indented, and trailing
+   *  whitespace of its own — neither of which the spoken unit carries. */
+  const BLOCK = "  他说了什么。他关上了窗。  ";
+  const UNIT_IN_BLOCK: SpeechUnit = { text: "他说了什么。", source: 0, start: 2, end: 8 };
+
+  it("measures a sentence wash against the utterance's own text", () => {
+    // The page anchors on the sentence, so a sentence-level wash is already at
+    // the utterance's zero and needs no shifting at all.
+    expect(pdfWashNeedle({ source: 0, start: 2, end: 8 }, UNIT_IN_BLOCK, BLOCK, false)).toEqual({
+      text: "他说了什么。",
+      from: 0,
+      to: 6,
+    });
+  });
+
+  it("shifts a block-level wash past the indentation the text layer keeps", () => {
+    // The wash covers the whole block, but the page paints inside the block's
+    // *trimmed* text, so the two leading spaces come off both ends of it.
+    const wash = { source: 0, start: 0, end: BLOCK.length };
+    expect(pdfWashNeedle(wash, UNIT_IN_BLOCK, BLOCK, true)).toEqual({
+      text: "他说了什么。他关上了窗。",
+      from: 0,
+      to: 12,
+    });
+  });
+
+  it("clips a block-level wash that runs into the trailing whitespace", () => {
+    const block = "他说了什么。   ";
+    const unit: SpeechUnit = { text: "他说了什么。", source: 0, start: 0, end: 6 };
+    expect(pdfWashNeedle({ source: 0, start: 0, end: block.length }, unit, block, true)).toEqual({
+      text: "他说了什么。",
+      from: 0,
+      to: 6,
+    });
+  });
+
+  it("paints nothing when the range falls entirely inside the whitespace", () => {
+    const block = "他说了什么。   ";
+    const unit: SpeechUnit = { text: "他说了什么。", source: 0, start: 0, end: 6 };
+    // Clipping leaves an empty run, and an empty run is not a mark.
+    expect(pdfWashNeedle({ source: 0, start: 7, end: 9 }, unit, block, true)).toBeNull();
+  });
+
+  it("refuses a wash belonging to another block", () => {
+    expect(pdfWashNeedle(null, UNIT_IN_BLOCK, BLOCK, false)).toBeNull();
+    expect(pdfWashNeedle({ source: 1, start: 0, end: 6 }, UNIT_IN_BLOCK, BLOCK, false)).toBeNull();
+  });
+
+  it("measures against the utterance when the block's own text is missing", () => {
+    // Paragraph level with no block in hand: the range is clipped to the
+    // utterance rather than allowed past its end.
+    expect(pdfWashNeedle({ source: 0, start: 0, end: 24 }, UNIT_IN_BLOCK, undefined, true)).toEqual(
+      {
+        text: "他说了什么。",
+        from: 0,
+        to: 6,
+      },
+    );
+    // A blanked-out block (a wallpaper marker's paragraph) has nothing to mark.
+    expect(pdfWashNeedle({ source: 0, start: 0, end: 6 }, UNIT_IN_BLOCK, "", true)).toBeNull();
   });
 });
 
