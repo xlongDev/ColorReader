@@ -13,15 +13,17 @@
 
 校验链全绿：`cargo fmt --check` / `clippy --all-targets -D warnings` / `cargo test`（418 条）/ prettier / `oxlint .`（0 warning）/ `tsc` / vitest 548 条 / playwright 170 条。新增的统计断言验过在旧口径上会红（`reading: 2` vs `1`）。
 
-**第四批第一笔已落地**（2026-09-28，改动留在工作区，未提交）：P2-14 的第 ④ 笔 —— 朗读引擎整层抽成 `src/hooks/useReadAloud.ts`，`ReaderPage.tsx` 净 −423 行（3348 → 2925），顺带把 `pdfWash` 的偏移算术移进 `speech.ts` 并补上它此前没有的单测。校验链全绿：prettier / oxlint 0 warning（257 文件）/ tsc / vitest 563 → **588 条** / `vite build` / playwright 170 条（169 passed / 1 failed，是既有 flake，见下）。详见 P2-14 的 PR#4。
+**第四批第一笔已落地**（2026-09-28，改动留在工作区，未提交）：P2-14 的第 ④ 笔 —— 朗读引擎整层抽成 `src/hooks/useReadAloud.ts`，`ReaderPage.tsx` 净 −423 行（3348 → 2925），顺带把 `pdfWash` 的偏移算术移进 `speech.ts` 并补上它此前没有的单测。校验链全绿：prettier / oxlint 0 warning（257 文件）/ tsc / vitest 563 → **588 条** / `vite build` / playwright 170 条（169 passed / 1 failed，是既有 flake，见下）。详见 P2-14 的 PR#4。**已提交并推送**（`7b07b8a` + `17e676d` + `5fb1bc6`，三笔按文件拆开，逐笔 `git archive` 检出验过 tsc / oxlint）。
+
+**第四批第二笔已落地**（2026-09-28，改动留在工作区，未提交）：量完发现计划里的 ⑤「位置与导航」不能成笔（46 处引用在簇外），改做接口真正窄的 **实测页数** → `src/hooks/usePageCounter.ts`，`ReaderPage.tsx` 删 96 / 加 25。详见 P2-14 的 PR#5。
 
 ### 实施中发现的两条 flake（与本次改动无关，但值得记）
 
 - `cargo test` 里 `dictionary::tests::the_system_dictionary_answers_a_real_word`（macOS 系统词典 FFI）**在并行负载下会偶发失败**：同一次全量里它失败，单独跑 3/3 过，HEAD 全量也过，重跑全量又 418/0。它只在 macOS 上编译，CI 跑 ubuntu 不受影响，**但本地全量跑会出现假红**。
-- `e2e/selection-toolbar.spec.ts:101`：**挂过两次**（第一批之后、PR#3 之后），两次都在 `openBook` 的 `page.goto("/?demo=1")` 上超时（webkit），两次单独跑都 6/6 过。签名一致、且第一次发生时 PR#2/PR#3 都还不存在 —— 确认是既有的 flake。
-- `e2e/image-lightbox.spec.ts:148`：断言 `download="fig3.png"` 失败。**这条挂过两次** —— 一次在 PR#3 之后，一次在 PR#4 的全量里（`169 passed / 1 failed`），两次单独跑都是 `--repeat-each=2` 8/8 过，且两次的失败行与断言完全相同。是这一批里复发率最高的一条。
+- `e2e/selection-toolbar.spec.ts:101`：**挂过三次**（第一批之后、PR#3 之后、PR#5 之后），三次都在 `openBook` 的 `page.goto("/?demo=1")` 上超时（webkit，`navigating to "http://localhost:4173/?demo=1", waiting until "load"`），三次单独跑都过（6/6、6/6、4/4）。签名一致、且第一次发生时 PR#2/PR#3 都还不存在 —— 确认是既有的 flake。
+- `e2e/image-lightbox.spec.ts:148`：断言 `download="fig3.png"` 失败。**这条挂过两次** —— 一次在 PR#3 之后，一次在 PR#4 的全量里（`169 passed / 1 failed`），两次单独跑都是 `--repeat-each=2` 8/8 过，且两次的失败行与断言完全相同。
 
-**四次全量、三条不同的 spec** —— 大约 1/170 的 flake 率，都出现在 10 分钟以上的长跑里（`image-lightbox` 占两次）。建议单独处理（重试或放宽等待），不要当成「改动引入的回归」；判定办法一律是「单独跑也过」。CI 机器负载低，可能一次都不会遇到，但本地全量会遇到。
+**五次全量、三条不同的 spec** —— 大约 1/170 的 flake 率，都出现在 10 分钟以上的长跑里（`selection-toolbar:101` 占三次、`image-lightbox:148` 占两次）。**两次都不是「同一处又坏了」，而是「每次换个地方坏」**，这正是负载型 flake 的形状。建议单独处理（重试或放宽等待），不要当成「改动引入的回归」；判定办法一律是「单独跑也过」，并看清它红的时候机器在干什么。
 
 - **`e2e/reading-ruler.spec.ts:547`（`dragging the band…`）—— 这条不一样，单独跑也会红，所以做了一次完整对照。**
   它断言的是「拖动之后重新打开，带要停在拖到的位置」，容差只有两个行高，而它要做「拖动 → 松开 → 重新打开 → 再量」，是最吃时序的一条。
@@ -41,7 +43,7 @@
 
   结论：负载相关的时序 flake，不是回归。**但它是这一批里最该先修的**（唯一一条单独跑都红过的），要么加重试，要么把容差从「两个行高」放宽到「三个」，要么在量之前等排版稳定。
 
-**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— P2-14 的 ④（朗读引擎）已完成，**只剩 ⑤ 位置与导航这一笔**，也就是这批里唯一直接动 `goTo` 的那笔（三条纪律见 PR#3 末尾）。
+**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— P2-14 的 ④（朗读引擎）与 ⑤ 的第一组（实测页数）已完成，**下一笔是自动滚动**（出口 2、入口 6，同一把尺子量出来的最优候选），再往后是 foliate 桥 / PDF / 标注桥接；**「位置与导航」整簇不做**（见 PR#5：它 46 处引用在簇外，是脊柱不是叶子）。
 
 ---
 
@@ -277,7 +279,7 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 
 所以 PR#2 改成只拿睡眠定时器 —— 引擎边上唯一自洽的一块：两个状态、一个 ref 镜像、一个到点超时、一个 `choose`，对外只和 `stop()` 单向耦合（用回调传进去，倒置依赖）。
 
-顺序因此改为：① 速度统计（已完成）→ ② 睡眠定时器（已完成）→ ③ 面板（已完成）→ ④ 朗读引擎（已完成）→ ⑤ 位置与导航。**只剩最后一笔。**
+顺序因此改为：① 速度统计（已完成）→ ② 睡眠定时器（已完成）→ ③ 面板（已完成）→ ④ 朗读引擎（已完成）→ ⑤ 位置与导航 —— **量完发现它不能成笔**（见 PR#5），改做接口真正窄的那几组。
 
 两件事值得留着：
 
@@ -333,6 +335,42 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 **另外把 `pdfWash` 的偏移算术搬进了 `speech.ts`**（`pdfWashNeedle` + `WashSpan` 类型，新增 6 条单测）。这不是为了拆而拆：那 17 行是「文字层保留了缩进、朗读块已被 trim」之间的坐标换算，**此前零单测**，而它错了的后果是 PDF 上的词高亮错位。搬家顺手给了它夹具。验过断言有效：把 `- lead` 两处去掉，`shifts a block-level wash past the indentation…` 与 `clips a block-level wash that runs into the trailing whitespace` 两条立刻红。
 
 校验：prettier / oxlint 0 warning（257 文件）/ tsc / vitest 563 → **588 条** / `vite build` / playwright 170 条。新增 25 条单测（hook 19 + `pdfWashNeedle` 6）。三次定向变异都恰好打红对应的那条：跨引擎换声去掉中止 → 那条红；`playFromStart` 的依赖冻成 `[]` → 那条红；`restartSpeech` 丢掉引擎报的位置 → 那条红。
+
+#### PR#5（2026-09-28）：⑤「位置与导航」量完**不能成笔** —— 它测出来的是页面脊柱，改做接口真正窄的那一组（`usePageCounter`）
+
+计划里 ⑤ 的目标是「`goTo` / `chapterIdx` / `locateChapter` / 翻页手势状态 → 一个 `useReaderNavigation`」。**按声明顺序量完，这一组不能成笔，理由和 PR#3 是同一种，只是更硬**：
+
+| 符号              | 全文件引用 | 其中在簇外 |
+| ----------------- | ---------- | ---------- |
+| `chapterIdx`      | 69         | **46**     |
+| `fraction`        | 33         | 15         |
+| `goTo`            | 25         | 14         |
+| `flip`            | 24         | 8          |
+| `stepChapter`     | 9          | 3          |
+| `displayProgress` | 3          | 2          |
+| `nav`             | 2          | 1          |
+
+`chapterIdx` 一项就有 46 处引用在簇外 —— 批注 effect、段落渲染、书签、页眉、笔记页全都按它渲染。把这一簇做成 hook，等于把声明抬一层、再把 85 处引用穿回去：**那不是分离，是搬家加一层间接**。`goTo` 是全局导航入口这条（PR#3 末尾写过的风险）本身就说明它是脊柱，不是一片叶子。
+
+量法：把簇的自身行区间列出来，逐符号打印「总引用 / 区间外引用」的行号。**这把尺子比「看着像不像一个关注点」可靠得多** —— PR#3 和这一笔都靠它纠正了分组。
+
+**改做接口真正窄的。** 同一把尺子量剩下的几组：
+
+| 组       | 出口                                                                          | 入口      | 判定                                                                  |
+| -------- | ----------------------------------------------------------------------------- | --------- | --------------------------------------------------------------------- |
+| 实测页数 | **2**（`shownPages` 3 处 JSX、`countChapterPages` 5 处调用，全在 `onScroll`） | 11 个纯值 | 做                                                                    |
+| 自动滚动 | 2（`autoScrollOn`、`setAutoScrolling`）                                       | 6         | 下一笔候选                                                            |
+| 阅读标尺 | —                                                                             | —         | `rulerDirRef` 6 处散在 `flip` / `onScroll` / 位置 effect 里，不是叶子 |
+
+这一笔取 **实测页数**：`tallyRef` / `densityKeyRef` / `bookPages` / `densityKey` / `shownPages` / `countChapterPages` 合成 `usePageCounter`，`ReaderPage` 删 96 / 加 25。
+
+三个判断：
+
+- **`densityKey` 留在页面、以字符串传进去。** 它是「哪些设置会让页码作废」的缓存键，而页面本来就把那 8 个设置握在手里；让 hook 去拼这个键要传 8 个原始值，比传一个字符串更差。它的**语义**（换布局就作废统计）写在 hook 里。
+- **`chapterMissing` 这个名字是刻意的，而且它带出一条发现。** 原来的守卫写的是 `chapterData === null`（不是 `== null`），而 `useChapter` 的 data 在首次请求落定之前是 **`undefined`** —— `undefined === null` 为 false，所以**首次加载期间那个守卫并不生效**。后果很轻（`observeUnit` 按章号覆盖，下一帧的真实测量会把它换掉，最坏是一次瞬时错误的估算），但它是真的。**这一笔不修**：收紧它等于改「哪些测量会被记录」，那是个需要证据的问题，不是搬家的顺带。测试写死在旧语义上，发现记在这里。
+- **用别名让消费点一字不改**（`const { shown: shownPages, count: countChapterPages } = pageCounter`）：`countChapterPages` 进 `onScroll` 的依赖数组，必须是普通标识符；名字保住了，`onScroll` 与 JSX 的 diff 就是 0 行。
+
+校验：prettier / oxlint 0 warning（259 文件）/ tsc / vitest 588 → **599 条** / `vite build` / playwright 170 条。新增 11 条单测。**变异验证抓到我自己的一个恒真断言**：`stays silent until the chapter body is on screen` 原本只断言 `shown` 为 `null`，而那条用例没给 `pageInfo` —— 所以 `shown` 本来就是 `null`，把守卫整个删掉它照样绿。改成「守卫在时读到单位自己的计数器 `1 / 4`、不在时读到估算 `3 / 24`」之后变异才被抓到。**恒真断言不只会漏，还会让人以为已经覆盖了。**
 
 ### P2-15 Rust 侧已经越过文档自己定的拆分阈值
 
