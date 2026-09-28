@@ -93,6 +93,7 @@ import {
   useSetProgress,
 } from "@/hooks/useReader";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
+import { useImageLightbox } from "@/hooks/useImageLightbox";
 import { usePageCounter } from "@/hooks/usePageCounter";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
@@ -112,7 +113,6 @@ import type { PdfOutlineItem } from "@/lib/pdf";
 import type {
   Annotation,
   BookFormat,
-  BookImage,
   Bookmark,
   ChapterMeta,
   LocalFont,
@@ -643,19 +643,6 @@ function ReaderView({
    */
   const densityKey = `${layoutMode}|${marginX}|${marginY}|${fullscreen}|${fontSize}|${lineHeightIdx}|${paraGapIdx}|${indent}`;
 
-  /**
-   * The picture the lightbox viewer is on, by the container path it came from
-   * rather than by its position in a list.
-   *
-   * A position is only meaningful against one list, and this side has two: the
-   * book's own, which the importer collects, and the one built from what has
-   * been clicked, for a row written before the book's list existed. Keeping a
-   * position meant the click computed it against one and the viewer rendered
-   * the other, so clicking the third picture opened the first. A path is also
-   * what survives the book's list *arriving* — `bookImages` is a query — where
-   * an index would silently point at whatever moved into its place.
-   */
-  const [lightboxPath, setLightboxPath] = useState<string | null>(null);
   const flipHintTimer = useRef<number | null>(null);
   // WebKit synthesizes mousemoves when content scrolls under a resting cursor
   // (keyboard and wheel flips), which would wake the flip chrome. Only real
@@ -730,100 +717,30 @@ function ReaderView({
   // has to be a plain identifier there.
   const { shown: shownPages, count: countChapterPages } = pageCounter;
   const bookImagesQuery = useBookImages(bookId);
-  // The browser has no `book_images`/`book_asset` behind it: pictures arrive
-  // already decoded by foliate, so each click registers its entry path, the
-  // blob URL foliate made and the section it lives in, and the lightbox reads
-  // the URL back instead of fetching. The desktop's own list is used whenever
-  // it has one.
-  const [webImages, setWebImages] = useState<{
-    list: BookImage[];
-    urls: Record<string, string>;
-  }>({ list: [], urls: {} });
-  const bookImages =
-    bookImagesQuery.data && bookImagesQuery.data.length > 0 ? bookImagesQuery.data : webImages.list;
-  /** Where `lightboxPath` sits in the list the viewer renders — the only list
-   *  its position can mean anything against. `-1` for a path that is not in it
-   *  (a picture registered from a click before the book's list arrived, or one
-   *  the importer skipped), which closes the viewer rather than showing
-   *  somebody else's picture. */
-  const lightboxIdx =
-    lightboxPath === null ? null : bookImages.findIndex((image) => image.path === lightboxPath);
-
-  /** Opens the picture at `at` — a position in the same list the viewer
-   *  renders, which is what the prose path's taps and the viewer's own arrows
-   *  both hand over. */
-  const openImageAt = useCallback(
-    (at: number) => setLightboxPath(bookImages[at]?.path ?? null),
-    [bookImages],
-  );
-
-  /** Steps the viewer `delta` pictures through the book, staying inside it. */
-  const stepLightbox = useCallback(
-    (delta: number) => {
-      setLightboxPath((current) => {
-        if (current === null) return null;
-        const at = bookImages.findIndex((image) => image.path === current);
-        const next = bookImages[Math.min(Math.max(at + delta, 0), bookImages.length - 1)];
-        return next?.path ?? current;
-      });
-    },
-    [bookImages],
-  );
+  /**
+   * The book's pictures, and which one the lightbox viewer is on.
+   *
+   * The importer's list wins whenever it has one; the browser build has no
+   * `book_images`/`book_asset` behind it, so pictures arrive already decoded by
+   * foliate and each click registers its entry path, the blob URL foliate made
+   * and the section it lives in.
+   *
+   * Aliased to the names the four call sites already used — the keyboard
+   * handler, the chapter view, foliate's click, and the viewer itself.
+   */
+  const {
+    images: bookImages,
+    urls,
+    path: lightboxPath,
+    index: lightboxIdx,
+    openAt: openImageAt,
+    openFromBook: openBookImage,
+    step: stepLightbox,
+    close: closeLightbox,
+  } = useImageLightbox(bookImagesQuery.data);
 
   const fontsQuery = useFonts();
   const fonts = fontsQuery.data ?? NO_FONTS;
-  // A picture clicked inside the book's own rendering. foliate reports the
-  // archive entry it came from (see `FoliateBookView`), which is what the
-  // book-wide list is keyed by — and, since the entry *is* what the viewer
-  // holds, also what it opens on. An entry the importer skipped (rare: an image
-  // used only by the book's own CSS) has no row here, and nothing opens rather
-  // than the first picture opening in its place.
-  const openBookImage = useCallback(
-    (path: string, src?: string, section?: number) => {
-      // The browser branch runs first and returns. The URL foliate decoded for
-      // this very picture is the one thing this side has that the book's own
-      // list does not, so registering it is the whole branch: where the viewer
-      // opens is `lightboxPath`'s business, and the list it lands in is
-      // `bookImages`'.
-      if (src !== undefined) {
-        setWebImages((current) => {
-          const known = current.list.some((image) => image.path === path);
-          return {
-            list: known
-              ? current.list
-              : [...current.list, { chapterIdx: section ?? 0, path }].toSorted(
-                  (a, b) => a.chapterIdx - b.chapterIdx,
-                ),
-            urls: { ...current.urls, [path]: src },
-          };
-        });
-        setLightboxPath(path);
-        return;
-      }
-      const exact = bookImages.findIndex((image) => image.path === path);
-      // The importer stores the entry name as it appears in the container
-      // while foliate decodes percent escapes before resolving, so a CJK or
-      // spaced filename can arrive spelled the two ways. Same file, same
-      // basename — only the encoding differs.
-      const decoded = (value: string) => {
-        try {
-          return decodeURIComponent(value);
-        } catch {
-          return value;
-        }
-      };
-      const index =
-        exact >= 0
-          ? exact
-          : bookImages.findIndex(
-              (image) =>
-                image.path.slice(image.path.lastIndexOf("/") + 1) ===
-                decoded(path).slice(path.lastIndexOf("/") + 1),
-            );
-      if (index >= 0) setLightboxPath(bookImages[index]!.path);
-    },
-    [bookImages],
-  );
 
   // Set when the voice rolls off the end of a chapter, consumed by the
   // position effect below once the next chapter has rendered.
@@ -1249,7 +1166,7 @@ function ReaderView({
     const onKey = (event: KeyboardEvent) => {
       if (lightboxPath !== null) {
         if (event.key === "Escape") {
-          setLightboxPath(null);
+          closeLightbox();
         } else if (event.key === "ArrowRight") {
           stepLightbox(1);
         } else if (event.key === "ArrowLeft") {
@@ -1373,6 +1290,7 @@ function ReaderView({
     lineHeightIdx,
     lightboxPath,
     lookup,
+    closeLightbox,
     // Not `panel`: the handler asks `closePanel()` whether it consumed the
     // key, and that callback keeps one identity across renders — so this
     // listener no longer re-binds every time a drawer opens or closes.
@@ -2632,13 +2550,13 @@ function ReaderView({
             <ImageLightbox
               bookId={bookId}
               images={bookImages}
-              urls={webImages.urls}
+              urls={urls}
               chapters={chapters}
               index={lightboxIdx}
-              onClose={() => setLightboxPath(null)}
+              onClose={closeLightbox}
               onIndex={openImageAt}
               onJump={(target) => {
-                setLightboxPath(null);
+                closeLightbox();
                 goTo(target);
               }}
             />
