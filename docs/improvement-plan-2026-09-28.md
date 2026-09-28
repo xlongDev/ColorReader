@@ -7,13 +7,20 @@
 
 ## 进展
 
-**第一批已落地**（2026-09-28，改动留在工作区，未提交）：P0-1（4 处焦点环）、P0-2（含 `NotesPage` 上同一处图标）、P0-3、P0-4、P1-10、P1-11 —— 9 个文件 +145/−12。
+**第一批已提交并推送**（`58d8535` + `f9d519d`，本文档本身是第二笔）：P0-1（4 处焦点环）、P0-2（含 `NotesPage` 上同一处图标）、P0-3、P0-4、P1-10、P1-11 —— 9 个文件 +145/−12。校验链全绿（prettier / oxlint 0 error / tsc / vitest 548 条 / playwright 170 条）。
 
-校验链全绿：`prettier --check .` / `oxlint .`（0 error，251 文件）/ `tsc --noEmit` / `vitest run`（53 文件 548 条）/ `playwright test`（170 条，chromium+webkit 各 85，11 分钟）。新加的 4 条断言都验过「在未修代码上会红」，且失败信息与本文声称的成因一致。
+**第二批已落地**（2026-09-28，改动留在工作区，未提交）：P0-5、P1-6、P1-7、P1-13 —— 11 个文件。Rust 侧新增 `book_delete_many` / `book_set_favorite_many` 两条命令（含 `bindings.ts` 重新生成），前端批量条改走它们；`usePdfCovers` 改成串行 + 单次失效；时钟从 `LibraryPage` 下推到 `ShelfHeader`；`LibraryStats.reading` 的口径收紧。
 
-两点如实说明：① `SourceDialog` 的两处焦点环是**最后一笔**改动，在 e2e 之后才落，没有重跑那 11 分钟——它是纯类名改动，而且 `grep` 确认**没有任何 spec 触及这个对话框**（顺带说明：书源对话框目前是零 e2e 覆盖）；② `TtsPlayer` 那处经复核不属于本条，见下面 P0-1 的订正。
+校验链全绿：`cargo fmt --check` / `clippy --all-targets -D warnings` / `cargo test`（418 条）/ prettier / `oxlint .`（0 warning）/ `tsc` / vitest 548 条 / playwright 170 条。新增的统计断言验过在旧口径上会红（`reading: 2` vs `1`）。
 
-**待做**：P0-5 起属第二批（要动 Rust 签名）。
+### 实施中发现的两条 flake（与本次改动无关，但值得记）
+
+- `cargo test` 里 `dictionary::tests::the_system_dictionary_answers_a_real_word`（macOS 系统词典 FFI）**在并行负载下会偶发失败**：同一次全量里它失败，单独跑 3/3 过，HEAD 全量也过，重跑全量又 418/0。它只在 macOS 上编译，CI 跑 ubuntu 不受影响，**但本地全量跑会出现假红**。
+- `e2e/selection-toolbar.spec.ts:101` 在 10 分钟的全量里 `page.goto` 超时一次，单独跑双引擎 6/6 过。
+
+两条都建议单独处理（`#[ignore]` 或加重试），不要把它们当成「改动引入的回归」。
+
+**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）。
 
 ---
 
@@ -123,11 +130,13 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 - **收益**：书架上不再出现读起来像故障的字符串；顺带把 P0-3 的空槽路径变成常见路径而不是边角情况。
 - **验证**：`format.test.ts` 加一条归一断言。
 
-### P0-5 批量收藏 / 批量删除是 N 次 IPC + N 次全库失效
+### P0-5 批量收藏 / 批量删除是 N 次 IPC + N 次全库失效　【已修复】
 
 - **问题**：`LibraryPage.tsx:305-314` 把批量动作拆成循环：`for (const id of ids) deleteBook.mutate(id)`。而 `useDeleteBook` / `useSetFavorite` 的 `onSettled` 都是 `invalidateQueries({ queryKey: ["books"] })`。选 20 本删 = **20 次 IPC 往返 + 20 次列表失效**（并发时 TanStack 会把进行中的请求取消重来，于是列表被反复重取）。后端已经有 `annotation_delete_many` 这个先例，书这边没有。
 - **位置**：`src/features/library/LibraryPage.tsx:305-314`；`src/hooks/useLibrary.ts:113-129`；`src-tauri/src/commands/book.rs`
 - **方向**：Rust 加 `book_delete_many(ids)` 与 `book_set_favorite_many(ids, favorite)`（一个事务里循环，复用现有 repository 函数），前端两个 mutation 改成单次调用 + 单次 invalidate。或者更省事的最小版本：前端 `Promise.all` + 手动只在最后 `invalidateQueries` 一次。
+- **实际做法**：走了完整版。`repository` 里的 `delete` / `set_favorite` 拆出 `delete_one` / `set_favorite_one`，`*_many` 收 `&Transaction`（`Transaction` deref 到 `Connection`，所以内部照旧调 `*_one`，SQL 只有一份）；`library::delete_books` 用 `with_tx`，**文件在提交之后才 unlink**，所以失败的批次既不留「有行无文件」也不留「有文件无行」。前端批量条改走新命令，单本删除对话框仍走 `book_delete`。
+- **一处清单里没写、但必须一起做的**：浏览器端（IndexedDB）后端也要实现这两个命令——`ipc.ts` 的 `LOCAL_COMMANDS` 加上、`lib/local/backend.ts` 里实现。漏了的话 web 构建会去调 `commands` 里那个 `__TAURI_INVOKE` 而炸掉。e2e 打的正是 web 构建，所以 `shelf-manage.spec.ts` 能抓到，但不该指望它。
 - **收益**：批量删除从「N 次往返 + 列表抖动 N 次」变成一次事务；`clippy` 与 e2e 都不受影响（批量条已有 e2e `shelf-manage.spec.ts`）。
 - **验证**：`cargo test`（加一条 many 的用例）+ `shelf-manage.spec.ts` 复跑。
 
@@ -135,7 +144,7 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 
 ## 三、体验优化（小改动，直接可感知）
 
-### P1-6 PDF 封面回填没有并发上限，且每本书都失效一次列表
+### P1-6 PDF 封面回填没有并发上限，且每本书都失效一次列表　【已修复】
 
 - **问题**：`usePdfCovers` 对**所有**缺封面的 PDF 同时发起 `renderFirstPagePng → bookCoverSave → invalidateQueries(["books"])`。截图那个书库里 PDF 占多数，首次进书架等于并发解析几十个 PDF、并触发几十次列表失效。仓库里已经量过单本封面回填 126ms（WebKit），乘几十就是肉眼可见的一段卡顿。
 - **位置**：`src/hooks/useLibrary.ts:50-67`
@@ -143,7 +152,7 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 - **收益**：首次进入书架不再抖动；「刚导入一批 PDF 后书架卡一下」的来源就是这里。
 - **验证**：DevTools Performance 里数一次挂载期的 `bookCoverSave` 调用峰值；或临时打点统计 `getDocument` 并发数。
 
-### P1-7 书架每分钟被整体重渲染一次
+### P1-7 书架每分钟被整体重渲染一次　【已修复】
 
 - **问题**：`LibraryPage` 用 `useState(new Date())` + `setInterval(60_000)` 驱动问候语，而 `now` 只被 `ShelfHeader` 用。React Compiler 未启用，于是每分钟整个页面（含窗口化后的所有 `BookCard`）重渲染一次。
 - **位置**：`src/features/library/LibraryPage.tsx:174`、`:223-226`、`:382`；`src/features/library/ShelfHeader.tsx:33`
@@ -191,11 +200,12 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 - **收益**：footer 的四个按钮从「两个是同一件事」变成四个各自清楚的动作。
 - **验证**：`settings-rail.spec.ts` 复跑（它测的就是这块）。
 
-### P1-13 「在读 27」的口径比读者以为的宽
+### P1-13 「在读 27」的口径比读者以为的宽　【已修复】
 
 - **问题**：截图右下「共 39 本 · 在读 27 · 收藏 6」。SQL 是 `SUM(last_read_at IS NOT NULL AND progress < 0.999)`（`library/repository.rs:165`），也就是「**打开过且没读完**」。打开一本书、翻一页就关掉，也算在读。39 本里 27 本「在读」会让这个数字失去意义。
 - **位置**：`src-tauri/src/library/repository.rs:161-172`；展示 `src/features/library/ShelfToolbar.tsx:256-261`
 - **方向**：两条路。① 改口径：`progress > 0 AND progress < 0.999`（真的翻过）；② 改文案：把「在读」改成「未读完」。②零风险，①更符合直觉。我建议 ①+② 一起做，因为 27/39 这个比例说明它现在报的不是读者以为的东西。
+- **实际做法**：只做了 ①。口径收紧之后「在读」这个词本身就准确了，②随之不必要——**先把数字弄对，再决定要不要改词**。`LibraryStats.reading` 的文档注释同步改写，它会随 `bindings.ts` 生成到前端类型上（`cargo test` 的 `export_bindings` 会把它带过去），所以这一条改动在两端都留下了痕迹。
 - **收益**：书架头部的三个数字变成可信的概览。
 - **验证**：`repository.rs` 已有 `stats` 的单测，改断言即可。
 
