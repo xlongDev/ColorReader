@@ -92,6 +92,7 @@ import {
   useReaderToc,
   useSetProgress,
 } from "@/hooks/useReader";
+import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { usePageCounter } from "@/hooks/usePageCounter";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
@@ -100,7 +101,6 @@ import { useSleepTimer } from "@/hooks/useSleepTimer";
 import {
   LINE_HEIGHTS,
   PARA_GAPS,
-  foldScrollDelta,
   useReaderSettings,
   pageIsNight,
   HIGHLIGHT_COLORS,
@@ -382,7 +382,6 @@ function ReaderView({
   } | null>(null);
   // Query the search panel opens with (the toolbar's 搜索 action).
   const [searchSeed, setSearchSeed] = useState("");
-  const [autoScrolling, setAutoScrolling] = useState(false);
 
   // A followed link into a book that renders as prose opens on the chapter that
   // quotes the passage. The chapter is all this path can promise: an
@@ -473,15 +472,6 @@ function ReaderView({
    * the book's own `dir` plumbed out of the renderer.
    */
   const readsLeftward = useFoliate && settings.vertical;
-  /**
-   * Auto-scroll, as the flow sees it.
-   *
-   * The flag is the reader's; this is what it can currently do. A paged
-   * layout has no rolling viewport, so the same flag is simply inert there
-   * and resumes when the reader comes back — the footer's button is disabled
-   * in that layout, so the one thing nobody can do is start it from there.
-   */
-  const autoScrollOn = autoScrolling && !paged;
   const scrollRef = useRef<HTMLDivElement>(null);
   // The reading viewport: the box the reading ruler is positioned against,
   // which is the pane below the header rather than the window.
@@ -840,6 +830,28 @@ function ReaderView({
   const autoAdvance = useRef(false);
 
   /**
+   * Auto-scroll. Declared here rather than beside the other reading settings
+   * because `goTo` below clears it on a chapter jump, and the loop needs the
+   * layout refs this far down.
+   *
+   * Destructured to the names the two call sites already used: the footer's
+   * props are unchanged, and `stopAutoScroll` is a plain identifier for
+   * `goTo`'s dependency list.
+   */
+  const {
+    on: autoScrollOn,
+    toggle: toggleAutoScroll,
+    stop: stopAutoScroll,
+  } = useAutoScroll({
+    paged,
+    speed: autoScrollSpeed,
+    useFoliate,
+    layoutModeRef,
+    foliateRef,
+    scrollRef,
+  });
+
+  /**
    * The page the reader is on, read by `goTo` rather than the page number it
    * closes over. A held turn reverts through a `goTo` built *before* the turn
    * moved the page, and one reading its own captured number answers "already
@@ -862,7 +874,7 @@ function ReaderView({
         setChapterIdx(clamped);
         setFraction(0);
         setDisplayProgress(at);
-        setAutoScrolling(false);
+        stopAutoScroll();
         foliateRef.current?.goToFraction(at);
         return;
       }
@@ -891,10 +903,10 @@ function ReaderView({
       setProgress({ progress });
       setDisplayProgress(progress);
       setFraction(0);
-      setAutoScrolling(false);
+      stopAutoScroll();
       if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
     },
-    [chapterIdxRef, chapters, isPdf, layoutModeRef, setProgress, stop, useFoliate],
+    [chapterIdxRef, chapters, isPdf, layoutModeRef, setProgress, stop, stopAutoScroll, useFoliate],
   );
 
   /** Jumps to a fraction inside a chapter, used by bookmarks. */
@@ -1397,63 +1409,6 @@ function ReaderView({
     onNext: () => pageStep(1),
     onPrev: () => pageStep(-1),
   });
-
-  // Auto-scroll, scroll layout: advances the viewport down the flow until it
-  // runs out. Read off `autoScrollOn` rather than the bare flag: a paged
-  // layout has no flow to roll, so switching there suspends it instead of
-  // leaving a flag that nothing is acting on.
-  useEffect(() => {
-    if (!autoScrollOn) return;
-    let raf = 0;
-    let last = performance.now();
-    let carry = 0;
-    const step = (now: number) => {
-      if (layoutModeRef.current !== "scroll") {
-        setAutoScrolling(false);
-        return;
-      }
-      const dt = Math.min((now - last) / 1000, 0.25);
-      last = now;
-      if (useFoliate) {
-        // foliate owns the scrollport; the sub-pixel remainder rides its
-        // composited transform so slow speeds still creep forward.
-        const fold = foldScrollDelta(autoScrollSpeed, dt, carry);
-        carry = fold.carry;
-        const handle = foliateRef.current;
-        if (!handle) {
-          setAutoScrolling(false);
-          return;
-        }
-        if (fold.delta !== 0) handle.scrollByPx(fold.delta, fold.carry);
-        if (handle.bookEnd()) {
-          setAutoScrolling(false);
-          return;
-        }
-        raf = requestAnimationFrame(step);
-        return;
-      }
-      const el = scrollRef.current;
-      if (!el) {
-        setAutoScrolling(false);
-        return;
-      }
-      // The fractional step, not the whole pixel it folds to. Truncating to
-      // 1 px is what made 慢 stutter: at 20 px/s a frame advances a third of
-      // a pixel, so the folded version moves once every third frame — 27
-      // one-pixel hops a second instead of a glide. The engine snaps the
-      // offset to *device* pixels, which is half a CSS pixel on a 2× screen,
-      // and a sub-pixel assignment still lands there from every frame.
-      el.scrollTop += autoScrollSpeed * dt;
-      const max = el.scrollHeight - el.clientHeight;
-      if (el.scrollTop >= max - 1) {
-        setAutoScrolling(false);
-        return;
-      }
-      raf = requestAnimationFrame(step);
-    };
-    raf = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(raf);
-  }, [autoScrollOn, autoScrollSpeed, useFoliate, layoutModeRef]);
 
   const saveProgress = useCallback(
     (frac: number) => {
@@ -2195,7 +2150,7 @@ function ReaderView({
       speechRate={speechRate}
       paged={paged}
       autoScrolling={autoScrollOn}
-      onToggleAutoScroll={() => setAutoScrolling((on) => !on)}
+      onToggleAutoScroll={toggleAutoScroll}
       onStepChapter={stepChapter}
       chapterIdx={chapterIdx}
       total={total}
