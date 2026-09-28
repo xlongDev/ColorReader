@@ -360,3 +360,11 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     boundaryAt,
   };
 }
+
+/**
+ * What one engine binding hands back. Named so the reader-level layer above it
+ * (`useReadAloud`) can take the binding as an argument rather than owning it:
+ * the reader itself needs `stop` before that layer can exist, because every
+ * chapter change stops the voice.
+ */
+export type Tts = ReturnType<typeof useTts>;
