@@ -72,7 +72,7 @@ import { rsvpTokens } from "@/features/reader/rsvp";
 import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionToolbar";
 import type { AnnotationStyle } from "@/types/ipc";
 import { useSpeechVoices, useTts } from "@/features/reader/tts";
-import { TtsPlayer, type SleepChoice, type SleepTimer } from "@/features/reader/TtsPlayer";
+import { TtsPlayer } from "@/features/reader/TtsPlayer";
 import { defaultVoice, engineOf } from "@/features/reader/voice";
 import { cursorAt, speechUnits, washSpan, type SpeechUnit } from "@/features/reader/speech";
 import {
@@ -104,6 +104,7 @@ import {
   useSetProgress,
 } from "@/hooks/useReader";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
+import { useSleepTimer } from "@/hooks/useSleepTimer";
 import {
   LINE_HEIGHTS,
   PARA_GAPS,
@@ -325,15 +326,9 @@ function ReaderView({
   const [playerOpen, setPlayerOpen] = useState(false);
   /** Speed reading: takes over the reading area while it is on. */
   const [rsvpOpen, setRsvpOpen] = useState(false);
-  const [sleep, setSleep] = useState<SleepTimer>(null);
-  // Mirrored into a ref: `onChapterEnd` is a dependency of the position effect
-  // below, and a fresh identity there would re-apply the pending scroll — which
-  // would yank the page back to the top of the chapter the moment a timer is
-  // armed.
-  const sleepRef = useRef<SleepTimer>(null);
-  useEffect(() => {
-    sleepRef.current = sleep;
-  }, [sleep]);
+  /** The sleep timer and the two ways it changes. It is handed the voice's
+   *  `stop` because stopping is its job and the voice is not its business. */
+  const { sleep, choose: chooseSleep, clearIfChapterEnded } = useSleepTimer(stop);
 
   const annotations = annotationsQuery.data;
   const bookmarks = bookmarksQuery.data;
@@ -1071,9 +1066,7 @@ function ReaderView({
 
   const onChapterEnd = useCallback(() => {
     // A "read to the end of the chapter" timer ends the session here.
-    if (sleepRef.current?.kind === "chapter") {
-      sleepRef.current = null;
-      setSleep(null);
+    if (clearIfChapterEnded()) {
       stop();
       return;
     }
@@ -1081,7 +1074,7 @@ function ReaderView({
       autoAdvance.current = true;
       goTo(chapterIdx + 1);
     }
-  }, [chapterIdx, chapters.length, goTo, stop]);
+  }, [chapterIdx, chapters.length, goTo, stop, clearIfChapterEnded]);
 
   // Set when the voice rolls off the end of a chapter, consumed by the
   // position effect below once the next chapter has rendered.
@@ -1590,32 +1583,6 @@ function ReaderView({
   useEffect(() => {
     setVoice(effectiveVoice);
   }, [effectiveVoice, setVoice]);
-
-  // An armed sleep timer is a plain timeout: the card renders the countdown
-  // from the same deadline, so there is nothing to tick here.
-  useEffect(() => {
-    if (sleep?.kind !== "minutes") return;
-    const id = window.setTimeout(
-      () => {
-        stop();
-        setSleep(null);
-      },
-      Math.max(sleep.endsAt - Date.now(), 0),
-    );
-    return () => window.clearTimeout(id);
-  }, [sleep, stop]);
-
-  const chooseSleep = (choice: SleepChoice) => {
-    if (choice === "off") {
-      setSleep(null);
-      return;
-    }
-    if (choice === "chapter") {
-      setSleep({ kind: "chapter" });
-      return;
-    }
-    setSleep({ kind: "minutes", minutes: choice, endsAt: Date.now() + choice * 60_000 });
-  };
 
   /** The foliate wash for a unit: the word the engine last reported, in the
    *  block's own coordinates. `null` while the engine has not said where the

@@ -21,6 +21,24 @@
 
 **三次全量、三条不同的 spec 各挂一次** —— 大约 1/170 的 flake 率，都出现在 10 分钟以上的长跑里。建议单独处理（重试或放宽等待），不要当成「改动引入的回归」；判定办法一律是「单独跑也过」。CI 机器负载低，可能一次都不会遇到，但本地全量会遇到。
 
+- **`e2e/reading-ruler.spec.ts:547`（`dragging the band…`）—— 这条不一样，单独跑也会红，所以做了一次完整对照。**
+  它断言的是「拖动之后重新打开，带要停在拖到的位置」，容差只有两个行高，而它要做「拖动 → 松开 → 重新打开 → 再量」，是最吃时序的一条。
+
+  | 版本                     | 结果                                                     |
+  | ------------------------ | -------------------------------------------------------- |
+  | 全量（PR#2 版本）        | 169 passed / 1 failed（就是它）                          |
+  | 单独全 spec（PR#2）      | 15 passed / 1 failed → 再跑一次 **16/16 全过**           |
+  | 单条 ×3（PR#2）          | 过、过、**红**，耗时 9.7 → 12.8 → 16.2s（负载在爬）      |
+  | 单条 ×6 chromium（PR#2） | **6/6 全过**，每条 ~10s                                  |
+  | 全 spec（HEAD）          | **16 passed**                                            |
+  | 单条 ×3（HEAD）          | **3/3 全过**，chromium 14.4 / 13.6 / 13.4s（比上面还慢） |
+
+  累计：PR#2 版本 3 红 / 12 次，HEAD 0 红 / 4 次，**但三次红全部落在机器最重的窗口**（紧随 271s 的 vitest 与 13.4 分钟的全量 e2e；其中一次尝试直接被 SIGTERM 杀掉）。机器空下来后两个版本都全绿。
+
+  改动本身按检视是**行为中性**的：被移动的那个 effect 在没有定时器时是空转的（`if (sleep?.kind !== "minutes") return`），`clearIfChapterEnded` 身份稳定，`onChapterEnd` 的依赖集合换名不换重建条件。
+
+  结论：负载相关的时序 flake，不是回归。**但它是这一批里最该先修的**（唯一一条单独跑都红过的），要么加重试，要么把容差从「两个行高」放宽到「三个」，要么在量之前等排版稳定。
+
 **待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）。
 
 ---
@@ -250,6 +268,23 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 两个判断值得留着：**采样点必须留在 `saveProgress` 里** —— 一次进度保存**就是**一段阅读的结束（位置已知、时钟诚实），所以 hook 暴露一个 `report(charsNow)` 让调用方喂，而不是自己起 effect 定时采样。**`reportPace` 的 identity 随 `readingSpeed` 变**（它闭包里读了 `readingSpeed`），所以 `saveProgress` 的 deps 从 `[…, readingSpeed, setReadingSpeed, recordPace]` 变成 `[…, reportPace]` —— 依赖换了名字但**重建条件没变**（原来就依赖 `readingSpeed`），这一步要显式确认，不然会悄悄改变重渲染次数。
 
 校验：prettier / oxlint 0 warning / tsc / vitest 548 条 / playwright 170 条（全量里 `image-lightbox.spec.ts:148` 又挂了一次，单独跑 4 次全过，是 flake）。
+
+#### PR#2（2026-09-28，已落地未提交）：`useSleepTimer`
+
+**这一笔换了目标。** 原计划 PR#2 是「朗读」，理由是「三个 state 只喂给 `TtsPlayer` / `RsvpPlayer`」。量完发现**那个判断是错的**：`playerOpen` / `rsvpOpen` 确实只在 JSX 里用，但 `sleep` 和 `effectiveVoice` 深插在朗读引擎里 —— `sleep` 被一个 effect 消费（到点 `stop()`），`sleepRef` 被 `onChapterEnd` 读，`effectiveVoice` 驱动 `setVoice` 并与 `speechQueue` / `activeUnits`（930–1953 行那套引擎）耦合。**「朗读」不是一片叶子，它就是引擎本身**，一笔拆不完。
+
+所以 PR#2 改成只拿睡眠定时器 —— 引擎边上唯一自洽的一块：两个状态、一个 ref 镜像、一个到点超时、一个 `choose`，对外只和 `stop()` 单向耦合（用回调传进去，倒置依赖）。
+
+顺序因此改为：① 速度统计（已完成）→ ② 睡眠定时器（已完成）→ ③ 面板 → ④ 朗读引擎 → ⑤ 位置与导航。
+
+两件事值得留着：
+
+- **`clearIfChapterEnded` 返回布尔**，而不只是清掉：`onChapterEnd` 要在「刚结束的这个章节是定时器指名的那个」时 `stop()` 并**提前返回**（不自动翻章），所以「清掉了没有」必须在返回值里，不然调用方得去读 ref —— 而 ref 是刻意藏进 hook 的。
+- **两个回调必须身份稳定**，而且这条有测试守着。原因写在代码注释里：`onChapterEnd` 是位置 effect 的依赖，那里换个身份就会重放 pending scroll，把页面拽回本章开头 —— 一 arm 定时器就发生。新测试里 `keeps both callbacks identity-stable` 就是钉这个，验过把 `useCallback` 去掉它会红。
+
+**顺带补上了它此前的零覆盖**：睡眠定时器没有任何单测，也没有一个 e2e spec 提过 睡眠/定时/sleep。新增 `src/hooks/useSleepTimer.test.ts`（7 条：到点触发并自清、章节定时器不挂超时、章节结束时被消费且只消费一次、分钟定时器不被章节结束消费、off 清空、身份稳定）。
+
+校验：prettier / oxlint 0 warning / tsc / vitest **555 条** / playwright 170 条。这一轮的 e2e 见下面 `reading-ruler` 那条 —— 为它做过一次完整的对照实验。
 
 **风险写在前面**：`goTo` 是全局导航入口（TOC / 书签 / 搜索 / 进度 / 深链 / RAG 引用都走它），而且它已经踩过两次闭包陈旧值的坑 —— 一次是 `goTo` 的「已经在这一页」判断读了旧的 `chapterIdx`，导致回弹失效；一次是手势状态放在 effect 的局部变量里，翻页本身会重建 effect、把状态冲掉。拆这一块必须守住三条：手势状态用 `useRef`；任何「现在在哪一页」的判断读 ref 而不读闭包；cleanup 里不结算。
 
