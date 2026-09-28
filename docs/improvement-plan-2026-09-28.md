@@ -13,13 +13,15 @@
 
 校验链全绿：`cargo fmt --check` / `clippy --all-targets -D warnings` / `cargo test`（418 条）/ prettier / `oxlint .`（0 warning）/ `tsc` / vitest 548 条 / playwright 170 条。新增的统计断言验过在旧口径上会红（`reading: 2` vs `1`）。
 
+**第四批第一笔已落地**（2026-09-28，改动留在工作区，未提交）：P2-14 的第 ④ 笔 —— 朗读引擎整层抽成 `src/hooks/useReadAloud.ts`，`ReaderPage.tsx` 净 −423 行（3348 → 2925），顺带把 `pdfWash` 的偏移算术移进 `speech.ts` 并补上它此前没有的单测。校验链全绿：prettier / oxlint 0 warning（257 文件）/ tsc / vitest 563 → **588 条** / `vite build` / playwright 170 条（169 passed / 1 failed，是既有 flake，见下）。详见 P2-14 的 PR#4。
+
 ### 实施中发现的两条 flake（与本次改动无关，但值得记）
 
 - `cargo test` 里 `dictionary::tests::the_system_dictionary_answers_a_real_word`（macOS 系统词典 FFI）**在并行负载下会偶发失败**：同一次全量里它失败，单独跑 3/3 过，HEAD 全量也过，重跑全量又 418/0。它只在 macOS 上编译，CI 跑 ubuntu 不受影响，**但本地全量跑会出现假红**。
 - `e2e/selection-toolbar.spec.ts:101`：**挂过两次**（第一批之后、PR#3 之后），两次都在 `openBook` 的 `page.goto("/?demo=1")` 上超时（webkit），两次单独跑都 6/6 过。签名一致、且第一次发生时 PR#2/PR#3 都还不存在 —— 确认是既有的 flake。
-- `e2e/image-lightbox.spec.ts:148`：另一次全量里断言 `download="fig3.png"` 失败，单独跑（`--repeat-each=2`）8/8 过。
+- `e2e/image-lightbox.spec.ts:148`：断言 `download="fig3.png"` 失败。**这条挂过两次** —— 一次在 PR#3 之后，一次在 PR#4 的全量里（`169 passed / 1 failed`），两次单独跑都是 `--repeat-each=2` 8/8 过，且两次的失败行与断言完全相同。是这一批里复发率最高的一条。
 
-**三次全量、三条不同的 spec 各挂一次** —— 大约 1/170 的 flake 率，都出现在 10 分钟以上的长跑里。建议单独处理（重试或放宽等待），不要当成「改动引入的回归」；判定办法一律是「单独跑也过」。CI 机器负载低，可能一次都不会遇到，但本地全量会遇到。
+**四次全量、三条不同的 spec** —— 大约 1/170 的 flake 率，都出现在 10 分钟以上的长跑里（`image-lightbox` 占两次）。建议单独处理（重试或放宽等待），不要当成「改动引入的回归」；判定办法一律是「单独跑也过」。CI 机器负载低，可能一次都不会遇到，但本地全量会遇到。
 
 - **`e2e/reading-ruler.spec.ts:547`（`dragging the band…`）—— 这条不一样，单独跑也会红，所以做了一次完整对照。**
   它断言的是「拖动之后重新打开，带要停在拖到的位置」，容差只有两个行高，而它要做「拖动 → 松开 → 重新打开 → 再量」，是最吃时序的一条。
@@ -39,7 +41,7 @@
 
   结论：负载相关的时序 flake，不是回归。**但它是这一批里最该先修的**（唯一一条单独跑都红过的），要么加重试，要么把容差从「两个行高」放宽到「三个」，要么在量之前等排版稳定。
 
-**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）。
+**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— P2-14 的 ④（朗读引擎）已完成，**只剩 ⑤ 位置与导航这一笔**，也就是这批里唯一直接动 `goTo` 的那笔（三条纪律见 PR#3 末尾）。
 
 ---
 
@@ -275,7 +277,7 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 
 所以 PR#2 改成只拿睡眠定时器 —— 引擎边上唯一自洽的一块：两个状态、一个 ref 镜像、一个到点超时、一个 `choose`，对外只和 `stop()` 单向耦合（用回调传进去，倒置依赖）。
 
-顺序因此改为：① 速度统计（已完成）→ ② 睡眠定时器（已完成）→ ③ 面板 → ④ 朗读引擎 → ⑤ 位置与导航。
+顺序因此改为：① 速度统计（已完成）→ ② 睡眠定时器（已完成）→ ③ 面板（已完成）→ ④ 朗读引擎（已完成）→ ⑤ 位置与导航。**只剩最后一笔。**
 
 两件事值得留着：
 
@@ -307,6 +309,30 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 **风险写在前面**：`goTo` 是全局导航入口（TOC / 书签 / 搜索 / 进度 / 深链 / RAG 引用都走它），而且它已经踩过两次闭包陈旧值的坑 —— 一次是 `goTo` 的「已经在这一页」判断读了旧的 `chapterIdx`，导致回弹失效；一次是手势状态放在 effect 的局部变量里，翻页本身会重建 effect、把状态冲掉。拆这一块必须守住三条：手势状态用 `useRef`；任何「现在在哪一页」的判断读 ref 而不读闭包；cleanup 里不结算。
 
 **为什么这一轮没开工**：每笔都要一次 11 分钟的全量 e2e 才算验完，一个会话装不下「读 3000 行 + 抽 + 验 + 修」；而且第 ④ 笔是最容易出事的那笔，不该在赶进度的时候做。缝已经标好了，可以一笔一笔来。
+
+#### PR#4（2026-09-28，已落地未提交）：`useReadAloud` —— 朗读引擎整层搬走，ReaderPage 3348 → 2925
+
+`ReaderPage.tsx` 删 488 / 加 65（净 −423），新增 `src/hooks/useReadAloud.ts` 615 行（含注释）+ `useReadAloud.test.ts` 351 行。搬走的是：语音解析（`effectiveVoice`）、两个播放器表面（`playerOpen` / `rsvpOpen` / `rsvpWords`）、朗读队列（`speechQueue` / `foliateUnits` / `activeUnits`）、wash（`span` / `pdfWash` / 逐词收窄）、跟随 effect、foliate 接续（`readFoliateOnwards` / `continueFoliate`）、以及整套传输（`restartSpeech` / `applySettings` / `seek` / `step` / `skip` / `toggle` / `speakFromSelection`）。
+
+**边界是被一个环决定的，不是被「像不像一个关注点」决定的。** `goTo` 每次换章都调 `stop()`，所以页面必须先拿到 `stop`；而这个 hook 又需要页面的 `onChapterEnd`（换章后自动续读），`onChapterEnd` 建在 `goTo` 之上。两头都要对方 —— 破环的办法是**把 `useTts` 留在页面、把整个 tts 对象传进 hook**（`tts: Tts`，新增的类型别名就是为此）。另一条路是把 `onChapterEnd` 藏进 `useRef` 再在 effect 里同步，**没选**：那是在已经出过两次陈旧闭包的地方再加一份看不见的状态。
+
+留在页面里的三样东西，各有理由：
+
+- **`useTts` 本身** —— 见上面的环。
+- **`onChapterEnd` / `autoAdvance` / `applyPending`** —— 语音翻章要落在「新章节 body 出现的同一帧」，那是**位置 effect 的帧**（`requestAnimationFrame` 里 `measureTail` → `applyPending` → 中继标尺）。把重启挪到 hook 自己的 effect 里会改变 `scrollIntoView` 与 `applyPosition` 的先后，所以只暴露一个 `playFromStart()` 让页面在自己的帧里调。
+- **JSX** —— `TtsPlayer` / `RsvpPlayer` 要 `title` / `coverUrl` / `headerChapter` / `surface.background` / `stepChapter`，都是页面的事。hook 只出逻辑，页面只出标记。
+
+三个判断值得留着：
+
+- **`playFromStart` 必须身份稳定，而且这条有测试钉着。** 它进了 `applyPending` 的依赖数组，而 `applyPending` 是位置 effect 的依赖 —— 换个身份就会重放 pending scroll，把页面拽回本章开头。同时它**不能是冻住的**：它闭包了队列与 `onChapterEnd`，所以换章必须换新。两条断言一正一反（`keeps playFromStart stable…` / `rebuilds playFromStart when its continuation changes`）。**顺带一件事**：因为 `playFromStart` 已经把队列和 `onChapterEnd` 收进自己的身份，`applyPending` 的依赖数组里就不该再列 `onChapterEnd` 与 `speechQueue` —— 我照旧列了，`oxlint` 的 `exhaustive-deps` 判为多余依赖，**它是对的**，已删并留了注释说明为什么这里看着少了一项。
+- **`span` 用解构别名拿回页面**（`const { span: speechSpan, playFromStart } = readAloud`）。理由是同一个：依赖数组里写 `readAloud.span` 是成员表达式，静态检查不了；而依赖整个 `readAloud` 对象会让 `renderedParagraphs` 每次渲染都重算。别名一取，`renderedParagraphs` 的**函数体与依赖数组一个字都不用改**。
+- **页面里两份 `readAloud` 成员不该进依赖数组**，这是上面那条的普遍形式。写代码时先把「谁进依赖数组」列出来再动手，比写完再让 lint 报错省事。
+
+**一处 effect 顺序变化，判断为惰性**：hook 在页面里被调用的位置（`onChapterEnd` 之后、`applyPending` 之前）决定了它的四个 effect（`setRate` / `setVoice` / 跟随 / 逐词）现在**排在位置 effect 之前**，原先排在之后。惰性的理由：位置 effect 的实体工作在 `requestAnimationFrame` 里，而跟随 effect 的 `scrollIntoView` 是同步的 —— 两者的**实际执行先后没变**；且这组 effect 只写 tts 的 ref 与 DOM 句柄，页面在它之后声明的 effect 没有一个读朗读状态。
+
+**另外把 `pdfWash` 的偏移算术搬进了 `speech.ts`**（`pdfWashNeedle` + `WashSpan` 类型，新增 6 条单测）。这不是为了拆而拆：那 17 行是「文字层保留了缩进、朗读块已被 trim」之间的坐标换算，**此前零单测**，而它错了的后果是 PDF 上的词高亮错位。搬家顺手给了它夹具。验过断言有效：把 `- lead` 两处去掉，`shifts a block-level wash past the indentation…` 与 `clips a block-level wash that runs into the trailing whitespace` 两条立刻红。
+
+校验：prettier / oxlint 0 warning（257 文件）/ tsc / vitest 563 → **588 条** / `vite build` / playwright 170 条。新增 25 条单测（hook 19 + `pdfWashNeedle` 6）。三次定向变异都恰好打红对应的那条：跨引擎换声去掉中止 → 那条红；`playFromStart` 的依赖冻成 `[]` → 那条红；`restartSpeech` 丢掉引擎报的位置 → 那条红。
 
 ### P2-15 Rust 侧已经越过文档自己定的拆分阈值
 
