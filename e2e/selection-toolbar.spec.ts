@@ -33,8 +33,44 @@ const PANEL = "[data-toolbar-rev]";
  *  edit mode, which is where 删除笔记 has anything to act on. */
 const MARK = '[data-reading-content] a[href^="#note-"]';
 
+/** Room for the retried navigation below. The first attempt spends its whole
+ *  budget before the second one starts, and the body of each test still needs
+ *  the file's original 30s on top of that. */
+test.describe.configure({ timeout: 60_000 });
+
+/**
+ * The first navigation, with one retry.
+ *
+ * This one `goto` has timed out four times across long runs — always WebKit,
+ * always the first navigation of this file, and always with the file passing
+ * when it is run on its own afterwards. Normal here is 75–120 ms and the page
+ * pulls eight resources, so a 30 s miss is not slowness, it is a navigation
+ * that never lands. A wedged navigation does not recover by waiting; a fresh
+ * one does, which is all "rerun it and it passes" was ever doing by hand.
+ *
+ * `domcontentloaded` rather than `load` because `load` is not a wait this test
+ * has any use for: the shelf is built in JS, and every step below is either an
+ * auto-waiting locator or an explicit `waitForSelector` for the prose. Measured
+ * on the built app, `load` arrives ~40 ms after `domcontentloaded`, so nothing
+ * is gained by holding the navigation open for it — only the exposure to
+ * whatever is stalling.
+ *
+ * The cause is still unproven. Eighty fresh-context navigations in a single
+ * WebKit process and the page in isolation both came back in under 120 ms every
+ * time, so neither "the browser has been up a while" nor "a font is slow"
+ * explains it. What is proven is that a second attempt lands.
+ */
+async function gotoDemo(page: Page) {
+  const options = { waitUntil: "domcontentloaded" } as const;
+  try {
+    await page.goto("/?demo=1", { ...options, timeout: 12_000 });
+  } catch {
+    await page.goto("/?demo=1", options);
+  }
+}
+
 async function openBook(page: Page) {
-  await page.goto("/?demo=1");
+  await gotoDemo(page);
   await page.getByRole("button", { name: BOOK }).first().click();
   await page.waitForSelector("[data-reading-content] p", { timeout: 15_000 });
   await page.waitForTimeout(900);
