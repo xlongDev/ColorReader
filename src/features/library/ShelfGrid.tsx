@@ -1,13 +1,14 @@
 import type { RefObject } from "react";
-import { BookOpen, CaretDown, Sparkle, X } from "@phosphor-icons/react";
+import { ArrowClockwise, BookOpen, CaretDown, Sparkle, X } from "@phosphor-icons/react";
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton } from "@/components/glass/button";
 import { BookCard } from "@/features/library/BookCard";
 import { SECTION_HEADER_H, type BookSection } from "@/features/library/group";
 import type { useShelfWindow } from "@/hooks/useShelfWindow";
-import { staggerDelay, useMotion } from "@/lib/motion";
 import { cn } from "@/lib/cn";
+import { describeError } from "@/lib/log";
+import { staggerDelay, useMotion } from "@/lib/motion";
 import type { BookSummary } from "@/types/ipc";
 
 /**
@@ -40,6 +41,7 @@ export function ShelfGrid({
   onEditMeta,
   onImport,
   onClearSearch,
+  onRetry,
 }: {
   pending: boolean;
   error: unknown;
@@ -65,17 +67,42 @@ export function ShelfGrid({
   onImport: () => void;
   /** Clear the shelf's search, from the empty state that search produced. */
   onClearSearch: () => void;
+  /** Ask the shelf's own query again, from the error state. */
+  onRetry: () => void;
 }) {
   const m = useMotion();
 
   if (pending) return <ShelfSkeleton />;
   if (error) {
+    // The raw rejection used to *be* the description: a database lock or a
+    // missing file, in English, under a heading that says 书架暂时打不开. What
+    // a reader needs first is the one action that can help, so the sentence is
+    // written here and the exception is folded away — it is still what makes a
+    // report actionable, and it is the only thing on this screen that can be
+    // copied into one.
+    const { name, message } = describeError(error);
     return (
       <EmptyState
         className="min-h-[30vh]"
         icon={<BookOpen size={26} weight="duotone" />}
         title="书架暂时打不开"
-        description={String(error)}
+        description="书库这次没有读出来。先重试一次；如果还是不行，多半是本地的数据库或书籍文件出了问题。"
+        action={
+          <>
+            <GlassButton variant="primary" size="md" onClick={onRetry}>
+              <ArrowClockwise size={14} /> 重试
+            </GlassButton>
+            <details className="mt-4">
+              <summary className="text-text-3 cursor-pointer text-xs select-none">诊断信息</summary>
+              {/* Centred block, left-aligned lines: an exception is a sentence
+                  with a path in it, and a wrapped one centred line by line is
+                  the one thing that makes it hard to read. */}
+              <p className="text-text-3 mx-auto mt-2 max-w-[46ch] text-left font-mono text-[11.5px] leading-relaxed break-all">
+                {name}: {message}
+              </p>
+            </details>
+          </>
+        }
       />
     );
   }

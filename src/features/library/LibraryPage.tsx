@@ -457,6 +457,11 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           // to be the 13px ✕ inside the search field and nothing else, so a
           // reader who searched from the 标签 shelf had no visible next step.
           onClearSearch={() => update({ search: "" })}
+          // The shelf's own way out of a failed read. The query is the only
+          // thing that can be wrong here, and re-asking it is the one action
+          // that can help — a reader cannot retry by reloading, this is a
+          // desktop app with no address bar.
+          onRetry={() => void books.refetch()}
         />
       </div>
 
