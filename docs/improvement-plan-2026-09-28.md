@@ -25,17 +25,22 @@
 
 **第四批第六笔已落地**（2026-09-29，改动留在工作区，未提交）：foliate 桥量完确认「不能顺手做完」（174 行、入口 22、出口里 `foliateRef`×14 是共享句柄、入口里有四个脊柱 setter），先取它最窄的一片 —— 交给渲染器的**样式对象** → `src/features/reader/useFoliateStyle.ts`，`ReaderPage.tsx` 删 46 / 加 13。详见 P2-14 的 PR#9。
 
-**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— 已落地 ④ 朗读引擎、⑤ 实测页数、⑥ 自动滚动、⑦ 图片/灯箱、⑧ 搜索/AI 跳转、⑨ foliate 样式对象。**下一个是 foliate 桥的主体**（位置/目录那一半：`rememberFoliateLocation` + 四个 foliate 计数器 + 三个点击回调），它需要单独一轮；之后是 PDF。**「位置与导航」「标注桥接」整簇不做**（分别是脊柱与页面中心 UI 状态）。另外**那条 flake 该治了**：`selection-toolbar.spec.ts:101` 挂了四次、签名一致，建议给第一次 `page.goto` 加重试或放宽 timeout，别再靠「单独跑一遍确认」。
+**第四批第七笔已落地**（2026-09-29，改动留在工作区，未提交）：foliate 桥量完确认过的那笔大活 —— 它的**位置/目录那一半** → `src/features/reader/useFoliateBook.ts`，`ReaderPage.tsx` 删 173 / 加 72（2666 → 2565）。详见 P2-14 的 PR#10。**同一轮把那条 flake 治了**（`selection-toolbar.spec.ts:101`：第一次导航不再等 `load`，并加一次重试），见下面那节。
+
+**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— 已落地 ④ 朗读引擎、⑤ 实测页数、⑥ 自动滚动、⑦ 图片/灯箱、⑧ 搜索/AI 跳转、⑨ foliate 样式对象、⑩ foliate 桥的位置/目录那一半。**foliate 桥剩下的一小块不抽**：`foliateRef` 是导航 / 标尺 / 朗读共用的句柄，`clearPaintedMatches` 与 `foliateRulerLines` 只是它的两个窄封装 —— 抽走等于换个名字，不减少任何耦合。**下一个候选是 PDF**，但出口 24 里有 8 处在脊柱里（`goTo` 直接写 `el.scrollTop = clamped * pdfSlotH.current`，`applyPending` 读 `suppressPdfPending`），要做就得像自动滚动那样让脊柱改调 hook，收益与风险得先量。**「位置与导航」「标注桥接」整簇不做**（分别是脊柱与页面中心 UI 状态）。**那条 flake 已治**，见下一节。
 
 ### 实施中发现的两条 flake（与本次改动无关，但值得记）
 
 - `cargo test` 里 `dictionary::tests::the_system_dictionary_answers_a_real_word`（macOS 系统词典 FFI）**在并行负载下会偶发失败**：同一次全量里它失败，单独跑 3/3 过，HEAD 全量也过，重跑全量又 418/0。它只在 macOS 上编译，CI 跑 ubuntu 不受影响，**但本地全量跑会出现假红**。
 - `e2e/selection-toolbar.spec.ts:101`：**挂过四次**（第一批之后、PR#3 之后、PR#5 之后、PR#8 之后），**四次都是同一个签名**：webkit、`page.goto("http://localhost:4173/?demo=1")` 等 `load` 超时 30s，也就是那条用例的**第一次导航**；四次单独跑都过（6/6、6/6、4/4、4/4）。它是这套 e2e 里复发率最高的一条。
-- `e2e/image-lightbox.spec.ts:148`：断言 `download="fig3.png"` 失败。**这条挂过两次** —— 一次在 PR#3 之后，一次在 PR#4 的全量里（`169 passed / 1 failed`），两次单独跑都是 `--repeat-each=2` 8/8 过，且两次的失败行与断言完全相同。
+- `e2e/image-lightbox.spec.ts:148`：断言 `download="fig3.png"` 失败。**这条挂过两次** —— 一次在 PR#3 之后，一次在 PR#4 的全量里（`169 passed / 1 failed`），两次单独跑都是 `--repeat-each=2` 8/8 过，且两次的失败行与断言完全相同。**第三次出现在 PR#10 的全量里**（chromium，`169 passed / 1 failed`），单独跑 `--repeat-each=2` 仍然 **8/8 过**。
+  **这一次留下了 trace，机制查清了**（`trace: "retain-on-failure"` 只在失败时留存，所以前两次没有）。读 `trace.zip` 的动作日志：`img[data-path] >> nth=2`（`fig3.png`）的**点击是成功派发的**（`click action done`，无错误），随后 `保存图片` 那条 `expect` 等了 5003 ms 超时；而失败快照里**整个页面没有灯箱**（主文档与两个 section iframe 里 `保存图片` / `上一张` 各出现 0 次，图片仍在 iframe 里）—— 也就是**点了但应用没响应**，不是「打开了但内容不对」。
+  关键在动作耗时：`attempting click action` 到 `element is visible, enabled and stable` 之间等了 **20 秒**（61870 → 61890）。foliate 的 paginator 在那段时间里一直在重排（换列是 `transform`），Playwright 判定「稳定」后派发点击，而列又移走了 —— 这正是仓库里已经记过的那条：**点在已被移出视口的列上会静默无效**。所以这条的成因与 `selection-toolbar:101` **不同**：那条是导航没落地，这条是**点击落在移动中的分页列上**。
+  可能的改法（**未做**，见下）：`bookImage` 的轮询现在只要求「≥48px 且在视口内」，可以再加上「盒子连续两次采样不变」；但那只缩小竞态窗口，不消除它 —— Playwright 自己已经做过稳定性检查仍然丢掉了这一次。真正对症的是**点完验证灯箱开没开、没开就再点一次**（灯箱是关闭状态时可安全重试；打开状态下重试才是错的）。
 
-**七次全量、四条不同的 spec** —— 大约 1/170 的 flake 率，都出现在 10 分钟以上的长跑里（`selection-toolbar:101` 占四次、`image-lightbox:148` 占两次、`reading-ruler` 占两条）。**每次换个地方坏**，而不是「同一处又坏了」。建议单独处理（重试或放宽等待），不要当成「改动引入的回归」；判定办法一律是「单独跑也过」。
+**八次全量、四条不同的 spec** —— 大约 1/170 的 flake 率，都出现在 10 分钟以上的长跑里（`selection-toolbar:101` 占四次、`image-lightbox:148` 占三次、`reading-ruler` 占两条）。**每次换个地方坏**，而不是「同一处又坏了」。不要当成「改动引入的回归」；判定办法一律是「单独跑也过」。
 
-**「负载」不是完整解释，这一点要更正。** 我原先的记录说是负载（`reading-ruler` 那次 load 12.46 挂 2 条、PR#7 那次 load 5.08 全过）。但 PR#8 这次 `load average` 只有 **2.97**，照样挂一条 —— 而且**四次都是同一个签名**：webkit、那条用例的第一次 `page.goto` 等 `load` 超时。所以更像两件事叠在一起：① `reading-ruler` 那种是**时序断言**（容差两个行高），负载高就红；② `selection-toolbar:101` 这种是**长跑里 webkit 实例的第 N 次导航**——跟 CPU 无关，跟浏览器活了多久有关。要治的是第 ② 类：给第一次 `goto` 加重试或放宽 timeout，而不是继续靠「单独跑一遍确认」。
+**「负载」不是完整解释，这一点要更正。** 我原先的记录说是负载（`reading-ruler` 那次 load 12.46 挂 2 条、PR#7 那次 load 5.08 全过）。但 PR#8 这次 `load average` 只有 **2.97**，照样挂一条 —— 而且**四次都是同一个签名**：webkit、那条用例的第一次 `page.goto` 等 `load` 超时。所以更像两件事叠在一起：① `reading-ruler` 那种是**时序断言**（容差两个行高），负载高就红；② `selection-toolbar:101` 这种是**长跑里 webkit 实例的第 N 次导航** —— 跟 CPU 无关，跟浏览器活了多久有关。要治的是第 ② 类。
 
 - **`e2e/reading-ruler.spec.ts:547`（`dragging the band…`）—— 这条不一样，单独跑也会红，所以做了一次完整对照。**
   它断言的是「拖动之后重新打开，带要停在拖到的位置」，容差只有两个行高，而它要做「拖动 → 松开 → 重新打开 → 再量」，是最吃时序的一条。
@@ -56,6 +61,27 @@
   改动本身按检视是**行为中性**的：被移动的那个 effect 在没有定时器时是空转的（`if (sleep?.kind !== "minutes") return`），`clearIfChapterEnded` 身份稳定，`onChapterEnd` 的依赖集合换名不换重建条件。
 
   结论：负载相关的时序 flake，不是回归。**但它是这一批里最该先修的**（唯一一条单独跑都红过的），要么加重试，要么把容差从「两个行高」放宽到「三个」，要么在量之前等排版稳定。
+
+#### 治掉了第 ② 类：`selection-toolbar.spec.ts:101`（2026-09-29）
+
+**先量，再改。** 三条探针，全部在打包后的产物上跑：
+
+| 探针                                                | 结果                                                               |
+| --------------------------------------------------- | ------------------------------------------------------------------ |
+| 正常首次导航的 `domcontentloaded` / `load`          | **58–135 ms / 70–155 ms**，`load` 只比 DCL 晚约 40 ms              |
+| 首屏资源数                                          | **8 个**（html + css + 6 个 JS chunk）—— 582 个 woff2 一个都不在内 |
+| 同一个 webkit 进程里连跑 80 次「新 context + 导航」 | 最大 **71 ms**，`slow > 400ms` 的有 **0 次**                       |
+
+所以两条最顺手的解释都被否掉了：**不是字体慢**（`load` 等的根本不是它们），**也不是「浏览器活了很久就退化」**（80 次冷导航毫秒级）。而正常值 75–120 ms 对 30 s 超时是 **250 倍**的偏离 —— 那不是慢，是一次**没有落地的导航**。成因**仍未证明**（没有留下 trace：`trace: "retain-on-failure"` 只在失败时留存，而 `test-results/` 里那几次的产物已经不在）。
+
+**改法（`e2e/selection-toolbar.spec.ts`）：**
+
+1. **不再等 `load`。** 这个测试不需要它：假书架是 JS 现搭的，后面每一步要么是自动等待的定位器、要么是显式的 `waitForSelector`。测量显示 `load` 只多给 40 ms，却把整条用例暴露在「什么东西卡住」上。改成 `waitUntil: "domcontentloaded"`。
+2. **第一次导航加一次重试**（第一次 12 s，第二次用默认超时）。卡住的导航不会因为等而恢复，重开的会 —— 「重跑一遍就过」一直就是在手工做这件事。文件超时相应提到 60 s（`test.describe.configure`），因为第一次尝试会花掉它自己的整个预算。
+
+**验证**：该 spec 双引擎 **6/6 过**。重试路径本身也验过 —— 把第一次的 `timeout` 压到 `1`，让它在 `try` 里必定失败并紧跟着 `throw`（若 `goto` 真的成功就会被这个 `throw` 抓住）：测试仍然全绿，说明确实是 catch 接住后重试的，不是「1 ms 也能过」。之后恢复 12 s 再跑一遍，仍 6/6。
+
+**留下的一件不确定的事**：如果卡住的是**导航提交**本身（而不是 `load` 事件），那么去掉 `load` 帮不上忙，起作用的只有重试。这两条一起加，是因为我分不出是哪种 —— 重试对两种都成立，而 DCL 只是顺手把「测试根本用不到的等待」删掉。
 
 #### PR#8（2026-09-28）：`useHitJumps` —— 全表出口最少的一笔，而且它**不持有任何状态**
 
@@ -88,6 +114,25 @@
 校验：prettier / oxlint 0 warning（267 文件）/ tsc / vitest 628 → **633 条** / `vite build` / playwright **170/170 全过**（13.7 分钟，负载 6.39；覆盖这条路径的 `font-display.spec.ts` 与 `kindle-reading.spec.ts` 都在里面）。`ReaderPage.tsx` 删 46 / 加 13（2699 → 2666）。新增 5 条单测；五次定向变异全被抓（调色板不跟阅读面 / 反色跟随阅读面 / 行高越界不兜底 / 空来源留分隔符 / 竖排开关丢失）。
 
 **变异脚本自己也被抓了一次，值得记**：`invertImages` 与 `vertical` 在文件里各出现两次（对象字面量一次、依赖数组一次），我那个「`count(old) == 1` 才动手」的守卫因此**拒绝执行**这两个变异 —— 没有它，我会拿着「测试全绿」当成「变异被抓住」。**给变异脚本加唯一性断言，是让「没跑」和「跑了但没红」不可能混淆的最便宜手段。**
+
+#### PR#10（2026-09-29）：foliate 桥的位置/目录那一半 —— `useFoliateBook`
+
+PR#9 量完说这一簇「值得一笔大活，适合单独一轮」。这一轮就是那一笔，但**没有整簇搬走**：按「出口来自哪里」再量一次，它其实是两半。
+
+**留下的那一半（`foliateRef` 及其两个窄封装）不该抽。** `foliateRef`×14 是共享句柄 —— `goTo` / `flip` / `applyPending` / 朗读 / 标尺 / 面板都在用它；`clearPaintedMatches` 与 `foliateRulerLines` 只是它的两个具名封装（`useReaderPanels` 要前者身份稳定）。把这三样收进一个 hook，脊柱那边就得改成 `handle.current?.goToFraction()` 这种绕一层的写法，**耦合一点没少**，只是换了个名字。这不是「剩下的以后再抽」，是**判定不做**。
+
+**搬走的那一半**（`src/features/reader/useFoliateBook.ts`）：四个 foliate 状态（`toc` / `sectionLabel` / `page` / `bookPage`）、`rememberFoliateLocation` 与它自己的 debounce 定时器、三个视图回调（`select` / `annotationClick` / `anchor`）、两个派生 memo（`tocChapters` / `tocIdx`）与 `hasToc`。`ReaderPage.tsx` 删 173 / 加 72（**2666 → 2565**）。
+
+三个判断：
+
+- **入口里那四个脊柱 setter 是正常的，和 PDF 不是一回事。** PDF 那 8 处出口是**脊柱读写簇的内部**（`goTo` 直接 `el.scrollTop = clamped * pdfSlotH.current`），所以不做；这里的方向是反的 —— 页面把「怎么记位置」告诉 hook（`setChapterIdx` / `setDisplayProgress` / `setProgress`），hook 从不反过来动脊柱。**同一种耦合，方向决定它是不是问题。**
+- **`POSITION_SAVE_DELAY_MS` 搬进了 `progress.ts`。** 原来 `SAVE_DELAY_MS` 在 `ReaderPage` 里，现在两个模块（prose 的 `onScroll` 与 foliate 的位置上报）需要同一个值，而「一条规则写两遍」正是 PR#3 抓到过缺陷的形状。放在 `progress.ts` 是因为两边都已经 import 它。
+- **`PendingSelection` 从 `ReaderPage` 的内联类型提到 `selection.ts`。** 四个渲染器各建一个（prose、PDF 文字层、foliate 的两个回调），它本来就不是某一个模块的私有状态；hook 要建它，类型就得有个共享的家。
+- **顺手改了一个名字**：`useFoliateToc` → `hasToc`。它是个布尔（「foliate 的目录是不是该读的那份」），但顶着 `use*` 前缀，和 `useFoliate` / `useFoliateStyle` / 新来的 `useFoliateBook` 摆在一起会读成一次 hook 调用。7 处引用一起改。
+
+校验：prettier / oxlint 0 warning（268 文件）/ tsc / vitest 633 → **645 条** / `vite build` / playwright 170 条 → **169 passed / 1 failed**（11.6 分钟），失败的是既有的 `image-lightbox.spec.ts:148`（第三次，单独跑 `--repeat-each=2` 8/8 过，机制这一次由 trace 查清了，见上面 flake 那节）—— `selection-toolbar` 在这轮长跑里**过了**，正是这次要治的那条。新增 12 条单测；**十次定向变异全被抓**（分数不驱动脊柱 / 章号不从分数落地 / 空 CFI 也写位置 / 无 debounce 每帧写一次 / `select` 不关查词浮层 / pill 不带 CFI / 未知 CFI 当成命中 / 目录深度被拍平 / 非 foliate 书也读 foliate 目录 / 卸载后定时器仍写）。依赖数组也验过：临时抽掉 `select` 与 `remember` 里的两个依赖，oxlint 报 **4 个 error**，说明 `exhaustive-deps` 真的在看着这两个 hook（不验这一下的话，「0 warning」只说明它没说话，不说明它在看）。
+
+量测脚本的复量：foliate 桥 **146 行 → 56 行**，剩下的正是那段别名解构（393-419）加上 `foliateRef` 与它的两个 helper —— 和「抽干净了没有」的判据一致。
 
 ---
 
@@ -477,7 +522,7 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 - **PDF —— 不做（暂时）。** 出口里 `pdfSlotH`×5 与 `suppressPdfPending`×3 **是被脊柱读写的**：`goTo` 直接设 `el.scrollTop = clamped * pdfSlotH.current`，`applyPending` 读 `suppressPdfPending`。PDF 的槽位记账和导航是共用的 —— 抽走它要让脊柱改成调 hook（像自动滚动那样）。
 - **标注桥接 —— 不做。** 出口 33 里 27 处是 `pending`：它是**待确认的选区**，页面几乎每个浮层与回调都在读（PR#3 已经量过一次）。它不是叶子，是页面的中心 UI 状态。
 - **翻页手势 —— 不做。** `flip`×14 是共享入口（箭头 / 键盘 / 滚轮 / 手柄都调它），入口里还带着 `goTo` / `stepChapter` / `rulerDirRef`。134 行看着诱人，但它是脊柱、标尺、两个渲染器的交汇处。
-- **foliate 桥 —— 第三笔。** 169 行是单笔最大的一块，但入口 22 个（settings / 各查询 / 脊柱的 setter），出口里 `foliateRef`×14 漏进脊柱（`goTo` / `flip` / `applyPending` / 朗读都在用它 —— 它是共享句柄，不是这一簇的私有物）。它是「Kindle 路径的视图模型」，值得一笔大活，适合单独一轮。
+- **foliate 桥 —— 第三笔，已做（PR#9 取样式对象、PR#10 取位置/目录那一半）。** 169 行是单笔最大的一块，但入口 22 个（settings / 各查询 / 脊柱的 setter），出口里 `foliateRef`×14 漏进脊柱（`goTo` / `flip` / `applyPending` / 朗读都在用它 —— 它是共享句柄，不是这一簇的私有物）。**订正（PR#10）**：正因为它是共享句柄，**它和它的两个封装不该抽** —— 抽了只是换名字。真正该走的是位置/目录那一半，见 PR#10。
 - **位置与导航 —— 确认不做**（`chapterIdx`×34，见 PR#5）。
 
 **建议顺序**：图片/灯箱 → 搜索/AI 跳转 → foliate 桥 →（若还要继续）PDF。
