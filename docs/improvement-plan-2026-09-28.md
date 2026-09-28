@@ -16,7 +16,7 @@
 ### 实施中发现的两条 flake（与本次改动无关，但值得记）
 
 - `cargo test` 里 `dictionary::tests::the_system_dictionary_answers_a_real_word`（macOS 系统词典 FFI）**在并行负载下会偶发失败**：同一次全量里它失败，单独跑 3/3 过，HEAD 全量也过，重跑全量又 418/0。它只在 macOS 上编译，CI 跑 ubuntu 不受影响，**但本地全量跑会出现假红**。
-- `e2e/selection-toolbar.spec.ts:101`：10 分钟全量里 `page.goto` 超时过一次，单独跑双引擎 6/6 过。
+- `e2e/selection-toolbar.spec.ts:101`：**挂过两次**（第一批之后、PR#3 之后），两次都在 `openBook` 的 `page.goto("/?demo=1")` 上超时（webkit），两次单独跑都 6/6 过。签名一致、且第一次发生时 PR#2/PR#3 都还不存在 —— 确认是既有的 flake。
 - `e2e/image-lightbox.spec.ts:148`：另一次全量里断言 `download="fig3.png"` 失败，单独跑（`--repeat-each=2`）8/8 过。
 
 **三次全量、三条不同的 spec 各挂一次** —— 大约 1/170 的 flake 率，都出现在 10 分钟以上的长跑里。建议单独处理（重试或放宽等待），不要当成「改动引入的回归」；判定办法一律是「单独跑也过」。CI 机器负载低，可能一次都不会遇到，但本地全量会遇到。
@@ -285,6 +285,24 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 **顺带补上了它此前的零覆盖**：睡眠定时器没有任何单测，也没有一个 e2e spec 提过 睡眠/定时/sleep。新增 `src/hooks/useSleepTimer.test.ts`（7 条：到点触发并自清、章节定时器不挂超时、章节结束时被消费且只消费一次、分钟定时器不被章节结束消费、off 清空、身份稳定）。
 
 校验：prettier / oxlint 0 warning / tsc / vitest **555 条** / playwright 170 条。这一轮的 e2e 见下面 `reading-ruler` 那条 —— 为它做过一次完整的对照实验。
+
+#### PR#3（2026-09-28，已落地未提交）：`useReaderPanels` —— 量完发现这一组不值得拆，但翻出两个真缺陷
+
+原计划是抽「面板」（`panel` / `search` / `pending` / `aiContext` / `lookup` / `searchSeed`）。量完发现**这个分组本身就是错的**：`pending` 是**待确认的选区**（浮层、复制、问 AI、落成标注都走它），`aiContext` / `lookup` / `searchSeed` 是「选区 → 面板」的载荷 —— 这三个都属于**选区**关注点。真正属于面板的只有 `panel` 和 `search` 两个 state。
+
+两个 state 不值得为拆而拆。但量的时候翻出两个真缺陷：
+
+1. **关闭搜索抽屉的规则写了两遍，其中一遍漏了一步。** `clearSearch()`（清掉 foliate 画进书页里的命中高亮）**全仓只有一个调用点** —— `ReaderPanels` 的 `onClose` 里。而 Escape 那条路自己写了一份「清查询 + 关面板」，**没有清高亮**：用 Escape 关掉搜索抽屉，命中高亮会留在页面上。这正是「一条规则写两遍」会长的东西。
+2. **`Panel` 联合类型声明了两遍。** `ReaderPage` 一份、`ReaderChrome` 一份（后者是正主，`ReaderPanels` 用的就是它），两份内容相同，只靠 tsc 的赋值检查勉强绑着。
+
+做法：`useReaderPanels(initialQuery, clearPaintedMatches)` 收掉 `panel` / `search` / `setPanel` / `toggle` / `close`，**`close()` 同时管两半**（清查询 + 清高亮），并返回「刚才有没有东西开着」给 key handler 判断是否消费掉这次 Escape；Escape 与 ✕ 都改走它。`ReaderPage` 里那份重复的 `Panel` 删掉。
+
+两个判断：
+
+- **`setPanel` 仍然原样暴露**，因为「从抽屉里跳走」的那 5 处（跳到章 / 书签 / 图谱节点 / 命中）**刻意不清理**：查询与高亮是读者的上下文，回来时还在。所以有一个语义化的 `close`（抽屉自己的出口，清理）和一个原始 `setPanel`（跳走，不清理）—— 这不是偷懒，是行为差异。
+- **`close` 必须身份稳定**，因为它进了 key handler 的依赖数组：把 `panel` 从依赖里换成 `closePanel` 之后，**那个监听器不再每次开关抽屉都重新注册**。
+
+校验：prettier / oxlint 0 warning / tsc / vitest 555 → **563 条** / playwright 170 条。新增 8 条单测；把 `close` 里的 `clearPaintedMatches()` 去掉，其中 2 条会红（`expected "vi.fn()" to be called 1 times, but got 0 times`）—— 钉的就是这个 bug。
 
 **风险写在前面**：`goTo` 是全局导航入口（TOC / 书签 / 搜索 / 进度 / 深链 / RAG 引用都走它），而且它已经踩过两次闭包陈旧值的坑 —— 一次是 `goTo` 的「已经在这一页」判断读了旧的 `chapterIdx`，导致回弹失效；一次是手势状态放在 effect 的局部变量里，翻页本身会重建 effect、把状态冲掉。拆这一块必须守住三条：手势状态用 `useRef`；任何「现在在哪一页」的判断读 ref 而不读闭包；cleanup 里不结算。
 

@@ -104,6 +104,7 @@ import {
   useSetProgress,
 } from "@/hooks/useReader";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
+import { useReaderPanels } from "@/hooks/useReaderPanels";
 import { useSleepTimer } from "@/hooks/useSleepTimer";
 import {
   LINE_HEIGHTS,
@@ -189,7 +190,8 @@ const NO_WORDS: string[] = [];
 const EMPTY_OUTLINE: PdfOutlineItem[] = [];
 
 /** Which side panel is open. Only one at a time, so they never stack. */
-type Panel = "none" | "annotations" | "search" | "ai" | "guide" | "graph" | "toc" | "settings";
+/** Which side panel is open lives with the panels themselves: see
+ *  `useReaderPanels`, and `ReaderChrome` for the union. */
 
 interface ReaderViewProps {
   bookId: string;
@@ -388,8 +390,6 @@ function ReaderView({
   }, [deepLinkTarget, initialCfi, useFoliate, cfiKey]);
   const outlineQuery = usePdfOutline(bookId, isPdf);
   const outline = outlineQuery.data ?? EMPTY_OUTLINE;
-  const [panel, setPanel] = useState<Panel>("none");
-  const [search, setSearch] = useState(initialQuery);
   const [pending, setPending] = useState<{
     range: TextRange;
     x: number;
@@ -526,6 +526,28 @@ function ReaderView({
   // The foliate view, driven imperatively (see flip /
   // stepChapter): paging and sections never touch our chapter index.
   const foliateRef = useRef<FoliateHandle | null>(null);
+  /** Drops the match highlights foliate painted into the pages. Stable,
+   *  because the panels hook keeps `close` identity-stable for the key
+   *  handler's dependency list. */
+  const clearPaintedMatches = useCallback(() => {
+    if (useFoliate) foliateRef.current?.clearSearch();
+  }, [useFoliate]);
+  /**
+   * Which panel is open, and the search drawer's query.
+   *
+   * It is declared down here rather than up with the rest of the reader's
+   * state because closing the drawer has to reach the foliate view above it —
+   * the query is not the only thing the search leaves behind. See
+   * `useReaderPanels`.
+   */
+  const {
+    panel,
+    setPanel,
+    toggle: togglePanel,
+    search,
+    setSearch,
+    close: closePanel,
+  } = useReaderPanels(initialQuery, clearPaintedMatches);
   // The reading ruler's lines, asked of the book rather than read from here:
   // a foliate book's words are in section iframes, and only the view knows
   // where those sections currently sit. Stable, because the ruler measures on
@@ -1378,11 +1400,11 @@ function ReaderView({
           setPending(null);
           return;
         }
-        if (panel !== "none") {
-          if (panel === "search") setSearch("");
-          setPanel("none");
-          return;
-        }
+        // The drawer's own way out, cleanup and all. This used to be written
+        // out here — clear the query, set the panel to none — and it forgot
+        // the other half of what the search drawer leaves behind, so Escape
+        // closed it and left foliate's match highlights painted on the page.
+        if (closePanel()) return;
         if (fullscreen) {
           void toggleFullscreen();
         }
@@ -1480,7 +1502,10 @@ function ReaderView({
     lineHeightIdx,
     lightboxPath,
     lookup,
-    panel,
+    // Not `panel`: the handler asks `closePanel()` whether it consumed the
+    // key, and that callback keeps one identity across renders — so this
+    // listener no longer re-binds every time a drawer opens or closes.
+    closePanel,
     paged,
     pending,
     readsLeftward,
@@ -2642,7 +2667,7 @@ function ReaderView({
       total={headerTotal}
       isPdf={isPdf}
       chapterLabel={headerChapter}
-      onTogglePanel={(id) => setPanel((open) => (open === id ? "none" : id))}
+      onTogglePanel={togglePanel}
       pdfZoom={pdfZoom}
       onZoom={(next) => stepPdfZoom(next / pdfZoom)}
       fontSize={fontSize}
@@ -3063,14 +3088,9 @@ function ReaderView({
         panel={panel}
         bookId={bookId}
         verticalAvailable={useFoliate}
-        onClose={() => {
-          if (panel === "search") {
-            setSearch("");
-            // Drop the match highlights foliate painted into the pages.
-            if (useFoliate) foliateRef.current?.clearSearch();
-          }
-          setPanel("none");
-        }}
+        // The drawer's own ✕. Same call as Escape's, so the two cannot drift
+        // apart again — that drift is what left the highlights painted.
+        onClose={closePanel}
         toc={{
           chapters: useFoliateToc ? foliateChapters : chapters,
           outline,
