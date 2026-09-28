@@ -15,7 +15,9 @@
 
 **第四批第一笔已落地**（2026-09-28，改动留在工作区，未提交）：P2-14 的第 ④ 笔 —— 朗读引擎整层抽成 `src/hooks/useReadAloud.ts`，`ReaderPage.tsx` 净 −423 行（3348 → 2925），顺带把 `pdfWash` 的偏移算术移进 `speech.ts` 并补上它此前没有的单测。校验链全绿：prettier / oxlint 0 warning（257 文件）/ tsc / vitest 563 → **588 条** / `vite build` / playwright 170 条（169 passed / 1 failed，是既有 flake，见下）。详见 P2-14 的 PR#4。**已提交并推送**（`7b07b8a` + `17e676d` + `5fb1bc6`，三笔按文件拆开，逐笔 `git archive` 检出验过 tsc / oxlint）。
 
-**第四批第二笔已落地**（2026-09-28，改动留在工作区，未提交）：量完发现计划里的 ⑤「位置与导航」不能成笔（46 处引用在簇外），改做接口真正窄的 **实测页数** → `src/hooks/usePageCounter.ts`，`ReaderPage.tsx` 删 96 / 加 25。详见 P2-14 的 PR#5。
+**第四批第二笔已落地**（2026-09-28，改动留在工作区，未提交）：量完发现计划里的 ⑤「位置与导航」不能成笔（46 处引用在簇外），改做接口真正窄的 **实测页数** → `src/hooks/usePageCounter.ts`，`ReaderPage.tsx` 删 96 / 加 25。详见 P2-14 的 PR#5。**已提交并推送**（`5a8ed1a` + `4bb4266`）。
+
+**第四批第三笔已落地**（2026-09-28，改动留在工作区，未提交）：同一把尺子的第二个候选 **自动滚动** → `src/hooks/useAutoScroll.ts`，`ReaderPage.tsx` 删 72 / 加 27，顺带补上这条行为此前的**零覆盖**（9 条单测）。详见 P2-14 的 PR#6。
 
 ### 实施中发现的两条 flake（与本次改动无关，但值得记）
 
@@ -37,13 +39,15 @@
   | 全 spec（HEAD）          | **16 passed**                                            |
   | 单条 ×3（HEAD）          | **3/3 全过**，chromium 14.4 / 13.6 / 13.4s（比上面还慢） |
 
+  **这条 spec 整体是负载敏感的**：PR#6 的全量里它一次挂了**两条不同的**（`:512` 与 `:606`，都是 webkit），而那次全量跑了 13.1 分钟（比前一次多 2.6 分钟），`uptime` 的 load average 是 **12.46**。清掉残留的 preview 服务后单独跑全 spec：**16/16 全过**，包括 547。
+
   累计：PR#2 版本 3 红 / 12 次，HEAD 0 红 / 4 次，**但三次红全部落在机器最重的窗口**（紧随 271s 的 vitest 与 13.4 分钟的全量 e2e；其中一次尝试直接被 SIGTERM 杀掉）。机器空下来后两个版本都全绿。
 
   改动本身按检视是**行为中性**的：被移动的那个 effect 在没有定时器时是空转的（`if (sleep?.kind !== "minutes") return`），`clearIfChapterEnded` 身份稳定，`onChapterEnd` 的依赖集合换名不换重建条件。
 
   结论：负载相关的时序 flake，不是回归。**但它是这一批里最该先修的**（唯一一条单独跑都红过的），要么加重试，要么把容差从「两个行高」放宽到「三个」，要么在量之前等排版稳定。
 
-**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— P2-14 的 ④（朗读引擎）与 ⑤ 的第一组（实测页数）已完成，**下一笔是自动滚动**（出口 2、入口 6，同一把尺子量出来的最优候选），再往后是 foliate 桥 / PDF / 标注桥接；**「位置与导航」整簇不做**（见 PR#5：它 46 处引用在簇外，是脊柱不是叶子）。
+**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— 已落地 ④ 朗读引擎、⑤ 实测页数、⑥ 自动滚动，并且**重新量过剩下的簇**（见下）：下一笔是 **图片/灯箱**（入口 1、出口 15、79 行），然后是 foliate 桥（185 行，入口 29）。**「位置与导航」「标注桥接」整簇不做**（分别是脊柱与页面中心 UI 状态）。
 
 ---
 
@@ -371,6 +375,72 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 - **用别名让消费点一字不改**（`const { shown: shownPages, count: countChapterPages } = pageCounter`）：`countChapterPages` 进 `onScroll` 的依赖数组，必须是普通标识符；名字保住了，`onScroll` 与 JSX 的 diff 就是 0 行。
 
 校验：prettier / oxlint 0 warning（259 文件）/ tsc / vitest 588 → **599 条** / `vite build` / playwright 170 条。新增 11 条单测。**变异验证抓到我自己的一个恒真断言**：`stays silent until the chapter body is on screen` 原本只断言 `shown` 为 `null`，而那条用例没给 `pageInfo` —— 所以 `shown` 本来就是 `null`，把守卫整个删掉它照样绿。改成「守卫在时读到单位自己的计数器 `1 / 4`、不在时读到估算 `3 / 24`」之后变异才被抓到。**恒真断言不只会漏，还会让人以为已经覆盖了。**
+
+#### PR#6（2026-09-28）：`useAutoScroll` —— 同一把尺子的第二个候选，顺带补上一条零覆盖的行为
+
+按 PR#5 的表，下一个候选是自动滚动（出口 2、入口 6）。量完发现它的形状和「实测页数」不一样：**`setAutoScrolling` 在簇外有三个调用点** —— `goTo` 的两个分支各一次（换章要停掉自动滚动），footer 一次。于是「flag 归谁」有了个选择：
+
+| 方案 | 谁持有 flag                                       | `goTo` 的改动                       |
+| ---- | ------------------------------------------------- | ----------------------------------- |
+| A    | hook 持有，暴露 `on` / `toggle` / `stop`          | 两个调用点改名 + **依赖数组多一项** |
+| B    | 页面持有，hook 只跑循环（收 `active` + `onStop`） | 零                                  |
+
+**选了 A。** flag 有一个所有者（hook）、三个使用者（循环到尽头清它、footer 切它、导航跳章清它），而 `stop` 是个语义化的名字，比 `setAutoScrolling(false)` 清楚。B 会把「谁来停」摊回页面里，让 hook 变成一个要传 setter 进去的循环 —— 那不是更窄，只是更含糊。
+
+代价落在 **`goTo` 的依赖数组多一项**（`stopAutoScroll`），也就是 PR#3 末尾警告的那块地方。所以 `stop` 是 `useCallback([])`，并且**有测试钉着它的身份**（`keeps both actions identity-stable across renders`）—— 变了就会重放 pending scroll、把页面拽回本章开头。
+
+**顺手补上一条零覆盖的行为。** 自动滚动此前**没有任何测试**：没有单测，也没有一个 e2e spec 提到「自动滚动」。而它是五个 `requestAnimationFrame` 走法，每个走法都是对读者的一个承诺（流到头了、离开 scroll 布局了、视口没了、foliate 那本书读完了），这些承诺此前只靠人眼。新增 9 条：帧用可控队列手动驱动、时钟打桩，所以一步恰好是速度要求的像素数。其中两条值得留着：
+
+- **亚像素余量**那条验的是「头两帧不调 `scrollByPx`、第三帧调一次 1 px」—— 那正是「慢速会一顿一顿」的修复点（1 px 一跳 = 每秒 27 次抖动，而不是滑行）。变异（去掉 `fold.delta !== 0` 的守卫）能打红它。
+- **`layoutModeRef` 是 ref 而不是闭包值**这条也有测试：把布局切到 `single` 之后**不需要重渲染**，循环下一帧就自己停了，而且退出时没有把页面动一下。
+
+**一处 effect 顺序变化，判断为惰性（比 PR#4 那次更硬）**：hook 必须声明在 `goTo` 之前（`goTo` 要用它的 `stop`），所以这个 effect 从 ~1405 行挪到了 ~841 行，现在排在位置 effect 之前。理由是**两者互斥**：位置 effect 重放 pending scroll 的场景都是换章，而换章走的 `goTo` 第一件事就是 `stopAutoScroll()` —— 那一帧 `on` 已经是 false，effect 直接早退，根本不会排队 rAF。所以「两个 rAF 谁先跑」在这套代码里没有可达的交点。
+
+校验：prettier / oxlint 0 warning（261 文件）/ tsc / vitest 599 → **608 条** / `vite build` / playwright 170 条 → 168 passed / 2 failed，两条都在 `reading-ruler.spec.ts`（`:512`、`:606`，webkit），而那次全量跑了 13.1 分钟、load average 12.46；单独跑全 spec **16/16 全过**。`ReaderPage.tsx` 删 72 / 加 27。五次定向变异都恰好打红对应的那条：离开 scroll 布局不停 / 到页尾不停 / `stop` 不再身份稳定 / 丢掉亚像素余量 / 分页布局里也照跑。
+
+#### 重新量一遍剩下的簇（2026-09-28，第 3 次抽取之后）
+
+三次抽取（④ 朗读 / ⑤ 实测页数 / ⑥ 自动滚动）之后 `ReaderView` 是 2449 行，PR#5 那张缝表已经不可用 —— 行区间和耦合都变了。所以重新量，并把**量法本身**写清楚，因为这一轮它比结论更容易复用。
+
+**量法**：把 `ReaderView` 的顶层语句切成 span（`const` / `let` / `if` / `useEffect` / `return`），对每个候选簇算两个数，再打印出口的**逐符号分解**：
+
+- **入口** = 簇内读到、声明在簇外的名字（要变成参数的东西）。
+- **出口** = 簇外引用簇内名字的次数（要穿回去的东西）。**只看总数会骗人** —— 漏水点往往是某一个符号。
+
+四个踩过的坑，每一个都让数字先假了一次：
+
+1. **多行解构的绑定名**：`const { on: autoScrollOn } = useAutoScroll({…})` 只读首行会得到空名字，而 `on` / `stop` / `zoom` 这些 key 会被当成外部入口。要读到配对的花括号，且 `key: alias` 只算 `alias`。
+2. **`useState` 的 setter 与 state 同属一条语句**：把 `setLightboxPath` 算成外部入口是错的。判据要改成「这个名字的**声明语句**在不在簇内」。
+3. **不要做「归属语句」吸收。** 我试过「簇外语句若引用簇内名字 ≥2 次就并入簇」，两轮迭代之后**每个簇都把 2166-2683 那块 JSX 吞了**（它引用一切），数字全变成 `in≈120 / out≈0`，排名完全失真。正确做法是不吸收，改看逐符号分解，人工判断哪些引用其实落在紧邻的 effect 里（`remeasureSelection` 的 6 处里有 4 处就在它自己的 effect 内）。
+4. **属性名与变量名同形**：`{ chapterIdx: section ?? 0 }` 里的 `chapterIdx` 被算成了一次变量引用。
+
+**结果**（`scripts/measure-reader-clusters.py` 的输出，出口按符号降序）：
+
+| 簇           | 行数 | 入口  | 出口   | 出口的漏水点                                                                                                     |
+| ------------ | ---- | ----- | ------ | ---------------------------------------------------------------------------------------------------------------- |
+| 搜索/AI 跳转 | 40   | 7     | **2**  | `pickHit`×1 `jumpToCitation`×1                                                                                   |
+| 图片/灯箱    | 85   | **1** | 15     | `bookImages`×3 `lightboxIdx`×3 `stepLightbox`×3 `lightboxPath`×2 `openImageAt`×2 `webImages`×1 `openBookImage`×1 |
+| 头部视图     | 15   | 10    | 10     | `useFoliateToc`×3 `headerChapter`×3 `chapterTitle`×2                                                             |
+| 阅读标尺     | 50   | 2     | 19     | `remeasureSelection`×6（4 处在自己的 effect 里）`rulerSettleRef`×5 `rulerDirRef`×5 `rulerRef`×2                  |
+| PDF          | 63   | 9     | 24     | `pdfZoom`×8 `pdfSlotH`×5 `suppressPdfPending`×3 `pdfScrollPage`×2                                                |
+| 标注桥接     | 72   | 4     | **33** | **`pending`×27** `deepLinkTarget`×4                                                                              |
+| 翻页手势     | 134  | 16    | 22     | `flip`×14 `flipHint`×3                                                                                           |
+| foliate 桥   | 169  | 22    | 35     | `foliateRef`×14 `readsLeftward`×5                                                                                |
+| 位置与导航   | 291  | 28    | **78** | **`chapterIdx`×34** `goTo`×15 `stepChapter`×7 `fraction`×5                                                       |
+
+**逐个判定**：
+
+- **图片/灯箱 —— 下一笔。** 入口只有 **1** 个（`bookImagesQuery`），85 行里装的是一件内聚的事：**这本书有哪些图，以及看的是哪一张**。15 处出口落在四个消费点 —— 灯箱 JSX（`lightboxPath` / `stepLightbox` / `webImages`）、章节视图的图片点击与 `images=`、PDF 层的点击、foliate 的点击 —— **没有一处来自脊柱**，这是它和下面几组的本质差别。连那条「用路径而不是下标」的设计理由（`bookImages` 是 query，下标会指向移进来的东西）一起搬走。
+- **搜索/AI 跳转 —— 第二笔，或与上一笔一起做。** 出口只有 **2**，是全表最干净的接口，但只有 40 行（`focusOffset` / `pickHit` / `jumpToCitation`），而且入口里带着 `pendingFocus`（脊柱的 ref，它要写）、`goTo`、`navigate` —— 它是**往脊柱里塞一个「待滚到的偏移」**，所以和位置那一簇天然咬合。收益约 30 行。
+- **阅读标尺 —— 不做。** 入口 2 个很便宜，但出口是**横切**的：`rulerSettleRef` 在 `onScroll` 里、`rulerDirRef` 在 `flip` 与位置 effect 里。做成 hook 之后那 19 处要改成命名 API 调用，**行数不减**（省下的只有 12 行 ref 声明），而标尺恰好是这套测试里最 flake 的地方（`reading-ruler.spec.ts` 那一整条记录）。收益小、风险集中。
+- **头部视图 —— 不做。** 15 行（几个三目）配 10 个入口，抽出来是一层间接而不是一次分离。
+- **PDF —— 不做（暂时）。** 出口里 `pdfSlotH`×5 与 `suppressPdfPending`×3 **是被脊柱读写的**：`goTo` 直接设 `el.scrollTop = clamped * pdfSlotH.current`，`applyPending` 读 `suppressPdfPending`。PDF 的槽位记账和导航是共用的 —— 抽走它要让脊柱改成调 hook（像自动滚动那样）。
+- **标注桥接 —— 不做。** 出口 33 里 27 处是 `pending`：它是**待确认的选区**，页面几乎每个浮层与回调都在读（PR#3 已经量过一次）。它不是叶子，是页面的中心 UI 状态。
+- **翻页手势 —— 不做。** `flip`×14 是共享入口（箭头 / 键盘 / 滚轮 / 手柄都调它），入口里还带着 `goTo` / `stepChapter` / `rulerDirRef`。134 行看着诱人，但它是脊柱、标尺、两个渲染器的交汇处。
+- **foliate 桥 —— 第三笔。** 169 行是单笔最大的一块，但入口 22 个（settings / 各查询 / 脊柱的 setter），出口里 `foliateRef`×14 漏进脊柱（`goTo` / `flip` / `applyPending` / 朗读都在用它 —— 它是共享句柄，不是这一簇的私有物）。它是「Kindle 路径的视图模型」，值得一笔大活，适合单独一轮。
+- **位置与导航 —— 确认不做**（`chapterIdx`×34，见 PR#5）。
+
+**建议顺序**：图片/灯箱 → 搜索/AI 跳转 → foliate 桥 →（若还要继续）PDF。
 
 ### P2-15 Rust 侧已经越过文档自己定的拆分阈值
 
