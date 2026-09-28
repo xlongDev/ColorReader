@@ -94,6 +94,7 @@ import {
 } from "@/hooks/useReader";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useImageLightbox } from "@/hooks/useImageLightbox";
+import { useHitJumps } from "@/hooks/useHitJumps";
 import { usePageCounter } from "@/hooks/usePageCounter";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
@@ -110,15 +111,7 @@ import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import { useChrome } from "@/stores/chrome";
 import { cn } from "@/lib/cn";
 import type { PdfOutlineItem } from "@/lib/pdf";
-import type {
-  Annotation,
-  BookFormat,
-  Bookmark,
-  ChapterMeta,
-  LocalFont,
-  RagHit,
-  SearchHit,
-} from "@/types/ipc";
+import type { Annotation, BookFormat, Bookmark, ChapterMeta, LocalFont } from "@/types/ipc";
 
 /** Notes export reaches for the native save dialog; kept out of the reader's
  *  own chunk so the reader still loads without it. */
@@ -564,6 +557,14 @@ function ReaderView({
   const pendingScroll = useRef<number>(start.fraction);
   // Offset of a search hit to reveal instead of the scroll fraction.
   const pendingFocus = useRef<number | null>(initialOffset);
+  /**
+   * The write half of the slot above, handed to the hit jumps rather than the
+   * ref itself: a hook must not mutate a value it does not own, and this one
+   * is read by `applyPending` — in the navigation, declared further down.
+   */
+  const setPendingFocus = useCallback((offset: number | null) => {
+    pendingFocus.current = offset;
+  }, []);
   const debounceRef = useRef<number | null>(null);
   // Pending "the page has stopped moving" notice to the reading ruler. Its own
   // timer, not `debounceRef`: that one persists the position and the two must be
@@ -1642,49 +1643,20 @@ function ReaderView({
     [anchorAnnotation],
   );
 
-  /** Reveals a character offset of the chapter already on screen. */
-  const focusOffset = useCallback(
-    (offset: number) => {
-      const paragraphs = chapterData?.paragraphs;
-      const el = scrollRef.current;
-      if (!paragraphs || !el) return;
-      const target = paragraphAt(paragraphs, offset);
-      el.querySelector(`[data-para-idx="${target}"]`)?.scrollIntoView({ block: "center" });
-    },
-    [chapterData],
-  );
-
-  const pickHit = useCallback(
-    (hit: SearchHit) => {
-      if (hit.chapterIdx === chapterIdx) {
-        focusOffset(hit.offset);
-        return;
-      }
-      // Wait for the target chapter to render before scrolling to the match.
-      pendingFocus.current = hit.offset;
-      goTo(hit.chapterIdx);
-    },
-    [chapterIdx, focusOffset, goTo],
-  );
-
-  const navigate = useNavigate();
-
-  /** Follows a RAG citation: scroll in this book, or open the other book. */
-  const jumpToCitation = useCallback(
-    (hit: RagHit) => {
-      if (hit.bookId !== bookId) {
-        navigate(`/reader?book=${hit.bookId}&chapter=${hit.chapterIdx}&at=${hit.startChar}`);
-        return;
-      }
-      if (hit.chapterIdx === chapterIdx) {
-        focusOffset(hit.startChar);
-        return;
-      }
-      pendingFocus.current = hit.startChar;
-      goTo(hit.chapterIdx);
-    },
-    [bookId, chapterIdx, focusOffset, goTo, navigate],
-  );
+  /**
+   * Landing the reader on a position named by a search hit or an AI citation:
+   * here, after the chapter it names lands, or in another book.
+   *
+   * Aliased to the two names the panels already hand it over as.
+   */
+  const { pick: pickHit, follow: jumpToCitation } = useHitJumps({
+    bookId,
+    chapterIdx,
+    paragraphs: chapterData?.paragraphs,
+    goTo,
+    setPendingFocus,
+    scrollRef,
+  });
 
   const total = chapters.length;
   const chapterTitle = chapterData?.title ?? "";
