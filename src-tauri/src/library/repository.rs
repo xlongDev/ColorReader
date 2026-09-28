@@ -153,7 +153,12 @@ pub struct BookQuery {
 pub struct LibraryStats {
     pub total: i64,
     pub favorites: i64,
-    /// Started but not finished: has a read timestamp and is below 100%.
+    /// Opened *and actually read*, and still below 100%.
+    ///
+    /// `progress > 0` is load-bearing: `last_read_at` is stamped when a book is
+    /// opened, so on its own it counted a book the reader opened and closed
+    /// without turning a page. On a real 39-book shelf that made 27 of them
+    /// 「在读」, which is not what the word means.
     pub reading: i64,
     pub finished: i64,
 }
@@ -162,7 +167,7 @@ pub fn stats(conn: &Connection) -> AppResult<LibraryStats> {
     let (total, favorites, reading, finished) = conn.query_row(
         "SELECT COUNT(*),
                 COALESCE(SUM(favorite), 0),
-                COALESCE(SUM(last_read_at IS NOT NULL AND progress < 0.999), 0),
+                COALESCE(SUM(last_read_at IS NOT NULL AND progress > 0 AND progress < 0.999), 0),
                 COALESCE(SUM(progress >= 0.999), 0)
            FROM books",
         [],
@@ -456,10 +461,10 @@ pub struct DeletedFiles {
     pub cover: Option<PathBuf>,
 }
 
-/// Deletes a book and reports which files the caller should unlink.
+/// Deletes one book and reports which files the caller should unlink.
 ///
 /// Returns `NotFound` when the id does not exist so the UI can say so.
-pub fn delete(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
+fn delete_one(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
     let (book_path, cover_path): (String, Option<String>) = conn
         .query_row("SELECT file_path, cover_path FROM books WHERE id = ?1", params![id], |row| {
             Ok((row.get(0)?, row.get(1)?))
@@ -469,6 +474,25 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
     conn.execute("DELETE FROM books WHERE id = ?1", params![id])?;
 
     Ok(DeletedFiles { book: Some(PathBuf::from(book_path)), cover: cover_path.map(PathBuf::from) })
+}
+
+/// [`delete_one`], for a single id.
+pub fn delete(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
+    delete_one(conn, id)
+}
+
+/// Deletes a batch, inside the caller's transaction.
+///
+/// The shelf's batch bar hands over every selected id at once; one `delete`
+/// per id meant one transaction, and one fsync, per book. All or nothing: an
+/// unknown id fails the batch and `with_tx` rolls the earlier deletes back,
+/// rather than leaving the shelf half-deleted.
+pub fn delete_many(tx: &Transaction<'_>, ids: &[String]) -> AppResult<Vec<DeletedFiles>> {
+    let mut files = Vec::with_capacity(ids.len());
+    for id in ids {
+        files.push(delete_one(tx, id)?);
+    }
+    Ok(files)
 }
 
 /// Returns the id of the book holding this content hash, if any.
@@ -481,13 +505,28 @@ pub fn find_by_hash(conn: &Connection, hash: &str) -> AppResult<Option<(String, 
     Ok(found)
 }
 
-pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> AppResult<()> {
+fn set_favorite_one(conn: &Connection, id: &str, favorite: bool) -> AppResult<()> {
     let changed = conn.execute(
         "UPDATE books SET favorite = ?1, updated_at = ?2 WHERE id = ?3",
         params![i64::from(favorite), super::now_seconds(), id],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
+    }
+    Ok(())
+}
+
+pub fn set_favorite(conn: &Connection, id: &str, favorite: bool) -> AppResult<()> {
+    set_favorite_one(conn, id, favorite)
+}
+
+/// Marks a batch as favourite (or not), inside the caller's transaction.
+///
+/// Same reason as [`delete_many`]: the shelf's batch bar can hand over twenty
+/// ids at once, and twenty single-row transactions is twenty fsyncs.
+pub fn set_favorite_many(tx: &Transaction<'_>, ids: &[String], favorite: bool) -> AppResult<()> {
+    for id in ids {
+        set_favorite_one(tx, id, favorite)?;
     }
     Ok(())
 }
@@ -891,6 +930,57 @@ mod tests {
     }
 
     #[test]
+    fn deleting_many_removes_every_row_in_one_pass() {
+        let conn = seed();
+        add(&conn, "b1", "三体", &[], "h1");
+        add(&conn, "b2", "Dune", &[], "h2");
+        add(&conn, "b3", "留下", &[], "h3");
+
+        let tx = conn.unchecked_transaction().expect("transaction");
+        let files = delete_many(&tx, &["b1".into(), "b2".into()]).expect("delete many");
+        tx.commit().expect("commit");
+
+        assert_eq!(files.len(), 2);
+        assert_eq!(files[0].book.as_deref(), Some(Path::new("/books/b1.epub")));
+        assert!(find_by_hash(&conn, "h1").expect("query").is_none());
+        assert!(find_by_hash(&conn, "h2").expect("query").is_none());
+        assert!(find_by_hash(&conn, "h3").expect("query").is_some());
+    }
+
+    /// The batch is all or nothing. An unknown id fails it, and the caller's
+    /// `with_tx` rolls the earlier deletes back — reproduced here by dropping
+    /// the transaction instead of committing it, which is what `with_tx` does
+    /// when `f` returns `Err`.
+    #[test]
+    fn a_batch_with_one_unknown_id_leaves_every_row_alone() {
+        let conn = seed();
+        add(&conn, "b1", "三体", &[], "h1");
+        add(&conn, "b2", "Dune", &[], "h2");
+
+        let tx = conn.unchecked_transaction().expect("transaction");
+        let outcome = delete_many(&tx, &["b1".into(), "nope".into(), "b2".into()]);
+        assert!(matches!(outcome, Err(AppError::NotFound(_))));
+        drop(tx);
+
+        assert!(find_by_hash(&conn, "h1").expect("query").is_some());
+        assert!(find_by_hash(&conn, "h2").expect("query").is_some());
+    }
+
+    #[test]
+    fn favouriting_many_touches_every_id_in_one_pass() {
+        let conn = seed();
+        add(&conn, "b1", "三体", &[], "h1");
+        add(&conn, "b2", "Dune", &[], "h2");
+        add(&conn, "b3", "未标", &[], "h3");
+
+        let tx = conn.unchecked_transaction().expect("transaction");
+        set_favorite_many(&tx, &["b1".into(), "b2".into()], true).expect("favourite many");
+        tx.commit().expect("commit");
+
+        assert_eq!(stats(&conn).expect("stats").favorites, 2);
+    }
+
+    #[test]
     fn stats_count_the_shelf_by_state() {
         let conn = seed();
         assert_eq!(stats(&conn).expect("stats"), LibraryStats::default());
@@ -907,6 +997,18 @@ mod tests {
         assert_eq!(
             stats(&conn).expect("stats"),
             LibraryStats { total: 3, favorites: 1, reading: 1, finished: 1 }
+        );
+
+        // Opening a book and closing it without turning a page is not 在读.
+        // `last_read_at` alone counted it, and on a real 39-book shelf that
+        // made 27 of them 在读 — a number the reader could not act on.
+        add(&conn, "b4", "只打开过", &[], "h4");
+        conn.execute("UPDATE books SET last_read_at = 3, progress = 0 WHERE id = 'b4'", [])
+            .expect("touch");
+
+        assert_eq!(
+            stats(&conn).expect("stats"),
+            LibraryStats { total: 4, favorites: 1, reading: 1, finished: 1 }
         );
     }
 

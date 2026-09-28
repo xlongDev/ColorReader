@@ -104,13 +104,34 @@ pub fn book_url(book_id: &str) -> String {
 /// The row is authoritative: once it is gone the book is gone even if unlinking
 /// a file fails, because leaving an orphan row would resurrect it on next boot.
 pub fn delete_book(library: &Library, id: &str) -> AppResult<()> {
-    let files = library.with(|conn| repository::delete(conn, id))?;
+    unlink(library.with(|conn| repository::delete(conn, id))?);
+    Ok(())
+}
+
+/// Deletes a batch of books in one transaction, then unlinks their files.
+///
+/// The shelf's batch bar can hand over every selected id at once; one
+/// `delete_book` per id was one transaction per book, and the frontend
+/// invalidated its whole book list once per book on top of that. Files are
+/// unlinked only after the commit, so a batch that fails leaves neither a row
+/// without its file nor a file without its row.
+pub fn delete_books(library: &Library, ids: &[String]) -> AppResult<()> {
+    let files = library.with_tx(|tx| repository::delete_many(tx, ids))?;
+    for set in files {
+        unlink(set);
+    }
+    Ok(())
+}
+
+/// Removes the files a deleted book owned. A failure here is logged rather
+/// than raised: the row is already gone, and an orphan file is not worth
+/// failing the delete over.
+fn unlink(files: repository::DeletedFiles) {
     for path in [files.book, files.cover].into_iter().flatten() {
         if let Err(err) = std::fs::remove_file(&path) {
             tracing::warn!(path = %path.display(), error = %err, "删除书籍文件失败");
         }
     }
-    Ok(())
 }
 
 /// Absolute cover path for `id`, used by the resource protocol.

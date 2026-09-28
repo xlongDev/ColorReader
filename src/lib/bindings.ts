@@ -187,9 +187,21 @@ export const commands = {
     __TAURI_INVOKE<null>("pack_export", { id, path, password }),
   /**  `book.delete` */
   bookDelete: (id: string) => __TAURI_INVOKE<null>("book_delete", { id }),
+  /**
+   *  `book.deleteMany` — the shelf's batch bar.
+   *
+   *  One transaction for the whole selection rather than one `book.delete` per
+   *  book: twenty books meant twenty transactions, and twenty book-list
+   *  invalidations on the frontend. All or nothing, so a stale id cannot leave
+   *  the shelf half-deleted.
+   */
+  bookDeleteMany: (ids: string[]) => __TAURI_INVOKE<null>("book_delete_many", { ids }),
   /**  `book.setFavorite` */
   bookSetFavorite: (id: string, favorite: boolean) =>
     __TAURI_INVOKE<null>("book_set_favorite", { id, favorite }),
+  /**  `book.setFavoriteMany` — the batch bar's 收藏 / 取消收藏, one transaction. */
+  bookSetFavoriteMany: (ids: string[], favorite: boolean) =>
+    __TAURI_INVOKE<null>("book_set_favorite_many", { ids, favorite }),
   /**
    *  `book.update` — rewrites title, authors and the descriptive fields.
    *
@@ -856,7 +868,14 @@ export type LibrarySort =
 export type LibraryStats = {
   total: number;
   favorites: number;
-  /**  Started but not finished: has a read timestamp and is below 100%. */
+  /**
+   *  Opened *and actually read*, and still below 100%.
+   *
+   *  `progress > 0` is load-bearing: `last_read_at` is stamped when a book is
+   *  opened, so on its own it counted a book the reader opened and closed
+   *  without turning a page. On a real 39-book shelf that made 27 of them
+   *  「在读」, which is not what the word means.
+   */
   reading: number;
   finished: number;
 };

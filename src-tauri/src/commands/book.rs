@@ -270,11 +270,37 @@ pub async fn book_delete(state: State<'_, AppState>, id: String) -> AppResult<()
         .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
 }
 
+/// `book.deleteMany` — the shelf's batch bar.
+///
+/// One transaction for the whole selection rather than one `book.delete` per
+/// book: twenty books meant twenty transactions, and twenty book-list
+/// invalidations on the frontend. All or nothing, so a stale id cannot leave
+/// the shelf half-deleted.
+#[tauri::command]
+#[specta::specta]
+pub async fn book_delete_many(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<()> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || library::delete_books(&library, &ids))
+        .await
+        .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
+}
+
 /// `book.setFavorite`
 #[tauri::command]
 #[specta::specta]
 pub fn book_set_favorite(state: State<'_, AppState>, id: String, favorite: bool) -> AppResult<()> {
     state.library.with(|conn| crate::library::repository::set_favorite(conn, &id, favorite))
+}
+
+/// `book.setFavoriteMany` — the batch bar's 收藏 / 取消收藏, one transaction.
+#[tauri::command]
+#[specta::specta]
+pub fn book_set_favorite_many(
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+    favorite: bool,
+) -> AppResult<()> {
+    state.library.with_tx(|tx| crate::library::repository::set_favorite_many(tx, &ids, favorite))
 }
 
 /// `book.update` — rewrites title, authors and the descriptive fields.
