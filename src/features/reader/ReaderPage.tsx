@@ -46,12 +46,8 @@ import type { ReadingRulerHandle } from "@/features/reader/ReadingRuler";
 import { relayRulerLayout, relayRulerTurn } from "@/features/reader/rulerPointer";
 import { medianCpm } from "@/features/reader/pace";
 import {
-  bookPageOf,
-  bookPagesOf,
-  emptyTally,
   globalProgress,
   locateChapter,
-  observeUnit,
   remainingChars,
   totalChars,
 } from "@/features/reader/progress";
@@ -96,6 +92,7 @@ import {
   useReaderToc,
   useSetProgress,
 } from "@/hooks/useReader";
+import { usePageCounter } from "@/hooks/usePageCounter";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
 import { useReaderPanels } from "@/hooks/useReaderPanels";
@@ -649,83 +646,13 @@ function ReaderView({
   const [flipHint, setFlipHint] = useState(false);
   /** 1-based position inside the chapter's column count, for the page indicator. */
   const [pageInfo, setPageInfo] = useState<{ page: number; pages: number } | null>(null);
-  /**
-   * The chapters' page counts as the layout measured them, by chapter — the
-   * tally the whole-book count is built from. See `bookPagesOf`.
-   */
-  const tallyRef = useRef(emptyTally());
-  /** The layout the tally was measured under; a change invalidates it. */
-  const densityKeyRef = useRef("");
-  /** The book's page count at that tally, or `null` while it is too thin. */
-  const [bookPages, setBookPages] = useState<number | null>(null);
+
   /**
    * Every setting a page count depends on. A change re-paginates the chapter,
    * so the pages already in the tally belong to a layout that is gone.
    */
   const densityKey = `${layoutMode}|${marginX}|${marginY}|${fullscreen}|${fontSize}|${lineHeightIdx}|${paraGapIdx}|${indent}`;
-  /**
-   * The page counter to print, in whichever unit the reader asked for — or
-   * `null` to print nothing at all.
-   *
-   * `chapter` is what the layout measured. `book` is the book's own length,
-   * worked out two different ways because the two paths can measure different
-   * things: foliate numbers positions off the book's bytes (`location`), so its
-   * count is fixed for the book and both numbers come straight from it; the
-   * prose pager has no such scale, so its count is what it has measured plus
-   * what the rest of the book weighs at that density (`bookPagesOf`) — an
-   * estimate, and the only case the indicator labels as one.
-   *
-   * The `off` case is decided here rather than by a second flag at the render
-   * site: the two on-modes share every measurement below, so a separate gate
-   * would have to be kept in step with this one, and the first version of that
-   * pairing showed a chapter counter while the setting said 隐藏.
-   */
-  const shownPages = useMemo(() => {
-    if (pageNumbers === "off") return null;
-    // A book whose chapters *are* its pages — one canvas or one plate per
-    // chapter — already knows its page count exactly, and estimating it only
-    // adds error: an image-only PDF page carries no text to weigh, so every
-    // page of one printed the unit's own "1 / 1".
-    if (chapterIsPage) return { page: chapterIdx + 1, pages: chapters.length, estimated: false };
 
-    const unit = useFoliate ? foliatePage : pageInfo;
-    if (unit === null) return null;
-    if (pageNumbers !== "book") return { ...unit, estimated: false };
-
-    // foliate counts the book itself. Not an estimate: the size domain is a
-    // property of the book's bytes, so it reads the same on every turn and at
-    // every font size. `null` only before foliate has built its table, and the
-    // section's own counter — true, but not the book — stands in until then.
-    if (useFoliate) {
-      return foliateBookPage
-        ? { ...foliateBookPage, estimated: false }
-        : { ...unit, estimated: false };
-    }
-
-    // The prose pager's unit is a chapter, and its share of the book is by
-    // character count — so `bookPages` is the book, and `globalProgress` is how
-    // far into it the reader is, page inside the chapter included. A book with
-    // no chapter text has no share to weigh and keeps the unit's counter.
-    const chars = totalChars(chapters);
-    if (bookPages === null || chars <= 0 || (chapters[chapterIdx]?.chars ?? 0) <= 0) {
-      return { ...unit, estimated: false };
-    }
-    return {
-      ...bookPageOf(globalProgress(chapters, chapterIdx, fraction), bookPages),
-      estimated: true,
-    };
-  }, [
-    useFoliate,
-    foliatePage,
-    foliateBookPage,
-    pageInfo,
-    pageNumbers,
-    bookPages,
-    chapters,
-    chapterIdx,
-    fraction,
-    chapterIsPage,
-  ]);
   /**
    * The picture the lightbox viewer is on, by the container path it came from
    * rather than by its position in a list.
@@ -787,29 +714,31 @@ function ReaderView({
   }, [chapter.data]);
   const wallpaperPath = chapterData?.wallpaper ?? null;
   /**
-   * Folds one chapter's measured page count into the book's tally.
+   * The page indicator, and the tally its whole-book unit is built from.
    *
-   * Safe to call from every scroll: the chapter replaces its own entry, and
-   * the first call after a layout change starts the tally over instead of
-   * mixing in pages measured under the old one.
-   *
-   * Silent until the chapter body is on screen. `useChapter` fetches whenever
-   * the index changes, so for a frame or two the scroller still holds the
-   * chapter that just left — and a page count read off it, filed under the
-   * chapter arriving, is that chapter's page count with the wrong name.
+   * `densityKey` comes in as the one value it is: which settings a page count
+   * depends on is a layout fact, and the string is what the tally is
+   * invalidated against.
    */
-  const countChapterPages = useCallback(
-    (pages: number) => {
-      if (chapterData === null) return;
-      if (densityKeyRef.current !== densityKey) {
-        densityKeyRef.current = densityKey;
-        tallyRef.current = emptyTally();
-      }
-      observeUnit(tallyRef.current, chapterIdx, pages);
-      setBookPages(bookPagesOf(tallyRef.current, chapters));
-    },
-    [chapterData, chapterIdx, chapters, densityKey],
-  );
+  const pageCounter = usePageCounter({
+    unit: pageNumbers,
+    chapterIsPage,
+    useFoliate,
+    chapters,
+    chapterIdx,
+    fraction,
+    pageInfo,
+    foliatePage,
+    foliateBookPage,
+    densityKey,
+    // The test the tally has always made, kept literal on purpose — see the
+    // option's own note on why it is not `!chapterData`.
+    chapterMissing: chapterData === null,
+  });
+  // Aliased so the scroll handler and the indicator keep reading the same two
+  // names: `countChapterPages` goes into that handler's dependency list, so it
+  // has to be a plain identifier there.
+  const { shown: shownPages, count: countChapterPages } = pageCounter;
   const bookImagesQuery = useBookImages(bookId);
   // The browser has no `book_images`/`book_asset` behind it: pictures arrive
   // already decoded by foliate, so each click registers its entry path, the
