@@ -31,6 +31,7 @@ import {
   parseLinkParagraph,
 } from "@/features/reader/chapterText";
 import { usePdfZoom } from "@/features/reader/usePdfZoom";
+import { useFoliateStyle } from "@/features/reader/useFoliateStyle";
 import { useReaderFullscreen } from "@/features/reader/useReaderFullscreen";
 import { FULLSCREEN_MARGIN_BONUS, useReaderLayout } from "@/features/reader/useReaderLayout";
 import { applyPosition, columnPitch, flipPage } from "@/features/reader/paging";
@@ -64,13 +65,7 @@ import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionTo
 import type { AnnotationStyle } from "@/types/ipc";
 import { useTts } from "@/features/reader/tts";
 import { TtsPlayer } from "@/features/reader/TtsPlayer";
-import {
-  bundledFacesFor,
-  fontFaceCss,
-  resolveFont,
-  resolveSurface,
-  readerGlassVars,
-} from "@/features/reader/theme";
+import { resolveFont, resolveSurface, readerGlassVars } from "@/features/reader/theme";
 import {
   useAnnotations,
   useAnchorAnnotation,
@@ -1706,45 +1701,17 @@ function ReaderView({
 
   // Typography and palette handed to the foliate renderer: the book keeps its
   // own CSS, the injected stylesheet wins over it for the reading settings.
-  const foliateStyle = useMemo(
-    () => ({
-      fontSize,
-      fontFamily: resolveFont(settings.fontFamily),
-      lineHeight: LINE_HEIGHTS[lineHeightIdx] ?? 1.7,
-      paraGap: PARA_GAPS[paraGapIdx] ?? 0.9,
-      indent,
-      fg: surface.fg,
-      bg: surface.tint,
-      // Same trigger as the PDF night path: the reading surface decides, not
-      // the shell theme (surfaces are absolute).
-      dark: surface.mode === "dark",
-      // Inverting a book's pictures is the reader's call, not the surface's.
-      invertImages: invertBookImages,
-      // A section is its own document, so the faces have to travel with the
-      // sheet rather than come from the app's own style — the imported ones
-      // and the ones the app ships (霞鹜文楷), which is the difference between
-      // the reader picking it and the reader getting the system 楷体.
-      fontFaces: [fontFaceCss(fonts), bundledFacesFor(settings.fontFamily)]
-        .filter(Boolean)
-        .join("\n"),
-      // Vertical CJK. The paginator reads it back off the section and takes
-      // the column axis, the margins and its vertical page turn from it.
-      vertical: settings.vertical,
-    }),
-    [
-      fontSize,
-      lineHeightIdx,
-      paraGapIdx,
-      indent,
-      settings.fontFamily,
-      settings.vertical,
-      surface.fg,
-      surface.mode,
-      surface.tint,
-      invertBookImages,
-      fonts,
-    ],
-  );
+  const foliateStyle = useFoliateStyle({
+    fontSize,
+    font: settings.fontFamily,
+    lineHeightIdx,
+    paraGapIdx,
+    indent,
+    surface,
+    invertImages: invertBookImages,
+    fonts,
+    vertical: settings.vertical,
+  });
   // The TOC panel reads chapters; foliate books are driven by its own
   // TOC, so the entries are reshaped into the same shape (with nesting depth).
   const foliateChapters = useMemo(
