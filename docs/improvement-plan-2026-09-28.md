@@ -221,6 +221,28 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 - **收益**：这是当前最大的维护风险，也是唯一会随功能增长而恶化的项。拆完之前，任何涉及 `goTo` 的改动都要求跑全量 e2e（114 条 / 约 6 分钟）。
 - **验证**：每抽一个 hook 跑 `pnpm exec tsc --noEmit` + `oxlint` + 全量 e2e。
 
+#### 缝在哪（2026-09-28 按 state/ref 的声明顺序量出来的）
+
+`ReaderView` 里其实是 8 个纠缠在一起的东西。下表按「声明顺序」分组，行号是 `ReaderPage.tsx` 里的绝对行号：
+
+| 关注点      | 状态与引用                                                                                                                                | 行段    |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| 朗读        | `playerOpen` `rsvpOpen` `sleep` `sleepRef` `effectiveVoice`                                                                               | 322–345 |
+| 标注桥接    | `annotationsByPage`                                                                                                                       | 346     |
+| 面板        | `panel` `search` `pending` `aiContext` `lookup` `searchSeed`                                                                              | 400–430 |
+| 位置与导航  | `startCfi` `start` `chapterIdx` `displayProgress` `fraction` `nav` `rememberFoliateLocation` `pendingScroll` `pendingFocus` `fractionRef` | 393–600 |
+| foliate 桥  | `foliateToc` `foliateSectionLabel` `foliatePage` `foliateBookPage` `foliateRef` `foliateRulerLines` `foliateSaveRef`                      | 460–600 |
+| 阅读标尺    | `rulerRef` `rulerSettleRef` `rulerDirRef`                                                                                                 | 546–560 |
+| PDF         | `pdfSlotH` `suppressPdfPending` `pdfScrollPage` `prevPaged` `handlePdfLayout`                                                             | 634–650 |
+| 速度 / 统计 | `speedSampleRef` `paceRef` `tallyRef` `densityKeyRef`                                                                                     | 667–680 |
+| 自动滚动    | `autoScrolling` `debounceRef` `flipHint` `pageInfo`                                                                                       | 430–670 |
+
+**顺序**（每笔一个 hook，每笔一次全量 e2e，约 11 分钟）：① 速度 / 统计 —— 只往 `pace.ts` 里写，不读别的组件状态，纠缠最少；② 朗读 —— 三个 state 只喂给 `TtsPlayer` / `RsvpPlayer` 这两个已经存在的组件；③ 面板 —— `Panel` 联合类型和 `ReaderPanels.tsx` 已经把这条边画好了；④ 位置与导航 —— **最后做**。
+
+**风险写在前面**：`goTo` 是全局导航入口（TOC / 书签 / 搜索 / 进度 / 深链 / RAG 引用都走它），而且它已经踩过两次闭包陈旧值的坑 —— 一次是 `goTo` 的「已经在这一页」判断读了旧的 `chapterIdx`，导致回弹失效；一次是手势状态放在 effect 的局部变量里，翻页本身会重建 effect、把状态冲掉。拆这一块必须守住三条：手势状态用 `useRef`；任何「现在在哪一页」的判断读 ref 而不读闭包；cleanup 里不结算。
+
+**为什么这一轮没开工**：每笔都要一次 11 分钟的全量 e2e 才算验完，一个会话装不下「读 3000 行 + 抽 + 验 + 修」；而且第 ④ 笔是最容易出事的那笔，不该在赶进度的时候做。缝已经标好了，可以一笔一笔来。
+
 ### P2-15 Rust 侧已经越过文档自己定的拆分阈值
 
 - **问题**：`ARCHITECTURE.md` 自己写了拆分触发条件：「单个模块超过约 800 行且存在两个以上互不相关的变更理由」。按这条尺子，`document/mobi.rs` 1809、`library/clippings.rs` 1597、`library/repository.rs` 1092、`library/sync.rs` 970、`library/export.rs` 876、`library/import.rs` 845、`library/annotations.rs` 721 都在线上或线附近。另外 `library/` 已经是 **23 个文件的平铺桶**，里面至少五类互不相关的领域：格式解析（`stardict` / `mdict` / `dictionaries`）、检索与 AI（`search` / `rag` / `graph`）、同步（`sync` / `backup`）、导出（`export` / `pack` / `clippings`）、书源（`source`）。
