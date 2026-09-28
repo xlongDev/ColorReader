@@ -46,7 +46,7 @@ import { PullBookmark } from "@/features/reader/PullBookmark";
 import { ReadingRuler, rulerStepForKey } from "@/features/reader/ReadingRuler";
 import type { ReadingRulerHandle } from "@/features/reader/ReadingRuler";
 import { relayRulerLayout, relayRulerTurn } from "@/features/reader/rulerPointer";
-import { foldPace, medianCpm, NO_PACE, type PaceSample } from "@/features/reader/pace";
+import { medianCpm } from "@/features/reader/pace";
 import {
   bookPageOf,
   bookPagesOf,
@@ -103,12 +103,11 @@ import {
   useReaderToc,
   useSetProgress,
 } from "@/hooks/useReader";
-import { useReadingClock } from "@/hooks/useReading";
+import { useReadingClock, useReadingPace } from "@/hooks/useReading";
 import {
   LINE_HEIGHTS,
   PARA_GAPS,
   foldScrollDelta,
-  updateReadingSpeed,
   useReaderSettings,
   pageIsNight,
   HIGHLIGHT_COLORS,
@@ -261,10 +260,8 @@ function ReaderView({
     layoutMode,
     autoScrollSpeed,
     readingSpeed,
-    setReadingSpeed,
     rsvpWpm,
     paceSamples,
-    recordPace,
     pageNumbers,
     pdfFill,
     pdfNight: pdfNightOn,
@@ -662,12 +659,9 @@ function ReaderView({
     },
     [layoutModeRef, marginRef],
   );
-  /** Previous progress sample for the sustained reading speed estimate. */
-  const speedSampleRef = useRef<{ at: number; chars: number } | null>(null);
-  /** The reading stretch the pace median is still folding into. A ref rather
-   *  than a store field: it changes on every save, and a write per save is a
-   *  write of the whole persisted settings blob — custom paper included. */
-  const paceRef = useRef<PaceSample>(NO_PACE);
+  /** Folds each progress save into the reading-speed estimate. The hook owns
+   *  the two refs that used to sit here — see `useReadingPace`. */
+  const reportPace = useReadingPace();
   /** Hover-reveal flip affordance for paged modes; hides itself after 2s idle. */
   const [flipHint, setFlipHint] = useState(false);
   /** 1-based position inside the chapter's column count, for the page indicator. */
@@ -1969,24 +1963,9 @@ function ReaderView({
       setProgress({ progress });
       // Every save marks the end of one reading session: fold it into the
       // sustained speed estimate that powers the remaining-time labels.
-      const charsNow = progress * totalChars(chapters);
-      const sample = { at: Date.now(), chars: charsNow };
-      const last = speedSampleRef.current;
-      speedSampleRef.current = sample;
-      if (last) {
-        const read = charsNow - last.chars;
-        const elapsed = sample.at - last.at;
-        const next = updateReadingSpeed(readingSpeed, read, elapsed);
-        if (next !== readingSpeed) setReadingSpeed(next);
-        // The same delta, folded into the median window. The average above is
-        // what the label says for the first few minutes; this is what it says
-        // once there are stretches to take a middle one from.
-        const folded = foldPace(paceRef.current, read, elapsed);
-        paceRef.current = folded.acc;
-        if (folded.sample) recordPace(folded.sample);
-      }
+      reportPace(progress * totalChars(chapters));
     },
-    [chapters, chapterIdx, readingSpeed, setProgress, setReadingSpeed, recordPace],
+    [chapters, chapterIdx, setProgress, reportPace],
   );
 
   const onScroll = useCallback(() => {

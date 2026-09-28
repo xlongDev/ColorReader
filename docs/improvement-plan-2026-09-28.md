@@ -16,9 +16,10 @@
 ### 实施中发现的两条 flake（与本次改动无关，但值得记）
 
 - `cargo test` 里 `dictionary::tests::the_system_dictionary_answers_a_real_word`（macOS 系统词典 FFI）**在并行负载下会偶发失败**：同一次全量里它失败，单独跑 3/3 过，HEAD 全量也过，重跑全量又 418/0。它只在 macOS 上编译，CI 跑 ubuntu 不受影响，**但本地全量跑会出现假红**。
-- `e2e/selection-toolbar.spec.ts:101` 在 10 分钟的全量里 `page.goto` 超时一次，单独跑双引擎 6/6 过。
+- `e2e/selection-toolbar.spec.ts:101`：10 分钟全量里 `page.goto` 超时过一次，单独跑双引擎 6/6 过。
+- `e2e/image-lightbox.spec.ts:148`：另一次全量里断言 `download="fig3.png"` 失败，单独跑（`--repeat-each=2`）8/8 过。
 
-两条都建议单独处理（`#[ignore]` 或加重试），不要把它们当成「改动引入的回归」。
+**三次全量、三条不同的 spec 各挂一次** —— 大约 1/170 的 flake 率，都出现在 10 分钟以上的长跑里。建议单独处理（重试或放宽等待），不要当成「改动引入的回归」；判定办法一律是「单独跑也过」。CI 机器负载低，可能一次都不会遇到，但本地全量会遇到。
 
 **待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）。
 
@@ -234,10 +235,21 @@ React 19.2 / Vite 8.2（rolldown）/ Tailwind v4 / motion 13 / Radix（dialog、
 | foliate 桥  | `foliateToc` `foliateSectionLabel` `foliatePage` `foliateBookPage` `foliateRef` `foliateRulerLines` `foliateSaveRef`                      | 460–600 |
 | 阅读标尺    | `rulerRef` `rulerSettleRef` `rulerDirRef`                                                                                                 | 546–560 |
 | PDF         | `pdfSlotH` `suppressPdfPending` `pdfScrollPage` `prevPaged` `handlePdfLayout`                                                             | 634–650 |
-| 速度 / 统计 | `speedSampleRef` `paceRef` `tallyRef` `densityKeyRef`                                                                                     | 667–680 |
+| 速度 / 统计 | `speedSampleRef` `paceRef` —— **PR#1 已抽出**，见下                                                                                       | 665–670 |
+| 实测页数    | `tallyRef` `densityKeyRef` `bookPages`（`bookPagesOf` / `observeUnit`）                                                                   | 675–683 |
 | 自动滚动    | `autoScrolling` `debounceRef` `flipHint` `pageInfo`                                                                                       | 430–670 |
 
-**顺序**（每笔一个 hook，每笔一次全量 e2e，约 11 分钟）：① 速度 / 统计 —— 只往 `pace.ts` 里写，不读别的组件状态，纠缠最少；② 朗读 —— 三个 state 只喂给 `TtsPlayer` / `RsvpPlayer` 这两个已经存在的组件；③ 面板 —— `Panel` 联合类型和 `ReaderPanels.tsx` 已经把这条边画好了；④ 位置与导航 —— **最后做**。
+**顺序**（每笔一个 hook，每笔一次全量 e2e，约 11 分钟）：① 速度 / 统计 —— **已完成（PR#1）**，见下；② 朗读 —— 三个 state 只喂给 `TtsPlayer` / `RsvpPlayer` 这两个已经存在的组件；③ 面板 —— `Panel` 联合类型和 `ReaderPanels.tsx` 已经把这条边画好了；④ 位置与导航 —— **最后做**。
+
+> 订正：初版把 `tallyRef` / `densityKeyRef` 归进了「速度 / 统计」，因为它们和那两个 ref 挨着。**那是错的** —— 它们属于「实测页数」（`bookPagesOf` / `observeUnit` / `setBookPages`，就是「约 xxx 页」那条通路），跟速度没关系。按声明顺序相邻分组会分错，得看它们实际被谁读写。
+
+#### PR#1（2026-09-28，已落地未提交）：`useReadingPace`
+
+速度采样那 17 行连同 `speedSampleRef` / `paceRef` 两个 ref 从 `ReaderPage.tsx` 搬到 `hooks/useReading.ts` 的 `useReadingPace()`，页面里只剩 `reportPace(progress * totalChars(chapters))` 一行。`ReaderPage.tsx` 3382 → 3361。
+
+两个判断值得留着：**采样点必须留在 `saveProgress` 里** —— 一次进度保存**就是**一段阅读的结束（位置已知、时钟诚实），所以 hook 暴露一个 `report(charsNow)` 让调用方喂，而不是自己起 effect 定时采样。**`reportPace` 的 identity 随 `readingSpeed` 变**（它闭包里读了 `readingSpeed`），所以 `saveProgress` 的 deps 从 `[…, readingSpeed, setReadingSpeed, recordPace]` 变成 `[…, reportPace]` —— 依赖换了名字但**重建条件没变**（原来就依赖 `readingSpeed`），这一步要显式确认，不然会悄悄改变重渲染次数。
+
+校验：prettier / oxlint 0 warning / tsc / vitest 548 条 / playwright 170 条（全量里 `image-lightbox.spec.ts:148` 又挂了一次，单独跑 4 次全过，是 flake）。
 
 **风险写在前面**：`goTo` 是全局导航入口（TOC / 书签 / 搜索 / 进度 / 深链 / RAG 引用都走它），而且它已经踩过两次闭包陈旧值的坑 —— 一次是 `goTo` 的「已经在这一页」判断读了旧的 `chapterIdx`，导致回弹失效；一次是手势状态放在 effect 的局部变量里，翻页本身会重建 effect、把状态冲掉。拆这一块必须守住三条：手势状态用 `useRef`；任何「现在在哪一页」的判断读 ref 而不读闭包；cleanup 里不结算。
 

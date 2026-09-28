@@ -1,8 +1,10 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc } from "@/lib/ipc";
 import { demoEnabled, demoReadingStats } from "@/lib/demo";
+import { useReaderSettings, updateReadingSpeed } from "@/stores/reader";
+import { foldPace, NO_PACE, type PaceSample } from "@/features/reader/pace";
 
 /**
  * Reading time: what the stats page reads and what the reader reports.
@@ -10,6 +12,9 @@ import { demoEnabled, demoReadingStats } from "@/lib/demo";
  * The reader is the only writer. Elapsed wall-clock seconds accumulate in one
  * Rust row per (book, local day), so this side never has to remember a session
  * start: it only has to notice that the reader is still on the page.
+ *
+ * [`useReadingPace`] is the other half of the same question — not *how long*
+ * the reader has been here, but *how fast* they are going through it.
  */
 
 /** How often accumulated time is handed to the backend. */
@@ -57,6 +62,53 @@ export function useClearReadingStats() {
     mutationFn: () => ipc.statsClear(),
     onSuccess: invalidate,
   });
+}
+
+/**
+ * Sustained reading speed, reported one progress save at a time.
+ *
+ * The reader owns the clock and only ever knows one number — how many
+ * characters into the book it is — so this takes that number and folds the
+ * delta into both estimators: the running average the remaining-time label
+ * falls back on, and the median window that takes over once there are
+ * stretches to take a middle one from. `pace.ts` explains why there are two.
+ *
+ * Called from the reader's own save path rather than from an effect of its
+ * own, because a save *is* the end of a reading stretch: the place where the
+ * reader's position is known and the clock is honest.
+ *
+ * The open stretch is a ref on purpose: it changes on every save, and a store
+ * write per save is a write of the whole persisted settings blob, custom paper
+ * included.
+ */
+export function useReadingPace(): (charsNow: number) => void {
+  const readingSpeed = useReaderSettings((s) => s.readingSpeed);
+  const setReadingSpeed = useReaderSettings((s) => s.setReadingSpeed);
+  const recordPace = useReaderSettings((s) => s.recordPace);
+  /** Where the reader was last time, and when. */
+  const lastRef = useRef<{ at: number; chars: number } | null>(null);
+  /** The stretch the median is still folding into. */
+  const stretchRef = useRef<PaceSample>(NO_PACE);
+
+  return useCallback(
+    (charsNow: number) => {
+      const sample = { at: Date.now(), chars: charsNow };
+      const last = lastRef.current;
+      lastRef.current = sample;
+      if (!last) return;
+      const read = charsNow - last.chars;
+      const elapsed = sample.at - last.at;
+      const next = updateReadingSpeed(readingSpeed, read, elapsed);
+      if (next !== readingSpeed) setReadingSpeed(next);
+      // The same delta, folded into the median window. The average above is
+      // what the label says for the first few minutes; this is what it says
+      // once there are stretches to take a middle one from.
+      const folded = foldPace(stretchRef.current, read, elapsed);
+      stretchRef.current = folded.acc;
+      if (folded.sample) recordPace(folded.sample);
+    },
+    [readingSpeed, recordPace, setReadingSpeed],
+  );
 }
 
 /**
