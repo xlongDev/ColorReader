@@ -88,6 +88,17 @@
       "rules": {
         "no-await-in-loop": "off"
       }
+    },
+    {
+      // The PDF cover backfill is one cover at a time on purpose: each one is
+      // a whole document parse plus a page render (126 ms measured on WebKit),
+      // and a shelf of thirty PDFs run in parallel spent seconds of it
+      // competing with the shelf's own first paint. Sequential is the point,
+      // not a missed `Promise.all`.
+      "files": ["src/hooks/useLibrary.ts"],
+      "rules": {
+        "no-await-in-loop": "off"
+      }
     }
   ],
   "ignorePatterns": [

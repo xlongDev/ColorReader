@@ -38,6 +38,7 @@ import { useAssignTags, useTags } from "@/hooks/useTags";
 import {
   useBooks,
   useDeleteBook,
+  useDeleteBooks,
   useExportBookFile,
   useExportPack,
   useImportBooks,
@@ -46,6 +47,7 @@ import {
   useLibraryStats,
   usePdfCovers,
   useSetFavorite,
+  useSetFavorites,
   useUpdateBook,
 } from "@/hooks/useLibrary";
 import { DURATION, useMotion } from "@/lib/motion";
@@ -171,7 +173,6 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
     [navigate, remember],
   );
 
-  const [now, setNow] = useState(() => new Date());
   /**
    * How this shelf is arranged, from the settings store — so a trip into the
    * reader, which unmounts the shelf, comes back to the same view, and so
@@ -220,11 +221,6 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
    *  is not something a multi-selection could share. */
   const [metaTarget, setMetaTarget] = useState<BookSummary | null>(null);
 
-  useEffect(() => {
-    const id = window.setInterval(() => setNow(new Date()), 60_000);
-    return () => window.clearInterval(id);
-  }, []);
-
   const tags = useTags();
   /** The label this shelf is narrowed to; see `resolveTagFilter` for why a
    *  remembered label that no longer exists falls back to the whole shelf. */
@@ -244,6 +240,8 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const exportFile = useExportBookFile();
   const deleteBook = useDeleteBook();
   const setFavorite = useSetFavorite();
+  const setFavorites = useSetFavorites();
+  const deleteBooks = useDeleteBooks();
   const updateBook = useUpdateBook();
   const progress = useImportProgress();
   usePdfCovers(books.data ?? []);
@@ -304,12 +302,11 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
 
   const selection = useShelfSelection({
     list: cards,
-    onFavorite: (ids, favorite) => {
-      for (const id of ids) setFavorite.mutate({ id, favorite });
-    },
-    onDelete: (ids) => {
-      for (const id of ids) deleteBook.mutate(id);
-    },
+    // One transaction per batch rather than one per book: twenty selected
+    // books used to mean twenty IPC round trips, and each of those refreshed
+    // the whole book list. The batch mutations refresh it once.
+    onFavorite: (ids, favorite) => setFavorites.mutate({ ids, favorite }),
+    onDelete: (ids) => deleteBooks.mutate(ids),
     onRequestTags: setTagTarget,
   });
 
@@ -379,7 +376,6 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       <ShelfHeader
         filter={filter}
         meta={meta}
-        now={now}
         importing={picking}
         onClippings={() => setClippingsOpen(true)}
         onSource={() => setSourceOpen(true)}
@@ -438,7 +434,12 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           onToggleSection={toggleSection}
           managing={selection.managing}
           selected={selection.selected}
-          busy={setFavorite.isPending || deleteBook.isPending}
+          busy={
+            setFavorite.isPending ||
+            setFavorites.isPending ||
+            deleteBook.isPending ||
+            deleteBooks.isPending
+          }
           onToggleSelect={selection.toggle}
           onOpen={openBook}
           onToggleFavorite={(target) =>
@@ -462,7 +463,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       <ShelfBatchBar
         anchorRef={scrollerRef}
         selection={selection}
-        busy={{ favorite: setFavorite.isPending, delete: deleteBook.isPending }}
+        busy={{ favorite: setFavorites.isPending, delete: deleteBooks.isPending }}
       />
 
       {sourceOpen && (

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { FilePlus, Globe, Highlighter } from "@phosphor-icons/react";
 
@@ -19,10 +20,26 @@ import { greeting, type LibraryFilter } from "@/features/library/shelfQuery";
  * from under a click — which is also why `popLayout` (the leaving heading goes
  * out of flow) is safe here.
  */
+/**
+ * The clock the greeting reads.
+ *
+ * It lives here rather than on the page above, which owns the shelf: a `now`
+ * held in `LibraryPage`'s state re-rendered the whole windowed grid once a
+ * minute, for a string only this heading draws. React Compiler is not enabled
+ * in this project, so that was a real render rather than a memo away.
+ */
+function useNow(): Date {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  return now;
+}
+
 export function ShelfHeader({
   filter,
   meta,
-  now,
   importing,
   onClippings,
   onSource,
@@ -30,13 +47,13 @@ export function ShelfHeader({
 }: {
   filter: LibraryFilter;
   meta: { title: string; subtitle: string };
-  now: Date;
   importing: boolean;
   onClippings: () => void;
   onSource: () => void;
   onImport: () => void;
 }) {
   const m = useMotion();
+  const now = useNow();
   return (
     <header className="px-8 pt-8 pb-6">
       <p className="text-text-2 text-sm">{greeting(now)}</p>

@@ -362,6 +362,20 @@ export async function bookSetFavorite(id: string, favorite: boolean): Promise<vo
   await patchBook(id, { favorite });
 }
 
+/** The shelf's batch bar, on this side.
+ *
+ * One `bookDelete` / `bookSetFavorite` per id: this backend keeps its rows in
+ * separate object stores, so there is no cross-store transaction to put the
+ * batch in. That is the honest limit of the browser build, and the reason the
+ * desktop side gets a real one. */
+export async function bookDeleteMany(ids: string[]): Promise<void> {
+  for (const id of ids) await bookDelete(id);
+}
+
+export async function bookSetFavoriteMany(ids: string[], favorite: boolean): Promise<void> {
+  for (const id of ids) await bookSetFavorite(id, favorite);
+}
+
 export async function bookUpdate(id: string, patch: BookMetadataPatch): Promise<void> {
   await patchBook(id, {
     title: patch.title,

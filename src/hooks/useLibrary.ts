@@ -54,15 +54,36 @@ export function usePdfCovers(books: BookSummary[]) {
     const pending = books.filter(
       (book) => book.format === "pdf" && !book.coverUrl && !coverAttempted.has(book.id),
     );
-    for (const book of pending) {
-      coverAttempted.add(book.id);
-      renderFirstPagePng(book.id)
-        .then((bytes) => ipc.bookCoverSave(book.id, Array.from(new Uint8Array(bytes))))
-        .then(() => queryClient.invalidateQueries({ queryKey: ["books"] }))
-        .catch(() => {
+    if (pending.length === 0) return;
+    /**
+     * One at a time, and one invalidation for the whole pass.
+     *
+     * This used to fire every PDF at once and refresh the shelf once per
+     * book: a shelf of thirty PDFs parsed thirty documents concurrently (each
+     * one a `getDocument` plus a page render) and refetched the same query
+     * thirty times. A cover measured 126 ms on WebKit, so the concurrent
+     * version spent seconds of it fighting the shelf's own first paint.
+     *
+     * `coverAttempted` is still written before the work starts, so a failure
+     * never retries in a loop, and the cleanup only stops the trailing
+     * invalidation — a pass that is already running is allowed to finish.
+     */
+    let cancelled = false;
+    void (async () => {
+      for (const book of pending) {
+        coverAttempted.add(book.id);
+        try {
+          const bytes = await renderFirstPagePng(book.id);
+          await ipc.bookCoverSave(book.id, Array.from(new Uint8Array(bytes)));
+        } catch {
           // Scanned or damaged PDFs simply keep the placeholder cover.
-        });
-    }
+        }
+      }
+      if (!cancelled) await queryClient.invalidateQueries({ queryKey: ["books"] });
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [books, queryClient]);
 }
 
@@ -118,12 +139,35 @@ export function useDeleteBook() {
   });
 }
 
+/** Deletes a whole selection in one transaction, for the shelf's batch bar.
+ *
+ * The per-id version refreshed the book list once per book — twenty books
+ * meant twenty IPC round trips and twenty invalidations of the same query. */
+export function useDeleteBooks() {
+  const invalidate = useInvalidateShelf();
+  return useMutation({
+    mutationFn: (ids: string[]) => ipc.bookDeleteMany(ids),
+    onSettled: invalidate,
+  });
+}
+
 export function useSetFavorite() {
   const invalidate = useInvalidateShelf();
   return useMutation({
     mutationFn: ({ id, favorite }: { id: string; favorite: boolean }) =>
       ipc.bookSetFavorite(id, favorite),
     // Optimistic-free is fine at this size; the query is refreshed after.
+    onSettled: invalidate,
+  });
+}
+
+/** Marks a whole selection, in one transaction. Same reason as
+ *  [`useDeleteBooks`]. */
+export function useSetFavorites() {
+  const invalidate = useInvalidateShelf();
+  return useMutation({
+    mutationFn: ({ ids, favorite }: { ids: string[]; favorite: boolean }) =>
+      ipc.bookSetFavoriteMany(ids, favorite),
     onSettled: invalidate,
   });
 }
