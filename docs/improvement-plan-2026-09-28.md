@@ -21,9 +21,11 @@
 
 **第四批第四笔已落地**（2026-09-28，改动留在工作区，未提交）：重新量完的第一顺位 **图片/灯箱** → `src/hooks/useImageLightbox.ts`，`ReaderPage.tsx` 删 109 / 加 27。详见 P2-14 的 PR#7。**已提交并推送**（`afb89ff` + `aa60295`）。
 
-**第四批第五笔已落地**（2026-09-28，改动留在工作区，未提交）：全表出口最少的 **搜索/AI 跳转** → `src/hooks/useHitJumps.ts`，`ReaderPage.tsx` 删 52 / 加 24。它**不持有任何状态**，三个回调共享一条规则；React Compiler 的 `immutability` 规则拦了一次并改对了。详见 P2-14 的 PR#8。
+**第四批第五笔已落地**（2026-09-28，改动留在工作区，未提交）：全表出口最少的 **搜索/AI 跳转** → `src/hooks/useHitJumps.ts`，`ReaderPage.tsx` 删 52 / 加 24。它**不持有任何状态**，三个回调共享一条规则；React Compiler 的 `immutability` 规则拦了一次并改对了。详见 P2-14 的 PR#8。**已提交并推送**（`12c1307` + `d978e96`）。
 
-**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— 已落地 ④ 朗读引擎、⑤ 实测页数、⑥ 自动滚动、⑦ 图片/灯箱、⑧ 搜索/AI 跳转，剩下一个大的是 **foliate 桥**（169 行、入口 22），之后是 PDF。**「位置与导航」「标注桥接」整簇不做**（分别是脊柱与页面中心 UI 状态）。另外**那条 flake 该治了**：`selection-toolbar.spec.ts:101` 挂了四次、签名一致，建议给第一次 `page.goto` 加重试或放宽 timeout，别再靠「单独跑一遍确认」。
+**第四批第六笔已落地**（2026-09-29，改动留在工作区，未提交）：foliate 桥量完确认「不能顺手做完」（174 行、入口 22、出口里 `foliateRef`×14 是共享句柄、入口里有四个脊柱 setter），先取它最窄的一片 —— 交给渲染器的**样式对象** → `src/features/reader/useFoliateStyle.ts`，`ReaderPage.tsx` 删 46 / 加 13。详见 P2-14 的 PR#9。
+
+**待做**：第三批只剩 P1-8（真机验证原生下拉配色）；第四批是结构性的（P2-14 起）—— 已落地 ④ 朗读引擎、⑤ 实测页数、⑥ 自动滚动、⑦ 图片/灯箱、⑧ 搜索/AI 跳转、⑨ foliate 样式对象。**下一个是 foliate 桥的主体**（位置/目录那一半：`rememberFoliateLocation` + 四个 foliate 计数器 + 三个点击回调），它需要单独一轮；之后是 PDF。**「位置与导航」「标注桥接」整簇不做**（分别是脊柱与页面中心 UI 状态）。另外**那条 flake 该治了**：`selection-toolbar.spec.ts:101` 挂了四次、签名一致，建议给第一次 `page.goto` 加重试或放宽 timeout，别再靠「单独跑一遍确认」。
 
 ### 实施中发现的两条 flake（与本次改动无关，但值得记）
 
@@ -70,6 +72,22 @@
 `useNavigate()` 挪进 hook（少一个入口）；`pickHit` / `jumpToCitation` 两个别名让两处消费点零改动。
 
 校验：prettier / oxlint 0 warning（265 文件）/ tsc / vitest 621 → **628 条** / `vite build` / playwright 170 条 → 169 passed / 1 failed，是 `selection-toolbar.spec.ts:101`（既有 flake 第四次，签名一致，单独跑 4/4 过）。`ReaderPage.tsx` 删 52 / 加 24。五次定向变异全被抓（同章也去等渲染 / 跨章不等渲染直接滚 / 别书引用不跳转 / 正文没到也照滚 / 记下偏移但不换章）。
+
+#### PR#9（2026-09-29）：foliate 桥太大，先取它最窄的一片 —— `useFoliateStyle`
+
+按重量后的顺序，下一个候选是 foliate 桥。量完确认了 PR#8 那条判断：**174 行、入口 22、出口 35**，而且出口里 `foliateRef`×14 是**共享句柄**（`goTo` / `flip` / `applyPending` / 朗读都在用它，不是这一簇的私有物），入口里还带着四个**脊柱的 setter**（`setChapterIdx` / `setDisplayProgress` / `setProgress` / `setLookup`）—— 也就是说这一簇会**驱动导航状态**。计划里写它「值得一笔大活，适合单独一轮」，量完同意：它不是一笔能顺手做完的东西。
+
+所以先取它里面**接口最窄的一片**：交给 foliate 渲染器的那个**样式对象**（`foliateStyle` memo，41 行、入口 9、出口 1）。它正好是 `foliateStyle.ts` 那个模块的**输入类型** —— 那个模块已经有 `buildStyleSheet(FoliateStyle)` 和它自己的测试，缺的就是「阅读设置 → `FoliateStyle`」这一半。搬进 `src/features/reader/useFoliateStyle.ts`（和 `usePdfZoom` / `useReaderLayout` 做邻居），返回类型直接写 `FoliateStyle`，于是两半**按类型对接**，不再靠约定。
+
+三条规则跟着它走，都是「字段为什么长这样」而不是「怎么算」：
+
+- **调色板跟阅读面走，不跟外壳主题走**（和 PDF 夜间路径同一个触发条件）。阅读面是绝对的：读者可以在夜间页上、而应用是白天模式。
+- **反色是读者的决定，不是阅读面的**。默认关：调色板已经让页面变暗，而反过来的照片读起来是缺陷不是特性。
+- **字体要跟着样式表走**（section 是独立 document，应用自己的声明进不去），导入的 + 应用自带的（霞鹜文楷）拼在一起 —— 这是「读者选了它」和「读者拿到系统楷体」的区别。
+
+校验：prettier / oxlint 0 warning（267 文件）/ tsc / vitest 628 → **633 条** / `vite build` / playwright **170/170 全过**（13.7 分钟，负载 6.39；覆盖这条路径的 `font-display.spec.ts` 与 `kindle-reading.spec.ts` 都在里面）。`ReaderPage.tsx` 删 46 / 加 13（2699 → 2666）。新增 5 条单测；五次定向变异全被抓（调色板不跟阅读面 / 反色跟随阅读面 / 行高越界不兜底 / 空来源留分隔符 / 竖排开关丢失）。
+
+**变异脚本自己也被抓了一次，值得记**：`invertImages` 与 `vertical` 在文件里各出现两次（对象字面量一次、依赖数组一次），我那个「`count(old) == 1` 才动手」的守卫因此**拒绝执行**这两个变异 —— 没有它，我会拿着「测试全绿」当成「变异被抓住」。**给变异脚本加唯一性断言，是让「没跑」和「跑了但没红」不可能混淆的最便宜手段。**
 
 ---
 
