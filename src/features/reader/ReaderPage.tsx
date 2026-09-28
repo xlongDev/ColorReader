@@ -9,12 +9,7 @@ import {
   type CSSProperties,
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import type {
-  FoliateHandle,
-  FoliateLocation,
-  FoliateSelection,
-  FoliateTocEntry,
-} from "./FoliateBookView";
+import type { FoliateHandle } from "./FoliateBookView";
 import { BookOpen, CaretLeft, CaretRight } from "@phosphor-icons/react";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 
@@ -31,6 +26,7 @@ import {
   parseLinkParagraph,
 } from "@/features/reader/chapterText";
 import { usePdfZoom } from "@/features/reader/usePdfZoom";
+import { useFoliateBook } from "@/features/reader/useFoliateBook";
 import { useFoliateStyle } from "@/features/reader/useFoliateStyle";
 import { useReaderFullscreen } from "@/features/reader/useReaderFullscreen";
 import { FULLSCREEN_MARGIN_BONUS, useReaderLayout } from "@/features/reader/useReaderLayout";
@@ -47,6 +43,7 @@ import type { ReadingRulerHandle } from "@/features/reader/ReadingRuler";
 import { relayRulerLayout, relayRulerTurn } from "@/features/reader/rulerPointer";
 import { medianCpm } from "@/features/reader/pace";
 import {
+  POSITION_SAVE_DELAY_MS,
   globalProgress,
   locateChapter,
   remainingChars,
@@ -58,6 +55,7 @@ import {
   paragraphAt,
   resolveSelection,
   selectionBottom,
+  type PendingSelection,
   type TextRange,
 } from "@/features/reader/selection";
 import { RsvpPlayer } from "@/features/reader/RsvpPlayer";
@@ -115,9 +113,6 @@ const ExportNotesDialog = lazy(() =>
     default: module.ExportNotesDialog,
   })),
 );
-
-/** How long to wait after scrolling stops before persisting the position. */
-const SAVE_DELAY_MS = 600;
 
 /**
  * How long the page has to stand still before the reading ruler re-measures.
@@ -341,21 +336,10 @@ function ReaderView({
   }, [deepLinkTarget, initialCfi, useFoliate, cfiKey]);
   const outlineQuery = usePdfOutline(bookId, isPdf);
   const outline = outlineQuery.data ?? EMPTY_OUTLINE;
-  const [pending, setPending] = useState<{
-    range: TextRange;
-    x: number;
-    y: number;
-    /** Bottom edge of the selection box, so the toolbar can sit right under it. */
-    bottom?: number;
-    annotationId?: string;
-    /** The chapter (or PDF page, 0-based) the range belongs to; defaults to
-     *  the chapter on screen. PDF selections set it — a two-page spread can
-     *  surface a pill whose range lives on the other page. */
-    chapterIdx?: number;
-    /** The foliate CFI of this range. foliate sections do not line up with
-     *  our chapter indices, so a mobi highlight is anchored by this instead. */
-    cfi?: string;
-  } | null>(null);
+  // The selection the toolbar is showing, and where to put it. The shape is
+  // shared rather than declared here: four renderers build one, two of them the
+  // foliate view's own callbacks (see `PendingSelection`).
+  const [pending, setPending] = useState<PendingSelection | null>(null);
   // Quoted text for the AI drawer; `null` means "use the whole chapter".
   const [aiContext, setAiContext] = useState<string | null>(null);
   // Notes export: the format picker is open and waiting for a destination.
@@ -397,54 +381,40 @@ function ReaderView({
   const [fraction, setFraction] = useState(start.fraction);
   /** Direction of the last chapter switch, drives the page transition. */
   const [nav, setNav] = useState<1 | -1>(1);
-  // The book's own table of contents, handed over by foliate once the file is
-  // open. foliate sections do not line up with the chapters our importer
-  // extracts, so the TOC panel switches to this list while reading a mobi.
-  const [foliateToc, setFoliateToc] = useState<FoliateTocEntry[]>([]);
-  const [foliateSectionLabel, setFoliateSectionLabel] = useState("");
-  /** Section page counter from foliate; feeds the same indicator as
-   *  `pageInfo` (separate state because this one is declared earlier). */
-  const [foliatePage, setFoliatePage] = useState<{ page: number; pages: number } | null>(null);
-  /** The reader's position in whole-book pages, as foliate numbers them: the
-   *  book's own byte domain, fixed for the book, so it does not move with the
-   *  section on screen. `null` until foliate has built its table — the
-   *  indicator falls back to the section's own counter until then. */
-  const [foliateBookPage, setFoliateBookPage] = useState<{
-    page: number;
-    pages: number;
-  } | null>(null);
-  // Declared after the state it reports into (React Compiler forbids a
-  // callback capturing a setter that is still initializing).
-  const rememberFoliateLocation = useCallback(
-    (location: FoliateLocation) => {
-      // foliate reports true whole-book progress; our chapter-index estimate
-      // (51 chapters of uneven length) drifts badly on Kindle files.
-      setDisplayProgress(location.fraction);
-      setFoliateSectionLabel(location.label);
-      // foliate's sections are the container's own spine items; the importer
-      // splits the same book by character count instead. The whole-book
-      // fraction lands on the matching chapter, which is what the AI drawer
-      // quotes and the remaining-time labels count from. Best effort: a book
-      // whose empty spine documents were dropped at import shifts this by a
-      // constant offset (ponytail: index by spine href once the importer
-      // stores one).
-      setChapterIdx(locateChapter(chapters, location.fraction).idx);
-      // The section page counter feeds the same "N / M 页" indicator the
-      // prose pager drives; null in the scroll layout clears it.
-      setFoliatePage(location.page && { page: location.page.current, pages: location.page.total });
-      setFoliateBookPage(location.bookPage);
-      if (location.cfi === "") return;
-      const cfi = location.cfi;
-      if (foliateSaveRef.current !== null) window.clearTimeout(foliateSaveRef.current);
-      foliateSaveRef.current = window.setTimeout(() => {
-        // The CFI goes to the database, where it survives a cache clear and
-        // travels with the library row; the old parking spot is retired.
-        setProgress({ progress: location.fraction, location: cfi });
-        localStorage.removeItem(cfiKey);
-      }, SAVE_DELAY_MS);
-    },
-    [cfiKey, setProgress, chapters],
-  );
+  /**
+   * The book as foliate reports it: its own table of contents, its own
+   * position, and the three things the view hands back.
+   *
+   * Aliased to the names the page and the view already used, so no consumer
+   * changed. `useFoliateToc` is the one exception: it is not a hook call, it is
+   * a question about the TOC, and next to `useFoliate` and `useFoliateStyle` it
+   * read like one.
+   */
+  const {
+    toc: foliateToc,
+    setToc: setFoliateToc,
+    sectionLabel: foliateSectionLabel,
+    page: foliatePage,
+    bookPage: foliateBookPage,
+    tocChapters: foliateChapters,
+    tocIdx: foliateTocIdx,
+    hasToc,
+    remember: rememberFoliateLocation,
+    select: onFoliateSelection,
+    annotationClick: onFoliateAnnotationClick,
+    anchor: onFoliateAnchor,
+  } = useFoliateBook({
+    useFoliate,
+    chapters,
+    setChapterIdx,
+    setDisplayProgress,
+    setProgress,
+    cfiKey,
+    setPending,
+    setLookup,
+    annotations,
+    anchorAnnotation,
+  });
 
   /** Continuous scroll vs paged single/double spread. */
   const paged = layoutMode !== "scroll";
@@ -569,9 +539,6 @@ function ReaderView({
   // on meets the band at its start, and one page turn can still be settling when
   // the notice goes out, so the direction has to outlive the call to `flip`.
   const rulerDirRef = useRef<1 | -1 | 0>(0);
-  // Pending debounce of the foliate position save (a CFI, so it only ever
-  // carries the latest one — a page-turn storm must not queue a write each).
-  const foliateSaveRef = useRef<number | null>(null);
   // Latest position along the active axis, read outside the scroll handler.
   const fractionRef = useRef<number>(start.fraction);
   // Everything about the column grid: measured viewport, the tail spacer and
@@ -1367,7 +1334,7 @@ function ReaderView({
       }
     }
     if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => saveProgress(frac), SAVE_DELAY_MS);
+    debounceRef.current = window.setTimeout(() => saveProgress(frac), POSITION_SAVE_DELAY_MS);
     // The page has moved under the reading ruler, and it re-measures once the
     // movement is over rather than at the start of it: every way a page turns
     // here ends as a scroll — the instant jump, 「平移」's smooth scroll, and the
@@ -1441,11 +1408,11 @@ function ReaderView({
     showPages,
   ]);
 
-  // Flush a pending save on unmount.
+  // A pending save is dropped on unmount, not flushed — the same as the
+  // foliate one, which `useFoliateBook` clears for itself.
   useEffect(() => {
     return () => {
       if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
-      if (foliateSaveRef.current !== null) window.clearTimeout(foliateSaveRef.current);
       if (rulerSettleRef.current !== null) window.clearTimeout(rulerSettleRef.current);
     };
   }, []);
@@ -1588,57 +1555,6 @@ function ReaderView({
   );
 
   /**
-   * foliate selection: the view hands back a CFI, the only anchor that survives
-   * a section change — the (chapter, offset) pair the prose path stores means
-   * nothing here, because foliate's sections are the container's own.
-   */
-  const onFoliateSelection = useCallback((selection: FoliateSelection | null) => {
-    setLookup(null);
-    if (!selection) {
-      setPending(null);
-      return;
-    }
-    setPending({
-      range: { start: selection.startChar, end: selection.endChar, text: selection.text },
-      x: selection.x,
-      y: selection.y,
-      bottom: selection.bottom,
-      chapterIdx: selection.section,
-      cfi: selection.cfi,
-    });
-  }, []);
-
-  /** Click on a painted foliate highlight: reopen the pill in remove mode. */
-  const onFoliateAnnotationClick = useCallback(
-    (cfi: string, x: number, y: number) => {
-      const annotation = (annotations ?? []).find((item) => item.cfi === cfi);
-      if (!annotation) return;
-      setPending({
-        range: { start: annotation.startChar, end: annotation.endChar, text: annotation.text },
-        x,
-        y,
-        annotationId: annotation.id,
-        chapterIdx: annotation.chapterIdx,
-        cfi,
-      });
-    },
-    [annotations],
-  );
-
-  /**
-   * Stores the anchor a foliate-rendered highlight was missing.
-   *
-   * An import from a Kindle clippings file only knows the text it quotes, so its
-   * row lands without a CFI and foliate has nothing to paint. The view finds the
-   * text once the section carrying it is on screen and hands the CFI here; the
-   * row is the same highlight it was a moment ago, now paintable.
-   */
-  const onFoliateAnchor = useCallback(
-    (id: string, cfi: string) => anchorAnnotation.mutate({ id, cfi }),
-    [anchorAnnotation],
-  );
-
-  /**
    * Landing the reader on a position named by a search hit or an AI citation:
    * here, after the chapter it names lands, or in another book.
    *
@@ -1712,22 +1628,6 @@ function ReaderView({
     fonts,
     vertical: settings.vertical,
   });
-  // The TOC panel reads chapters; foliate books are driven by its own
-  // TOC, so the entries are reshaped into the same shape (with nesting depth).
-  const foliateChapters = useMemo(
-    () =>
-      foliateToc.map((entry, idx) => ({
-        idx,
-        title: entry.label,
-        chars: 0,
-        depth: entry.depth,
-      })),
-    [foliateToc],
-  );
-  const foliateTocIdx = useMemo(() => {
-    const at = foliateToc.findIndex((entry) => entry.label === foliateSectionLabel);
-    return at;
-  }, [foliateToc, foliateSectionLabel]);
 
   /** Column width for the paged layouts; `undefined` keeps flow layout. */
   const columnWidth = useMemo(() => {
@@ -1929,14 +1829,13 @@ function ReaderView({
   };
   // foliate sections replace the imported chapter list while reading, but only
   // when foliate actually found a TOC — an old MOBI6 has none.
-  const useFoliateToc = useFoliate && foliateToc.length > 0;
-  const headerIndex = useFoliateToc
+  const headerIndex = hasToc
     ? foliateTocIdx + 1
     : isPdf && !paged && pdfScrollPage !== null
       ? pdfScrollPage
       : chapterIdx + 1;
-  const headerTotal = useFoliateToc ? foliateToc.length : total;
-  const headerChapter = useFoliateToc ? foliateSectionLabel : chapterTitle;
+  const headerTotal = hasToc ? foliateToc.length : total;
+  const headerChapter = hasToc ? foliateSectionLabel : chapterTitle;
 
   // The toolbar's edit mode: when the reader tapped a painted highlight,
   // `pending` carries its id — resolve it to the whole annotation so the ink
@@ -2410,14 +2309,14 @@ function ReaderView({
         // apart again — that drift is what left the highlights painted.
         onClose={closePanel}
         toc={{
-          chapters: useFoliateToc ? foliateChapters : chapters,
+          chapters: hasToc ? foliateChapters : chapters,
           outline,
-          currentIdx: useFoliateToc ? foliateTocIdx : chapterIdx,
+          currentIdx: hasToc ? foliateTocIdx : chapterIdx,
           bookmarks: bookmarks ?? [],
           busy: createBookmark.isPending || deleteBookmark.isPending,
           onJump: (idx) => {
             setPanel("none");
-            if (useFoliateToc) {
+            if (hasToc) {
               foliateRef.current?.goToEntry(idx);
               return;
             }

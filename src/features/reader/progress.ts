@@ -1,5 +1,17 @@
 import type { ChapterMeta } from "@/types/ipc";
 
+/**
+ * How long a reading position waits after the page settles before it is
+ * written.
+ *
+ * One value for both ways a position arrives — the prose scroller's own
+ * debounce and foliate's location reports (`useFoliateBook`). They are the same
+ * promise to the reader ("the place you stopped is the place you come back
+ * to"), and two copies of it would be two chances for the two renderers to
+ * drift apart.
+ */
+export const POSITION_SAVE_DELAY_MS = 600;
+
 /** Sum of every chapter's character count. */
 export function totalChars(chapters: ChapterMeta[]): number {
   return chapters.reduce((sum, chapter) => sum + chapter.chars, 0);

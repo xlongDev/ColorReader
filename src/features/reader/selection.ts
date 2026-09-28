@@ -40,6 +40,30 @@ export interface TextRange {
 }
 
 /**
+ * A selection the toolbar is showing, and where to put it.
+ *
+ * Shared rather than declared inside `ReaderPage` because four different
+ * renderers write one — prose, the PDF text layer, and two of the foliate
+ * view's own callbacks (`useFoliateBook`) — and a shape that many writers build
+ * is not one module's private state.
+ */
+export interface PendingSelection {
+  range: TextRange;
+  x: number;
+  y: number;
+  /** Bottom edge of the selection box, so the toolbar can sit right under it. */
+  bottom?: number;
+  annotationId?: string;
+  /** The chapter (or PDF page, 0-based) the range belongs to; defaults to
+   *  the chapter on screen. PDF selections set it — a two-page spread can
+   *  surface a pill whose range lives on the other page. */
+  chapterIdx?: number;
+  /** The foliate CFI of this range. foliate sections do not line up with
+   *  our chapter indices, so a mobi highlight is anchored by this instead. */
+  cfi?: string;
+}
+
+/**
  * Maps paragraph-local positions onto a range of the joined text. Returns
  * `null` when the range is empty or out of bounds.
  */
