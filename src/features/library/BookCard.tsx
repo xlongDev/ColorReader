@@ -18,6 +18,7 @@ import { authorLine, formatFileSize } from "@/features/library/format";
 import { cn } from "@/lib/cn";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { SPRING, useMotion } from "@/lib/motion";
+import { displayTitle } from "@/lib/title";
 import { useLandingBox } from "@/hooks/useLandingBox";
 import { boxOf, useBookHandoff, type CoverBox } from "@/stores/book-handoff";
 import type { BookSummary } from "@/types/ipc";
@@ -232,7 +233,9 @@ export function BookCard({
           )}
         </span>
         <span className={cn("block min-w-0", variant === "list" && "flex-1")}>
-          <p className="text-text-1 mt-2 truncate text-sm font-medium">{book.title}</p>
+          <p className="text-text-1 mt-2 truncate text-sm font-medium" title={book.title}>
+            {displayTitle(book.title)}
+          </p>
           {/* Author truncates; format and size never do — a long author name
               used to push the size out of the line entirely, and the format was
               only ever shown for a book with no author at all. The author now

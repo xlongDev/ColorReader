@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { BookOpen, CaretRight, Sun } from "@phosphor-icons/react";
 
 import { useMotion } from "@/lib/motion";
+import { displayTitle } from "@/lib/title";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import type { BookSummary } from "@/types/ipc";
 
@@ -78,7 +79,12 @@ export function ContinueReadingCard({
         <span className="text-text-3 flex items-center gap-1.5 text-[11.5px]">
           <Sun size={12} weight="duotone" /> 继续阅读
         </span>
-        <span className="text-text-1 mt-0.5 block truncate text-sm font-medium">{book.title}</span>
+        {/* The metadata's subtitle stays off the card and in the tooltip: an
+            EPUB that carries 「认知觉醒: 开启自我改变的原动力 (当你…)」 was
+            printing all of it here, at twice the length of the label above it. */}
+        <span className="text-text-1 mt-0.5 block truncate text-sm font-medium" title={book.title}>
+          {displayTitle(book.title)}
+        </span>
         <span className="mt-2 flex items-center gap-2">
           <span className="bg-hairline h-1 flex-1 overflow-hidden rounded-full">
             <span

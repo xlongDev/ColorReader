@@ -48,14 +48,16 @@ export function registerCoreCommands({ openPalette }: Deps): () => void {
   return () => useCommandStore.getState().unregister(commands.map((c) => c.id));
 }
 
+/** Registered only so ⌘K stays bound (`useHotkeys` walks this registry);
+ *  `hidden` keeps it out of the list it opens. */
 function paletteCommand(open: () => void): Command {
   return {
     id: "app.palette",
     title: "打开命令面板",
-    description: "搜索动作或跳转视图",
     group: "应用",
     icon: <CommandIcon size={16} />,
     shortcut: [PALETTE],
+    hidden: true,
     run: open,
   };
 }
@@ -113,11 +115,13 @@ function sidebarCommand(): Command {
   };
 }
 
+/** No description on any of the three: the titles say the whole of it, and
+ *  「立刻切换应用外观」 under each of them was the same sentence three times —
+ *  the row the eye skips, in a list whose job is to be scanned. */
 function themeCommand(mode: ThemeMode, title: string, icon: ReactNode): Command {
   return {
     id: `theme.${mode}`,
     title,
-    description: "立刻切换应用外观",
     group: "外观",
     icon,
     run: () => useSettings.getState().setTheme(mode),
@@ -144,7 +148,6 @@ function navigationCommands(): Command[] {
 function settingsCommand(): Command {
   return {
     ...navCommand("/settings", "打开设置", "settings", <GearSix size={16} />),
-    description: "外观、界面行为与运行环境信息",
     keywords: ["settings", "preferences", "设置", "偏好"],
     shortcut: [PREFERENCES],
   };

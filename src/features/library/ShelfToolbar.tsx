@@ -5,6 +5,7 @@ import {
   CheckSquare,
   MagnifyingGlass,
   Rows,
+  SortAscending,
   SquaresFour,
   StackSimple,
   X,
@@ -96,12 +97,19 @@ export function ShelfToolbar({
         )}
       </div>
 
+      {/* The two dropdowns read identically otherwise, so each leads with its
+          own glyph — the same trick the grouping select already used, now on
+          both sides of the direction button between them. */}
       <div className="border-hairline bg-surface-1 focus-within:focus-ring relative inline-flex h-9 items-center rounded-md border">
+        <SortAscending
+          size={13}
+          className="text-text-3 pointer-events-none absolute top-1/2 left-2.5 -translate-y-1/2"
+        />
         <select
           aria-label="排序方式"
           value={sort}
           onChange={(event) => onSort(event.target.value as LibrarySort)}
-          className="text-text-1 appearance-none bg-transparent pr-7 pl-3 text-sm outline-none [&>option]:text-black"
+          className="text-text-1 appearance-none bg-transparent pr-7 pl-7 text-sm outline-none [&>option]:text-black"
         >
           {sortOptions.map((option) => (
             <option key={option.value} value={option.value}>

@@ -6,6 +6,7 @@ import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { Reveal } from "@/components/motion/Reveal";
 import { isDesktopRuntime } from "@/lib/ipc";
+import { displayTitle } from "@/lib/title";
 import { acceptOf, pickFiles as pickBrowserFiles } from "@/lib/pickFile";
 import { useClippings } from "@/hooks/useClippings";
 import type { ClippingsOutcome } from "@/types/ipc";
@@ -193,7 +194,9 @@ export function ClippingsDialog({ open: isOpen, onClose }: ClippingsDialogProps)
                       key={book.bookId}
                       className="flex items-center justify-between gap-3 px-3 py-2"
                     >
-                      <span className="text-text-1 min-w-0 truncate text-[13px]">{book.title}</span>
+                      <span className="text-text-1 min-w-0 truncate text-[13px]" title={book.title}>
+                        {displayTitle(book.title)}
+                      </span>
                       <span className="text-text-3 shrink-0 text-xs tabular-nums">
                         {book.imported} 条{book.duplicates > 0 && ` · 已有 ${book.duplicates}`}
                         {book.unlocated > 0 && ` · ${book.unlocated} 条未找到`}

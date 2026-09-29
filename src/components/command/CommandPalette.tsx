@@ -62,6 +62,8 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
     const scored: Scored[] = [];
     for (const list of [commands, bookCommands]) {
       for (const command of list) {
+        // `hidden` commands are bound (⌘K) but not listed — see `Command`.
+        if (command.hidden) continue;
         if (command.isEnabled && !command.isEnabled()) continue;
         const s = scoreCommand(query, command);
         if (s == null) continue;

@@ -26,6 +26,7 @@ import {
 
 import { cn } from "@/lib/cn";
 import { SPRING, useMotion } from "@/lib/motion";
+import { displayTitle } from "@/lib/title";
 import { useSettings, type NotesView } from "@/stores/settings";
 import { useBooks } from "@/hooks/useLibrary";
 import {
@@ -258,7 +259,11 @@ export function NotesPage() {
       <header className="px-8 pt-8 pb-6">
         <h1 className="text-text-1 text-2xl font-semibold tracking-tight">笔记</h1>
         <p className="text-text-2 mt-1.5 text-sm leading-relaxed">
-          你在书里划过的句子，和写在旁边的想法。这里改动的那一份，就是书里的那一份。
+          {/* The second clause is the one worth saying: a note edited here is
+              the same row the reader reads, not a copy. The sentence it
+              replaced tried to say that as 「这里改动的那一份，就是书里的那一份」
+              and only managed to be unclear about which copy was which. */}
+          划线和笔记按书归到这里，改动会写回书里。
         </p>
       </header>
 
@@ -598,7 +603,9 @@ function BookSection({
           </span>
         )}
         <div className="min-w-0 flex-1">
-          <h2 className="text-text-1 truncate text-[13.5px] font-medium">{book.title}</h2>
+          <h2 className="text-text-1 truncate text-[13.5px] font-medium" title={book.title}>
+            {displayTitle(book.title)}
+          </h2>
           <p className="text-text-3 truncate text-[11.5px]">{authorLine(book)}</p>
         </div>
         <span className="text-text-3 shrink-0 text-[11.5px]">{entries.length} 条</span>
@@ -716,7 +723,7 @@ function NoteRow({
                 title="编辑笔记"
                 disabled={busy || editing}
                 onClick={() => setEditing(true)}
-                className="focus-visible:focus-ring text-text-3 hover:text-text-1 rounded p-1 transition-colors disabled:opacity-40"
+                className="focus-visible:focus-ring text-text-3 hover:text-text-1 rounded p-1.5 transition-colors disabled:opacity-40"
               >
                 <NotePencil size={13} />
               </button>
@@ -725,7 +732,7 @@ function NoteRow({
                 aria-label="在书中打开"
                 title="在书中打开"
                 onClick={() => onOpen(entry)}
-                className="focus-visible:focus-ring text-text-3 hover:text-text-1 rounded p-1 transition-colors"
+                className="focus-visible:focus-ring text-text-3 hover:text-text-1 rounded p-1.5 transition-colors"
               >
                 <ArrowSquareOut size={13} />
               </button>
@@ -735,7 +742,7 @@ function NoteRow({
                 title="删除标注"
                 disabled={busy}
                 onClick={() => remove.mutate(annotation.id)}
-                className="focus-visible:focus-ring text-text-3 hover:text-danger rounded p-1 transition-colors disabled:opacity-50"
+                className="focus-visible:focus-ring text-text-3 hover:text-danger rounded p-1.5 transition-colors disabled:opacity-50"
               >
                 <Trash size={13} />
               </button>

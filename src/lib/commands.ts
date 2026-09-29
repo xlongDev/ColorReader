@@ -21,6 +21,15 @@ export interface Command {
   readonly shortcut?: readonly Shortcut[];
   /** Returns `false` (and is hidden) when the action cannot run right now. */
   readonly isEnabled?: () => boolean;
+  /**
+   * Registered and bound, but not listed.
+   *
+   * For the command that opens the palette itself. `useHotkeys` discovers
+   * shortcuts by walking this registry, so dropping the command would take ⌘K
+   * with it — but listing it puts a command to open the palette in the first
+   * row of the palette, which is the one thing nobody looking at it needs.
+   */
+  readonly hidden?: boolean;
   /** The action itself. May return a promise; errors are surfaced to the user. */
   readonly run: () => void | Promise<void>;
 }

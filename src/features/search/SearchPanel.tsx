@@ -169,9 +169,12 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
       <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
         {trimmed.length === 0 ? (
           <div className="space-y-3">
+            {/* The scope is the search page's own subtitle (`SearchPage`), so
+                repeating it here said nothing — what the empty state has to
+                teach is the keyboard, which no other surface mentions. */}
             <p className="text-text-3 text-[13px] leading-relaxed">
-              {bookId === null ? "在所有已导入的书籍正文里查找" : "在当前这本书的正文里查找"}
-              ，用 ↑ ↓ 选择结果，回车跳转。
+              {bookId === null ? "输入即搜" : "在这本书里输入即搜"}，用 ↑ ↓
+              选择，回车跳到书里命中的那一段。
             </p>
             {history.length > 0 && (
               <div>
