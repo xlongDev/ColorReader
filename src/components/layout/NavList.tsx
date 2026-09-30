@@ -415,47 +415,48 @@ function Footer({ compact }: { compact?: boolean } = {}) {
         collapsed={collapsed}
         reduce={reduce}
       />
-      {collapsed ? (
-        <>
-          {/* Settings lives in the rail when collapsed and inside the pill
-              when expanded — the ThemeSwitch owns the latter. */}
-          <motion.div
-            layoutId={ID.settings}
-            transition={reduce ? { duration: 0 } : SPRING.layout}
-            className="flex"
+      {/* 隐藏侧边栏 and ⌘K used to be expanded-only, which meant collapsing
+          the rail took them away with it: ⌘K still worked from the keyboard,
+          but hiding had no route left at all once the button was gone. They
+          stay in both layouts now. */}
+      <AnimatePresence initial={false}>
+        <ChromeEphemeral
+          key="hide"
+          button={chromeActions[1]!}
+          reduce={reduce}
+          collapsed={collapsed}
+        />
+        <ChromeEphemeral
+          key="palette"
+          button={chromeActions[2]!}
+          reduce={reduce}
+          collapsed={collapsed}
+        />
+      </AnimatePresence>
+      {/* Settings lives in the rail when collapsed and inside the pill when
+          expanded — the ThemeSwitch owns the latter. */}
+      {collapsed && (
+        <motion.div
+          layoutId={ID.settings}
+          transition={reduce ? { duration: 0 } : SPRING.layout}
+          className="flex"
+        >
+          <GlassIconButton
+            label="设置"
+            size="sm"
+            onClick={() => navigate("/settings")}
+            title="设置"
           >
-            <GlassIconButton
-              label="设置"
-              size="sm"
-              onClick={() => navigate("/settings")}
-              title="设置"
-            >
-              <GearSix size={16} />
-            </GlassIconButton>
-          </motion.div>
-          <ChromeButton
-            id={ID.github}
-            button={chromeActions[3]!}
-            collapsed={collapsed}
-            reduce={reduce}
-          />
-        </>
-      ) : (
-        <>
-          {/* Hide + palette only exist when expanded. AnimatePresence lets
-              each fade and scale in/out without holding the layout back. */}
-          <AnimatePresence initial={false}>
-            <ChromeEphemeral key="hide" button={chromeActions[1]!} reduce={reduce} />
-            <ChromeEphemeral key="palette" button={chromeActions[2]!} reduce={reduce} />
-          </AnimatePresence>
-          <ChromeButton
-            id={ID.github}
-            button={chromeActions[3]!}
-            collapsed={collapsed}
-            reduce={reduce}
-          />
-        </>
+            <GearSix size={16} />
+          </GlassIconButton>
+        </motion.div>
       )}
+      <ChromeButton
+        id={ID.github}
+        button={chromeActions[3]!}
+        collapsed={collapsed}
+        reduce={reduce}
+      />
     </>
   );
 
@@ -527,7 +528,15 @@ function ChromeButton({
  *  The button fills its wrapper for the same reason `ChromeButton`'s does:
  *  the row's four buttons share the width evenly, and a `flex-1` wrapper
  *  around a fixed 32px button only moves the unevenness inside it. */
-function ChromeEphemeral({ button, reduce }: { button: FooterAction; reduce: boolean | null }) {
+function ChromeEphemeral({
+  button,
+  reduce,
+  collapsed,
+}: {
+  button: FooterAction;
+  reduce: boolean | null;
+  collapsed: boolean;
+}) {
   return (
     <motion.div
       layout
@@ -535,14 +544,16 @@ function ChromeEphemeral({ button, reduce }: { button: FooterAction; reduce: boo
       animate={{ opacity: 1, scale: 1 }}
       exit={reduce ? undefined : { opacity: 0, scale: 0.85 }}
       transition={reduce ? { duration: 0 } : SPRING.layout}
-      className="flex flex-1"
+      // `flex-1` only in the row — see `ChromeButton`: in the column it would
+      // stretch the button vertically instead of sharing the width.
+      className={cn("flex", !collapsed && "flex-1")}
     >
       <GlassIconButton
         label={button.label}
         size="sm"
         onClick={button.on}
         title={button.label}
-        className="flex-1"
+        className={collapsed ? undefined : "flex-1"}
       >
         {button.icon}
       </GlassIconButton>
