@@ -7,6 +7,7 @@ import { EmptyState } from "@/components/common/EmptyState";
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassPanel } from "@/components/glass/panel";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { Reveal } from "@/components/motion/Reveal";
 import { useLibraryStats } from "@/hooks/useLibrary";
 import { useClearReadingStats, useReadingStats } from "@/hooks/useReading";
@@ -341,12 +342,10 @@ export function StatsPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="px-8 pt-8 pb-6">
-        <h1 className="text-text-1 text-2xl font-semibold tracking-tight">阅读统计</h1>
-        <p className="text-text-2 mt-1 text-sm">
-          打开书的时间会被记下来，一半是给自己的交代，一半是明天再打开的理由。
-        </p>
-      </header>
+      <PageHeader
+        title="阅读统计"
+        subtitle="打开书的时间会被记下来，一半是给自己的交代，一半是明天再打开的理由。"
+      />
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-8 pb-8">
         {isPending ? (

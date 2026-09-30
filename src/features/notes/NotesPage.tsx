@@ -38,6 +38,7 @@ import {
 } from "@/hooks/useAnnotations";
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { NoteCell } from "@/features/reader/AnnotationNote";
 import { EmptyState } from "@/components/common/EmptyState";
 import { authorLine } from "@/features/library/format";
@@ -256,23 +257,18 @@ export function NotesPage() {
     // cannot drift apart — the same contract `[data-shelf-scroller]` carries
     // for the shelf's bar.
     <div ref={pageRef} data-notes-page className="flex h-full flex-col">
-      <header className="px-8 pt-8 pb-6">
-        <h1 className="text-text-1 text-2xl font-semibold tracking-tight">笔记</h1>
-        <p className="text-text-2 mt-1.5 text-sm leading-relaxed">
-          {/* The second clause is the one worth saying: a note edited here is
-              the same row the reader reads, not a copy. The sentence it
-              replaced tried to say that as 「这里改动的那一份，就是书里的那一份」
-              and only managed to be unclear about which copy was which. */}
-          划线和笔记按书归到这里，改动会写回书里。
-        </p>
-      </header>
+      {/* The second clause of that subtitle is the one worth saying: a note
+          edited here is the same row the reader reads, not a copy. The
+          sentence it replaced tried to say that as 「这里改动的那一份，就是书里
+          的那一份」 and only managed to be unclear about which copy was which. */}
+      <PageHeader title="笔记" subtitle="划线和笔记按书归到这里，改动会写回书里。" />
 
       <div className="flex min-h-0 flex-1 flex-col px-8 pb-8">
         <motion.div
           initial={m.reduce ? false : { opacity: 0, y: m.rise }}
           animate={{ opacity: 1, y: 0 }}
           transition={m.enter}
-          className="glass flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl"
+          className="flex min-h-0 flex-1 flex-col overflow-hidden"
         >
           <Toolbar
             query={query}

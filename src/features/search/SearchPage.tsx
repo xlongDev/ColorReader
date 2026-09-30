@@ -1,4 +1,5 @@
 import { useNavigate } from "react-router-dom";
+import { PageHeader } from "@/components/layout/PageHeader";
 import { SearchPanel } from "@/features/search/SearchPanel";
 import type { SearchHit } from "@/types/ipc";
 
@@ -18,13 +19,15 @@ export function SearchPage() {
 
   return (
     <div className="flex h-full flex-col">
-      <header className="px-8 pt-8 pb-6">
-        <h1 className="text-text-1 text-2xl font-semibold tracking-tight">全文检索</h1>
-        <p className="text-text-2 mt-1 text-sm">在所有已导入的书籍正文里查找，结果按相关度排序。</p>
-      </header>
+      <PageHeader title="全文检索" subtitle="在所有已导入的书籍正文里查找，结果按相关度排序。" />
 
       <div className="flex min-h-0 flex-1 flex-col px-8 pb-8">
-        <div className="glass flex min-h-0 flex-1 flex-col rounded-2xl pt-4">
+        {/* No material on this one: the page already sits inside a `glass-2`
+            pane, and a `glass` surface on top of it is two translucent layers
+            stacked, which reads as the content behind a sheet of grey. The
+            stats page — blocks on the pane, nothing under them — is the shape
+            every page is moving to. */}
+        <div className="flex min-h-0 flex-1 flex-col">
           <SearchPanel onPick={onPick} />
         </div>
       </div>

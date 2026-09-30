@@ -67,7 +67,9 @@ export function ShelfHeader({
             transition={{ duration: m.reduce ? 0 : DURATION.fast, ease: EASE_OUT }}
           >
             <h1 className="text-text-1 text-2xl font-semibold tracking-tight">{meta.title}</h1>
-            <p className="text-text-2 mt-1 text-sm">{meta.subtitle}</p>
+            {/* Same `mt-1.5` the shared `PageHeader` uses, so the shelf's
+                heading and every other page's read as one thing. */}
+            <p className="text-text-2 mt-1.5 text-sm leading-relaxed">{meta.subtitle}</p>
           </motion.div>
         </AnimatePresence>
         <div className="flex items-center gap-2">
