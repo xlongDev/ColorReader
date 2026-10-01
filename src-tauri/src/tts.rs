@@ -26,6 +26,7 @@
 //!   line, then the body. The body of `audio.metadata` is the only place the
 //!   per-word timings appear.
 
+use std::net::{IpAddr, Ipv4Addr};
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -34,10 +35,13 @@ use base64::engine::general_purpose::STANDARD;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::net::{TcpStream, lookup_host};
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::handshake::client::Request as WsRequest;
 use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue, Response};
+use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async_tls};
 
 use crate::error::{AppError, AppResult};
 
@@ -53,6 +57,9 @@ const CHROMIUM_VERSION: &str = "143.0.3650.75";
 const VOICES_URL: &str =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list";
 const WSS_URL: &str = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
+/// The same host, spelled out because opening a socket needs an address and
+/// `WSS_URL` is only a string.
+const WSS_HOST: &str = "speech.platform.bing.com";
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
      AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0";
@@ -169,6 +176,7 @@ pub struct EdgeVoice {
 }
 
 /// Why one attempt did not produce a clip.
+#[derive(Debug)]
 enum Attempt {
     /// Retrying cannot help.
     Failed(AppError),
@@ -185,6 +193,12 @@ impl From<AppError> for Attempt {
 fn http() -> AppResult<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(LIST_TIMEOUT)
+        // Bound to IPv4 on purpose: the host is dual-stack, and on a network
+        // whose IPv6 route is broken reqwest's happy eyeballs still settles on
+        // the address that connects and then resets, so most fetches fail.
+        // ponytail: an IPv6-only network would need a per-address fallback,
+        // which reqwest does not expose.
+        .local_address(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
         .build()
         .map_err(|err| AppError::Message(format!("无法创建 HTTP 客户端：{err}")))
 }
@@ -456,8 +470,44 @@ struct RawTag {
     categories: Vec<String>,
 }
 
-/// One handshake, one request, one clip.
-async fn attempt(text: &str, voice: &str, rate: f64) -> Result<EdgeClip, Attempt> {
+/// Opens the socket, trying every address the host resolves to.
+///
+/// `TcpStream::connect("host:port")` stops at the first address that completes a
+/// TCP handshake, and an address can do that while being unusable one layer up:
+/// on a network whose IPv6 route is broken the socket opens, the TLS handshake
+/// is then reset, and the reader is told the connection broke without the
+/// address that works ever being tried. Resolving here and running the whole
+/// handshake per address is what lets that case fall through.
+async fn connect() -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Attempt> {
+    let addresses = lookup_host((WSS_HOST, 443)).await.map_err(|err| {
+        Attempt::Failed(AppError::Message(format!("无法解析 Edge 语音地址：{err}")))
+    })?;
+    let mut last: Option<WsError> = None;
+    for address in addresses {
+        let stream = match TcpStream::connect(address).await {
+            Ok(stream) => stream,
+            Err(err) => {
+                last = Some(WsError::Io(err));
+                continue;
+            }
+        };
+        match client_async_tls(handshake_request()?, stream).await {
+            Ok((socket, _)) => return Ok(socket),
+            // A refusal is the service answering, so another address gets the
+            // same answer; let it decide whether this was a clock after all.
+            Err(err @ WsError::Http(_)) => return Err(classify(err)),
+            Err(err) => last = Some(err),
+        }
+    }
+    Err(Attempt::Failed(match last {
+        Some(err) => socket_error(err),
+        None => AppError::Message("Edge 语音地址没有解析到服务器".into()),
+    }))
+}
+
+/// The handshake request. Rebuilt per address — `Request` is not `Clone`, and
+/// the cookie is meant to be fresh per request anyway.
+fn handshake_request() -> Result<WsRequest, Attempt> {
     let url = format!(
         "{WSS_URL}?TrustedClientToken={TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC={}&Sec-MS-GEC-Version=1-{CHROMIUM_VERSION}&ConnectionId={}",
         sec_ms_gec(now_seconds()),
@@ -479,8 +529,12 @@ async fn attempt(text: &str, voice: &str, rate: f64) -> Result<EdgeClip, Attempt
         })?;
         headers.insert(HeaderName::from_static("cookie"), cookie);
     }
+    Ok(request)
+}
 
-    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.map_err(classify)?;
+/// One handshake, one request, one clip.
+async fn attempt(text: &str, voice: &str, rate: f64) -> Result<EdgeClip, Attempt> {
+    let mut socket = connect().await?;
 
     socket
         .send(Message::text(speech_config()))
@@ -548,7 +602,10 @@ fn socket_error(err: WsError) -> AppError {
             tracing::warn!(status, "Edge TTS handshake refused");
             AppError::Message(format!("Edge 语音握手被拒绝（HTTP {status}）"))
         }
-        other => AppError::Message(format!("Edge 语音连接中断：{other}")),
+        other => {
+            tracing::warn!(error = %other, "Edge TTS connection failed");
+            AppError::Message(format!("Edge 语音连接中断：{other}"))
+        }
     }
 }
 
@@ -649,6 +706,26 @@ mod tests {
     fn escaped_words_come_back_as_written() {
         let body = r#"{"Metadata":[{"Type":"WordBoundary","Data":{"Offset":0,"Duration":1,"text":{"Text":"a &amp; b &lt;c&gt;"}}}]}"#;
         assert_eq!(parse_words(body.as_bytes()).expect("parse")[0].text, "a & b <c>");
+    }
+
+    #[test]
+    fn the_handshake_carries_everything_the_service_refuses_without() {
+        let request = handshake_request().expect("request");
+        let query = request.uri().query().unwrap_or_default();
+        assert!(query.contains("TrustedClientToken="), "{query}");
+        assert!(query.contains("Sec-MS-GEC-Version=1-"), "{query}");
+        let value = |name: &str| {
+            request
+                .headers()
+                .get(name)
+                .unwrap_or_else(|| panic!("缺少 {name}"))
+                .to_str()
+                .expect("header")
+                .to_string()
+        };
+        assert_eq!(value("origin"), "chrome-extension://jdiccldimpdaibmpdkjnbmckianbfold");
+        assert!(value("cookie").starts_with("muid="), "{}", value("cookie"));
+        assert!(value("user-agent").contains("Edg/"), "{}", value("user-agent"));
     }
 
     #[test]
