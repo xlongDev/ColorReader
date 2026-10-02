@@ -58,6 +58,8 @@ import {
   type PendingSelection,
   type TextRange,
 } from "@/features/reader/selection";
+import { setTtsWashRule } from "@/features/reader/pdfTextSelection";
+import { washCss, washRule } from "@/features/reader/ttsWash";
 import { RsvpPlayer } from "@/features/reader/RsvpPlayer";
 import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionToolbar";
 import type { AnnotationStyle } from "@/types/ipc";
@@ -246,6 +248,9 @@ function ReaderView({
   const speechRate = settings.speechRate;
   const speechVoiceURI = settings.speechVoiceURI;
   const speechGranularity = settings.speechGranularity;
+  const speechWashStyle = settings.speechWashStyle;
+  const speechWashColor = settings.speechWashColor;
+  const speechPlayerStyle = settings.speechPlayerStyle;
   // The indicator is off, or it counts the unit the layout measured, or it
   // counts the whole book (the tally below, or foliate's own counter). One flag
   // for the two on-modes: the measurement below is what both of them need.
@@ -1798,6 +1803,27 @@ function ReaderView({
     [surface.mode],
   );
 
+  // The wash the voice draws, in the three shapes the paths need it: a value
+  // for foliate's overlayer, inline style for the prose `<mark>`, and a
+  // `::highlight` body for pdf.js's text layer. All three come from `washCss`,
+  // so the marker cannot read differently depending on the book's format.
+  const ttsWash = useMemo(
+    () => ({ style: speechWashStyle, color: speechWashColor }),
+    [speechWashStyle, speechWashColor],
+  );
+  const ttsWashCss = useMemo(
+    () => washCss(ttsWash.style, ttsWash.color, surface.mode === "dark"),
+    [ttsWash, surface.mode],
+  );
+
+  // pdf.js paints its text through the CSS Custom Highlight API, which takes no
+  // inline style — so the wash's rule is installed rather than rendered. Off a
+  // PDF there is no text layer to paint, and no rule to keep.
+  useEffect(() => {
+    if (!isPdf) return;
+    setTtsWashRule(washRule(ttsWash.style, ttsWash.color, surface.mode === "dark"));
+  }, [isPdf, ttsWash, surface.mode]);
+
   // A plate chapter is a part-title page: the chapter's own wallpaper plus at
   // most a short heading, no running text. Kindle paints these pages with a
   // full-page CSS background; the multicol prose path would split the title
@@ -2029,6 +2055,7 @@ function ReaderView({
               transition: pageTransition,
               style: foliateStyle,
               annotations,
+              ttsWash,
               onSelect: onFoliateSelection,
               onAnnotationClick: onFoliateAnnotationClick,
               onAnchor: onFoliateAnchor,
@@ -2064,6 +2091,7 @@ function ReaderView({
                   annotationId: annotation.id,
                 }),
               ink: markInk,
+              ttsWash: ttsWashCss,
             }}
           />
           {/* Pull-to-bookmark. The prose scroller only: whether the page is at
@@ -2182,6 +2210,7 @@ function ReaderView({
           title={title}
           coverUrl={coverUrl}
           chapter={headerChapter}
+          playerStyle={speechPlayerStyle}
           units={readAloud.units}
           index={readAloud.unit}
           status={readAloud.status}

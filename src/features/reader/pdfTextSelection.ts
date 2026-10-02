@@ -217,6 +217,27 @@ export function clearPageHighlights(pageNumber: number): void {
 const TTS_NAME = "pdf-tts";
 let ttsRange: Range | null = null;
 
+const TTS_STYLE_ID = "pdf-tts-wash";
+
+/**
+ * The wash's shape and ink, as the one rule that paints it.
+ *
+ * It lives here rather than in the stylesheet because it is a setting the
+ * reader can change at any moment, and `::highlight` has no element to hang an
+ * inline style on. One element, rewritten in place: a rule per change would
+ * leave the earlier ones matching alongside it.
+ */
+export function setTtsWashRule(body: string): void {
+  let sheet = document.getElementById(TTS_STYLE_ID) as HTMLStyleElement | null;
+  if (!sheet) {
+    sheet = document.createElement("style");
+    sheet.id = TTS_STYLE_ID;
+    document.head.append(sheet);
+  }
+  const rule = `::highlight(${TTS_NAME}) { ${body} }`;
+  if (sheet.textContent !== rule) sheet.textContent = rule;
+}
+
 function repaintTts() {
   if (typeof CSS === "undefined" || !("highlights" in CSS)) return;
   if (ttsRange === null) {

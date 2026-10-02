@@ -219,6 +219,17 @@ button {
     font-family: inherit;
     color: inherit;
   }
+
+  /* A `<mark>` is the browser's own yellow until something says otherwise, and
+     every mark in the reading column carries ink of its own: a painted band, or
+     an annotation's rule, or the voice's wash. Only the band sets a background,
+     so without this the rule styles — 下划线, 删除线, 波浪线, 轮廓 — sat the
+     reader's text on a yellow the reader never chose. Search hits keep their
+     wash because a utility outranks this layer; the marks that own a colour set
+     it inline, which outranks everything. */
+  [data-reading-content] mark {
+    background-color: transparent;
+  }
 }
 
 /* -- surfaces the browser draws and we did not ----------------------
@@ -608,6 +619,27 @@ input[type="range"].range::-moz-range-thumb {
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
 }
 
+/* A hue rail: the same control as `.range`, with the colour wheel as its track
+   and the picked hue on the thumb instead of the accent. In the colour pickers
+   the thumb has to read as *this* colour — an accent bead sliding along a
+   rainbow says nothing about which hue is selected. Declared after `.range`, so
+   the later track/thumb rules win at equal specificity. ------------------- */
+input[type="range"].range-hue::-webkit-slider-runnable-track {
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+
+input[type="range"].range-hue::-webkit-slider-thumb {
+  background: var(--range-thumb, var(--accent));
+}
+
+input[type="range"].range-hue::-moz-range-track {
+  background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00);
+}
+
+input[type="range"].range-hue::-moz-range-thumb {
+  background: var(--range-thumb, var(--accent));
+}
+
 /* pdf.js text layer: the selectable page. A faithful port of the official
    `.textLayer` block from pdfjs-dist/web/pdf_viewer.css (v6) — NOT a hand
    rolled subset. pdf.js sizes spans through the --total-scale-factor /
@@ -687,11 +719,10 @@ input[type="range"].range::-moz-range-thumb {
   background-color: var(--accent-soft);
 }
 
-/* The read-aloud wash: same colour as the prose path's, so the line being
-   read looks the same whichever format is speaking it. */
-::highlight(pdf-tts) {
-  background-color: var(--accent-soft);
-}
+/* The read-aloud wash. Its rule is built at runtime from the reader's own
+   settings — the same `washCss` the prose path paints with — and lives in
+   `pdfTextSelection.ts::setTtsWashRule`, because a `::highlight` pseudo-element
+   has no element to hang an inline style on. */
 
 /* -- fixed-layout books ----------------------------------------------
    A pre-paginated EPUB (comic, picture book, textbook spread) is rendered by

@@ -10,6 +10,7 @@ import type {
 import type { TextRange } from "@/features/reader/selection";
 import type { FoliateStyle } from "@/features/reader/foliateStyle";
 import type { LayoutMode, PageTransition } from "@/features/reader/theme";
+import type { TtsWashStyle } from "@/features/reader/ttsWash";
 import { cn } from "@/lib/cn";
 import type { Annotation, AnnotationStyle, BookFormat, BookImage } from "@/types/ipc";
 
@@ -111,6 +112,9 @@ export function ReaderChapterView({
     transition: PageTransition;
     style: FoliateStyle;
     annotations: Annotation[] | undefined;
+    /** The read-aloud wash, as the overlayer needs it: which painter, and the
+     *  ink to hand it. Equal to the prose path's by construction. */
+    ttsWash: { style: TtsWashStyle; color: string | null };
     onSelect: (selection: FoliateSelection | null) => void;
     onAnnotationClick: (cfi: string, x: number, y: number) => void;
     onAnchor: (id: string, cfi: string) => void;
@@ -134,6 +138,8 @@ export function ReaderChapterView({
     onGoTo: (idx: number) => void;
     onEditAnnotation: (annotation: Annotation, x: number, y: number) => void;
     ink: (color: string | null, style: AnnotationStyle | null) => CSSProperties;
+    /** The read-aloud wash: shape and ink the reader chose (`ttsWash.ts`). */
+    ttsWash: CSSProperties;
   };
 }) {
   if (isPdf) {
@@ -249,6 +255,7 @@ export function ReaderChapterView({
           marginY={blockMargin}
           style={foliate.style}
           annotations={foliate.annotations}
+          ttsWash={foliate.ttsWash}
           onSelect={foliate.onSelect}
           onAnnotationClick={foliate.onAnnotationClick}
           onAnchor={foliate.onAnchor}
@@ -355,8 +362,9 @@ export function ReaderChapterView({
               {segments.map((segment) =>
                 segment.tts ? (
                   // The reading voice's own run. Same ink as a saved
-                  // mark — one wash, both reading paths.
-                  <mark key={segment.key} className="bg-accent-soft rounded-[2px] text-inherit">
+                  // mark — one wash, both reading paths — and the same ink on
+                  // every format, whichever shape the reader picked.
+                  <mark key={segment.key} className="text-inherit" style={prose.ttsWash}>
                     {segment.text}
                   </mark>
                 ) : segment.highlighted ? (

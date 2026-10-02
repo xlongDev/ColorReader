@@ -5,8 +5,10 @@ import { Overlayer } from "foliate-js/overlayer.js";
 import type { FoliateRelocate, View, makeBook } from "foliate-js/view.js";
 import type { Annotation } from "@/types/ipc";
 import type { LayoutMode, PageTransition } from "./theme";
-import { speechUnits, unitsFromOffset, TTS_WASH_BOOK } from "./speech";
+import { speechUnits, unitsFromOffset } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
+import { foliateWash } from "./ttsWash";
+import type { TtsWashStyle } from "./ttsWash";
 import { buildStyleSheet } from "./foliateStyle";
 import { lineRects, relayRulerLayout } from "./rulerPointer";
 import type { RulerRect } from "./rulerPointer";
@@ -309,6 +311,8 @@ type Props = {
    * painted in the wrong place.
    */
   annotations?: readonly Annotation[];
+  /** The read-aloud wash the reader chose: shape and ink. */
+  ttsWash: { style: TtsWashStyle; color: string | null };
   /** A completed selection, or `null` when the user cleared it. */
   onSelect?: (selection: FoliateSelection | null) => void;
   /** A click on a painted highlight: `cfi` plus viewport coordinates. */
@@ -446,13 +450,6 @@ const applyLayout = (
     renderer.setAttribute(name, `${px}px`);
   }
 };
-
-/**
- * Read-aloud wash for a palette, pre-divided so foliate's inside-iframe
- * multiply lands on the same `--accent-soft` the prose path paints. See
- * `TTS_WASH_BOOK` — one wash, both paths.
- */
-const ttsWash = (dark: boolean) => (dark ? TTS_WASH_BOOK.dark : TTS_WASH_BOOK.light);
 
 /** One text node of a block, with its offset inside the block's raw text. */
 type TextNodeAt = { node: Text; start: number };
@@ -664,6 +661,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     marginY,
     style,
     annotations,
+    ttsWash,
     onSelect,
     onAnnotationClick,
     onAnchor,
@@ -678,10 +676,11 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   const [error, setError] = useState<string | null>(null);
   // Read-aloud wash. The prose path draws the same one with a `<mark>`, so a
   // reader switching a book's format sees one marker, not two styles.
-  // Mirrored into a ref for `focusUnit`, which is created once and cannot
-  // capture a changing value.
+  // Mirrored into refs for `focusUnit`/`paintTts`, which are created once and
+  // cannot capture a changing value.
   const ttsRef = useRef<Overlayer | null>(null);
-  const ttsColorRef = useRef(ttsWash(style.dark));
+  const ttsPaintRef = useRef(foliateWash(ttsWash.style, ttsWash.color, style.dark));
+  const ttsRangeRef = useRef<Range | null>(null);
   // The listener lives for the lifetime of the element, so it reads the
   // latest callback through a ref instead of re-opening the book on every
   // parent render.
@@ -1281,7 +1280,6 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   // paginator keeps across section changes.
   useEffect(() => {
     styleRef.current = style;
-    ttsColorRef.current = ttsWash(style.dark);
     // 「仿真」 peels a horizontal sheet, and foliate has a two-phase turn of its
     // own for the vertical axis, so the captured curl stands down when the
     // columns run top-to-bottom. `setEnabled(false)` makes `turn()` decline and
@@ -1324,11 +1322,25 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     if (!entry?.overlayer) return;
     if (ttsRef.current && ttsRef.current !== entry.overlayer) ttsRef.current.remove(TTS_KEY);
     ttsRef.current = entry.overlayer;
-    entry.overlayer.add(TTS_KEY, range, Overlayer.highlight, {
-      color: ttsColorRef.current,
+    ttsRangeRef.current = range;
+    const paint = ttsPaintRef.current;
+    const draw = {
+      highlight: Overlayer.highlight,
+      underline: Overlayer.underline,
+      strikethrough: Overlayer.strikethrough,
+      squiggly: Overlayer.squiggly,
+      outline: Overlayer.outline,
+    }[paint.draw];
+    entry.overlayer.add(TTS_KEY, range, draw, {
+      color: paint.color,
       // Match the prose path's `<mark>` corners, so the wash reads the same
-      // whether the page is ours or the book's own.
-      radius: 2,
+      // whether the page is ours or the book's own. The line painters take the
+      // width readest's own annotations are drawn at.
+      ...(paint.draw === "highlight"
+        ? { radius: 2 }
+        : paint.draw === "squiggly"
+          ? { width: 1.5 }
+          : { width: 2 }),
     });
   }, []);
 
@@ -1336,7 +1348,17 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   const clearTts = useCallback(() => {
     ttsRef.current?.remove(TTS_KEY);
     ttsRef.current = null;
+    ttsRangeRef.current = null;
   }, []);
+
+  // A style or ink change redraws the run the voice is on, rather than waiting
+  // for the next sentence — the reader is looking at that run while they change
+  // it. The wash is otherwise only repainted when the position moves.
+  useEffect(() => {
+    ttsPaintRef.current = foliateWash(ttsWash.style, ttsWash.color, style.dark);
+    const range = ttsRangeRef.current;
+    if (range) paintTts(range);
+  }, [ttsWash, style.dark, paintTts]);
 
   /**
    * The text blocks of the section on screen, waiting out a section switch:
