@@ -17,6 +17,19 @@ export const SPEECH_GRANULARITIES: { key: SpeechGranularity; label: string }[] =
   { key: "paragraph", label: "段落" },
 ];
 
+/**
+ * How much of the read-aloud player a session puts on screen. `full` is the card
+ * with the transport, the scrubber and the three settings behind it; `minimal`
+ * keeps the play button and where the voice is, and nothing else — for a reader
+ * who set the voice once and only ever presses stop.
+ */
+export type SpeechPlayerStyle = "full" | "minimal";
+
+export const SPEECH_PLAYER_STYLES: { key: SpeechPlayerStyle; label: string }[] = [
+  { key: "full", label: "完整" },
+  { key: "minimal", label: "简约" },
+];
+
 /** One utterance and where it sits in its source block. */
 export interface SpeechUnit {
   /** What the voice says: the raw run, trimmed. Kept byte-for-byte identical to
@@ -55,18 +68,6 @@ export interface SpeechBoundary {
   /** Length of the word; 0 when the engine reports the start only. */
   charLength: number;
 }
-
-/**
- * Read-aloud wash inside a book's own iframe, pre-divided by foliate's
- * `--overlayer-highlight-opacity` (0.3, never set inside a section) so the
- * painted alpha lands on the app's `--accent-soft` — the same wash the prose
- * path draws, so the marker looks identical on either path. Kept in step with
- * the two `--accent-soft` values in `src/styles/globals.css`.
- */
-export const TTS_WASH_BOOK = {
-  dark: "rgba(233, 161, 59, 0.533)",
-  light: "rgba(150, 89, 26, 0.4)",
-} as const;
 
 /**
  * Trims a run of the raw text down to what the voice actually says, keeping

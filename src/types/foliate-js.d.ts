@@ -177,6 +177,7 @@ declare module "foliate-js/overlayer.js" {
     remove(key: string): void;
     static highlight: FoliateOverlayerDraw;
     static underline: FoliateOverlayerDraw;
+    static strikethrough: FoliateOverlayerDraw;
     static squiggly: FoliateOverlayerDraw;
     static outline: FoliateOverlayerDraw;
   }

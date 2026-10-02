@@ -5,7 +5,8 @@ import type { PaceSample } from "@/features/reader/pace";
 import { pushPace } from "@/features/reader/pace";
 import { DEFAULT_WPM } from "@/features/reader/rsvp";
 import type { LayoutMode, PageTransition } from "@/features/reader/theme";
-import type { SpeechGranularity } from "@/features/reader/speech";
+import type { SpeechGranularity, SpeechPlayerStyle } from "@/features/reader/speech";
+import type { TtsWashStyle } from "@/features/reader/ttsWash";
 import type { AnnotationStyle } from "@/types/ipc";
 
 /** Reading typography and viewing preferences, persisted across sessions. */
@@ -21,6 +22,17 @@ interface ReaderState {
   speechVoiceURI: string | null;
   /** How much of the page the voice washes: sentence, word or paragraph. */
   speechGranularity: SpeechGranularity;
+  /** The wash's shape: the marker band, a rule under the line, or an outline
+   *  around the letters (see `ttsWash.ts` for what each one paints). */
+  speechWashStyle: TtsWashStyle;
+  /** The wash's ink, `#rrggbb`; `null` keeps the app's own accent tint, which
+   *  is what the voice has always been washed in. */
+  speechWashColor: string | null;
+  /** Inks the reader pinned from the picker, shown after `HIGHLIGHT_COLORS`. */
+  speechWashColors: string[];
+  /** How much of the player is on screen while a session runs: the whole card,
+   *  or the transport and the scrubber alone. */
+  speechPlayerStyle: SpeechPlayerStyle;
   /** Body typeface, a key into `FONT_STACKS`. */
   fontFamily: string;
   /** Index into `LINE_HEIGHTS`. */
@@ -361,6 +373,12 @@ export const DEFAULT_READER_SETTINGS = {
   invertBookImages: false,
   highlightColor: HIGHLIGHT_COLORS[0]!.hex,
   highlightStyle: "highlight",
+  // The wash the voice has always drawn: the app's own tint, no shape of the
+  // reader's choosing. Picking a colour is what turns it into a marker.
+  speechWashStyle: "highlight",
+  speechWashColor: null,
+  speechWashColors: [],
+  speechPlayerStyle: "full",
 } satisfies Partial<ReaderState>;
 
 export const useReaderSettings = create<ReaderState>()(
