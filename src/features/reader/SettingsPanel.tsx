@@ -1,11 +1,12 @@
-import { useId, useRef } from "react";
-import { ImageSquare } from "@phosphor-icons/react";
+import { useId, useRef, useState } from "react";
+import { CaretDown, ImageSquare, Plus, X } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 
 import { cn } from "@/lib/cn";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import {
   DEFAULT_AUTO_SCROLL_SPEED,
+  HIGHLIGHT_COLORS,
   LINE_HEIGHTS,
   MAX_AUTO_SCROLL_SPEED,
   MAX_FONT_SIZE,
@@ -37,8 +38,14 @@ import {
   READING_SURFACES,
   resolveSurface,
 } from "@/features/reader/theme";
-import { SPEECH_GRANULARITIES } from "@/features/reader/speech";
+import { SPEECH_GRANULARITIES, SPEECH_PLAYER_STYLES } from "@/features/reader/speech";
+import { ColorPicker } from "@/features/reader/ColorPicker";
+import { TTS_WASH_STYLES, parseWashHex, washInk } from "@/features/reader/ttsWash";
 import { SPRING } from "@/lib/motion";
+
+/** The colour a first custom pick starts from — the palette's own green, so the
+ *  pad opens on something instead of on black. */
+const RULER_CUSTOM_FALLBACK = "#7cd92c";
 
 /**
  * Reading typography and viewing preferences. Every control writes straight
@@ -65,6 +72,12 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
   const reduce = useReducedMotion();
   // A colour outside the presets is the custom one; the wheel bead shows it.
   const custom = isPresetRulerColor(settings.rulerColor) ? null : settings.rulerColor;
+  // The wash's ink: `null` is the app's accent, not "no colour".
+  const wash = settings.speechWashColor;
+  const quickColors = [...HIGHLIGHT_COLORS.map(({ hex }) => hex), ...settings.speechWashColors];
+  /** The ruler's pad is folded away until its bead is pressed: a full picker is
+   *  a lot of control for a colour most readers never change. */
+  const [rulerPicker, setRulerPicker] = useState(false);
 
   const pickImage = async (file: File) => {
     update({ surface: "custom", customSurface: await compressImage(file) });
@@ -264,11 +277,18 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
                       />
                     </button>
                   ))}
-                  {/* 无极颜色：一个色轮珠子，点击唤起浏览器自己的取色器。珠子显示
-                      当前自定义色；没有时转一圈色相，读作「这里可以随便挑」。 */}
-                  <span
+                  {/* 无极颜色：一颗珠子，点开在下面摊出取色区（`ColorPicker`）。
+                      珠子显示当前自定义色；没有时转一圈色相，读作「这里可以随便挑」。
+                      和 `ColorField` 一样不用原生 `<input type="color">`：那会把选择
+                      交给系统，跑到面板外面去。 */}
+                  <button
+                    type="button"
+                    aria-label="自定义颜色"
+                    aria-pressed={custom !== null}
+                    title="自定义颜色"
+                    onClick={() => setRulerPicker((open) => !open)}
                     className={cn(
-                      "focus-within:focus-ring relative flex h-5 w-5 items-center justify-center rounded-full transition-transform",
+                      "focus-visible:focus-ring relative flex h-5 w-5 items-center justify-center rounded-full transition-transform",
                       custom ? "scale-110" : "hover:scale-105",
                     )}
                     style={
@@ -289,17 +309,18 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
                             }
                       }
                     />
-                    <input
-                      type="color"
-                      aria-label="自定义颜色"
-                      title="自定义颜色"
-                      value={custom ?? "#7cd92c"}
-                      onChange={(event) => update({ rulerColor: event.target.value })}
-                      className="absolute inset-0 cursor-pointer opacity-0"
-                    />
-                  </span>
+                  </button>
                 </div>
               </div>
+              {/* Outside the row it belongs to: a pad is a block, and as a flex
+                  item it would be squeezed into the gap after the beads. */}
+              {rulerPicker && (
+                <ColorPicker
+                  className="mt-2"
+                  value={custom ?? RULER_CUSTOM_FALLBACK}
+                  onChange={(hex) => update({ rulerColor: hex })}
+                />
+              )}
               <SliderRow
                 label="不透明度"
                 readout={`${Math.round(settings.rulerOpacity * 100)}%`}
@@ -515,6 +536,93 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
           />
         </Group>
 
+        <Group label="高亮样式">
+          <Select
+            label="高亮样式"
+            options={TTS_WASH_STYLES}
+            value={settings.speechWashStyle}
+            onChange={(key) => update({ speechWashStyle: key })}
+          />
+        </Group>
+
+        {/* Everything for one colour in one place: the disc says what the wash
+            will look like, the field takes any hex the reader already has (from
+            a design tool, from the colour they used in another app), and the
+            picker below is for one they do not have yet. `null` is a real
+            choice — the app's own accent — so the disc wears the token rather
+            than a hex copied out of it, and the row offers the way back. */}
+        <Group label="高亮颜色">
+          <ColorField
+            value={wash}
+            display={washInk(null, pageNight)}
+            onChange={(hex) => update({ speechWashColor: hex })}
+            onReset={() => update({ speechWashColor: null })}
+          />
+        </Group>
+
+        {/* The palette the reader already knows from the selection toolbar, then
+            whatever they pinned off the wheel. One list, so a colour they chose
+            is findable again without remembering its hex.
+
+            Its own flex with a wider gap than the group's: the selected disc
+            wears an outline, and the group's 6px would have that ring land on
+            the disc beside it. */}
+        <Group label="快速颜色">
+          <div className="flex flex-wrap items-center gap-2.5">
+            {quickColors.map((hex) => {
+              const active = wash === hex;
+              return (
+                <span key={hex} className="group relative">
+                  <button
+                    type="button"
+                    aria-label={`高亮颜色 ${hex}`}
+                    aria-pressed={active}
+                    onClick={() => update({ speechWashColor: hex })}
+                    className="block size-6 rounded-full transition-transform hover:scale-110"
+                    style={{
+                      backgroundColor: hex,
+                      outline: active ? "2px solid var(--accent)" : undefined,
+                      outlineOffset: active ? 2 : undefined,
+                    }}
+                  />
+                  {settings.speechWashColors.includes(hex) && (
+                    <button
+                      type="button"
+                      aria-label="移除这个颜色"
+                      onClick={() =>
+                        update({
+                          speechWashColors: settings.speechWashColors.filter((c) => c !== hex),
+                        })
+                      }
+                      className="absolute -top-1 -right-1 grid size-3.5 place-items-center rounded-full bg-red-500 text-white opacity-0 transition-opacity group-hover:opacity-100 focus-visible:opacity-100"
+                    >
+                      <X size={9} weight="bold" />
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+            {wash !== null && !quickColors.includes(wash) && (
+              <button
+                type="button"
+                onClick={() => update({ speechWashColors: [...settings.speechWashColors, wash] })}
+                className="border-hairline text-text-3 hover:text-text-1 focus-visible:focus-ring inline-flex size-6 items-center justify-center rounded-full border transition-colors"
+              >
+                <Plus size={12} weight="bold" />
+                <span className="sr-only">固定当前颜色</span>
+              </button>
+            )}
+          </div>
+        </Group>
+
+        <Group label="播放器样式">
+          <Chips
+            options={SPEECH_PLAYER_STYLES}
+            value={settings.speechPlayerStyle}
+            onChange={(key) => update({ speechPlayerStyle: key })}
+          />
+        </Group>
+
         <Group label="自动滚动速度">
           <div className="w-full min-w-0">
             <div className="flex items-center justify-between gap-2">
@@ -700,6 +808,122 @@ function Chips<K extends string | number | boolean>({
         );
       })}
     </>
+  );
+}
+
+/**
+ * The wash's ink: a disc, a hex field, and the system picker.
+ *
+ * The field keeps its own draft while it is being typed into, so the store only
+ * ever sees a colour that parsed — a half-typed `#56a` must never reach the
+ * renderers, and an unusable value puts the old ink back on blur rather than
+ * leaving the reader with a field that disagrees with the page. No effect syncs
+ * the draft: it can only be stale mid-edit, and every way out of an edit (blur,
+ * Enter, Escape) resolves it.
+ *
+ * The disc is the theme token when nothing is chosen, which is why `value` and
+ * `display` are separate: `null` still has a colour on screen, it just is not
+ * the reader's.
+ */
+function ColorField({
+  value,
+  display,
+  onChange,
+  onReset,
+}: {
+  value: string | null;
+  display: string;
+  onChange: (hex: string) => void;
+  /** Back to the theme's own ink. Only offered once it has been left. */
+  onReset: () => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const unusable = draft !== null && draft !== "" && parseWashHex(draft) === null;
+
+  return (
+    <>
+      <div className="flex w-full items-center gap-1.5">
+        <span
+          aria-hidden
+          className={cn(
+            "border-hairline size-6 shrink-0 rounded-full border",
+            value === null && "bg-accent",
+          )}
+          style={value === null ? undefined : { backgroundColor: value }}
+        />
+        <input
+          type="text"
+          aria-label="高亮颜色十六进制值"
+          aria-invalid={unusable || undefined}
+          spellCheck={false}
+          autoComplete="off"
+          value={draft ?? value ?? display}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => {
+            if (draft === null) return;
+            const hex = parseWashHex(draft);
+            if (hex !== null) onChange(hex);
+            setDraft(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") setDraft(null);
+          }}
+          className={cn(
+            "bg-surface-1 text-text-1 focus-visible:focus-ring h-6 w-[84px] shrink-0 rounded-sm border px-2 font-mono text-[11px] outline-none",
+            unusable ? "border-red-500/70" : "border-hairline",
+          )}
+        />
+        {value !== null && (
+          <button
+            type="button"
+            onClick={onReset}
+            className="focus-visible:focus-ring text-text-3 hover:text-text-1 px-1 text-[12px] transition-colors"
+          >
+            跟随主题色
+          </button>
+        )}
+      </div>
+      <ColorPicker value={value ?? display} onChange={onChange} className="w-full" />
+    </>
+  );
+}
+
+/** A dropdown, for a list too long to lay out as pills: five wash shapes with
+ *  names to read would wrap into a block that no longer scans as one control.
+ *
+ * The house `<select>` is ShelfToolbar's: the native control carries the
+ * behaviour and the keyboard, and the chrome around it is drawn by hand. */
+function Select<K extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: ChipOption<K>[];
+  value: K;
+  onChange: (value: K) => void;
+}) {
+  return (
+    <div className="border-hairline bg-surface-1 focus-within:focus-ring relative inline-flex h-8 items-center rounded-md border">
+      <select
+        aria-label={label}
+        value={value}
+        onChange={(event) => onChange(event.target.value as K)}
+        className="text-text-1 appearance-none bg-transparent pr-7 pl-2.5 text-[12px] outline-none [&>option]:text-black"
+      >
+        {options.map((option) => (
+          <option key={option.key} value={option.key}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <CaretDown
+        size={12}
+        className="text-text-3 pointer-events-none absolute top-1/2 right-2.5 -translate-y-1/2"
+      />
+    </div>
   );
 }
 

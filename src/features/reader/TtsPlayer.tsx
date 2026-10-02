@@ -29,6 +29,7 @@ import { cn } from "@/lib/cn";
 
 import { reloadEdgeVoices } from "./edge";
 import { formatClock, queuePosition, speechSeconds, unitAtChar, type SpeechUnit } from "./speech";
+import type { SpeechPlayerStyle } from "./speech";
 import { useSpeechVoices, type SpeechStatus } from "./tts";
 import {
   DEFAULT_VOICE_NAME,
@@ -102,6 +103,9 @@ export interface TtsPlayerProps {
   /** One paragraph: the next unit belonging to a different source block. */
   onSkip: (dir: 1 | -1) => void;
   onSeek: (index: number) => void;
+  /** How much of the player the reader asked for. `minimal` keeps the card to
+   *  the transport and where the voice is; the pill is the same either way. */
+  playerStyle: SpeechPlayerStyle;
 }
 
 /** One tick a second. Never read during render: the countdown below is the
@@ -271,10 +275,16 @@ export function TtsPlayer({
   onStep,
   onSkip,
   onSeek,
+  playerStyle,
 }: TtsPlayerProps) {
   const reduce = useReducedMotion();
   const { voices, edgeError } = useSpeechVoices();
-  const [view, setView] = useState<"main" | "speed" | "voice" | "timer">("main");
+  const [viewState, setView] = useState<"main" | "speed" | "voice" | "timer">("main");
+  // A minimal player has nothing behind the drill-downs, so the card is always
+  // on the transport view. Derived rather than reset, which would take an
+  // effect and a frame showing a view that no longer exists.
+  const minimal = playerStyle === "minimal";
+  const view = minimal ? "main" : viewState;
   // Adjust during render: a freshly opened card starts on the transport, not
   // wherever it was left, and the first paint must already show it.
   const [wasOpen, setWasOpen] = useState(open);
@@ -485,54 +495,59 @@ export function TtsPlayer({
                     {error !== null && (
                       <p className="text-text-2 mt-3 text-[12px] leading-relaxed">{error}</p>
                     )}
-                    <div
-                      ref={listRef}
-                      className="scroll-fade relative mt-3 min-h-0 flex-1 overflow-y-auto"
-                      aria-live="polite"
-                    >
-                      {units.length === 0 ? (
-                        <p className="text-text-3 px-2 py-1.5 text-[13px] leading-relaxed">
-                          选一段开始朗读
-                        </p>
-                      ) : (
-                        units.map((unit, i) => {
-                          const isActive = i === index;
-                          return (
-                            <button
-                              key={`${unit.source}:${unit.start}`}
-                              type="button"
-                              ref={(el) => {
-                                if (el === null) rowRefs.current.delete(i);
-                                else rowRefs.current.set(i, el);
-                              }}
-                              onClick={() => onSeek(i)}
-                              aria-current={isActive || undefined}
-                              className={cn(
-                                // The gap between the line being read and the
-                                // rest is spacing and weight, never opacity:
-                                // the dim tier is already at 5.3:1 on the
-                                // darkest card, and a fade takes it under AA.
-                                "relative flex w-full items-start gap-2 rounded-sm px-2 text-left leading-relaxed transition-colors",
-                                isActive
-                                  ? "text-text-1 py-2 text-[13.5px] font-medium"
-                                  : "text-text-3 hover:bg-surface-2 hover:text-text-2 py-1 text-[13px]",
-                              )}
-                            >
-                              {isActive && (
-                                <motion.span
-                                  layoutId="tts-active-sentence"
-                                  aria-hidden
-                                  className="absolute inset-0 rounded-sm bg-(--accent-soft)"
-                                  transition={reduce ? { duration: 0 } : SPRING.layout}
-                                />
-                              )}
-                              <span className="relative flex-1">{unit.text}</span>
-                              {isActive && loading && <LoadingBars className="mt-1" />}
-                            </button>
-                          );
-                        })
-                      )}
-                    </div>
+                    {/* The sentence stack is what makes the card worth the space;
+                        a reader who asked for the minimal player gets the clock
+                        and the scrubber and nothing else. */}
+                    {!minimal && (
+                      <div
+                        ref={listRef}
+                        className="scroll-fade relative mt-3 min-h-0 flex-1 overflow-y-auto"
+                        aria-live="polite"
+                      >
+                        {units.length === 0 ? (
+                          <p className="text-text-3 px-2 py-1.5 text-[13px] leading-relaxed">
+                            选一段开始朗读
+                          </p>
+                        ) : (
+                          units.map((unit, i) => {
+                            const isActive = i === index;
+                            return (
+                              <button
+                                key={`${unit.source}:${unit.start}`}
+                                type="button"
+                                ref={(el) => {
+                                  if (el === null) rowRefs.current.delete(i);
+                                  else rowRefs.current.set(i, el);
+                                }}
+                                onClick={() => onSeek(i)}
+                                aria-current={isActive || undefined}
+                                className={cn(
+                                  // The gap between the line being read and the
+                                  // rest is spacing and weight, never opacity:
+                                  // the dim tier is already at 5.3:1 on the
+                                  // darkest card, and a fade takes it under AA.
+                                  "relative flex w-full items-start gap-2 rounded-sm px-2 text-left leading-relaxed transition-colors",
+                                  isActive
+                                    ? "text-text-1 py-2 text-[13.5px] font-medium"
+                                    : "text-text-3 hover:bg-surface-2 hover:text-text-2 py-1 text-[13px]",
+                                )}
+                              >
+                                {isActive && (
+                                  <motion.span
+                                    layoutId="tts-active-sentence"
+                                    aria-hidden
+                                    className="absolute inset-0 rounded-sm bg-(--accent-soft)"
+                                    transition={reduce ? { duration: 0 } : SPRING.layout}
+                                  />
+                                )}
+                                <span className="relative flex-1">{unit.text}</span>
+                                {isActive && loading && <LoadingBars className="mt-1" />}
+                              </button>
+                            );
+                          })
+                        )}
+                      </div>
+                    )}
 
                     <div className="text-text-3 mt-3 flex items-center gap-3 text-[11px] tabular-nums">
                       <span>{formatClock(elapsed)}</span>
@@ -557,12 +572,16 @@ export function TtsPlayer({
                   picking a voice is something you do *while listening*, and the
                   old drill-down took play/pause away with the text. */}
               <div className="mt-2.5 flex items-center justify-center gap-2.5">
-                <Transport label="上一段" onClick={() => onSkip(-1)}>
-                  <CaretDoubleLeft size={15} weight="bold" />
-                </Transport>
-                <Transport label="上一句" onClick={() => onStep(-1)}>
-                  <SkipBack size={15} weight="fill" />
-                </Transport>
+                {!minimal && (
+                  <>
+                    <Transport label="上一段" onClick={() => onSkip(-1)}>
+                      <CaretDoubleLeft size={15} weight="bold" />
+                    </Transport>
+                    <Transport label="上一句" onClick={() => onStep(-1)}>
+                      <SkipBack size={15} weight="fill" />
+                    </Transport>
+                  </>
+                )}
                 <button
                   type="button"
                   aria-label={status === "playing" ? "暂停" : "播放"}
@@ -577,16 +596,20 @@ export function TtsPlayer({
                     )}
                   </IconSwap>
                 </button>
-                <Transport label="下一句" onClick={() => onStep(1)}>
-                  <SkipForward size={15} weight="fill" />
-                </Transport>
-                <Transport label="下一段" onClick={() => onSkip(1)}>
-                  <CaretDoubleRight size={15} weight="bold" />
-                </Transport>
+                {!minimal && (
+                  <>
+                    <Transport label="下一句" onClick={() => onStep(1)}>
+                      <SkipForward size={15} weight="fill" />
+                    </Transport>
+                    <Transport label="下一段" onClick={() => onSkip(1)}>
+                      <CaretDoubleRight size={15} weight="bold" />
+                    </Transport>
+                  </>
+                )}
               </div>
 
               <AnimatePresence mode="popLayout" initial={false}>
-                {view === "main" && (
+                {!minimal && view === "main" && (
                   <motion.div key="main" className="mt-3 flex gap-1.5" {...VIEW_FADE}>
                     <SettingsRow
                       icon={<Gauge size={16} />}
