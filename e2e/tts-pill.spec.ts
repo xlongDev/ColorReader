@@ -70,9 +70,49 @@ async function gapToPane(page: Page): Promise<number> {
   return Math.round(pane.y + pane.height - (pill.y + pill.height));
 }
 
+/**
+ * A speech engine whose utterances start and never finish.
+ *
+ * This file asserts wiring — that the session outlives the page, that the pill
+ * can drive the voice with no reader on screen, that the reader adopts the
+ * session on its way back — and none of that is about a voice. What it was
+ * also, accidentally, about was the session being alive when each assertion
+ * ran. It usually is: the demo chapter takes longer to read than the test takes
+ * to check. But "usually" is a race, and a race is what a red CI run is — the
+ * session ended first, the pill played its 12px exit and left, and every click
+ * after that landed on an element that was already on its way out
+ * (`element was detached from the DOM`, six times over).
+ *
+ * So: one voice, and utterances that begin and never end. Everything these tests
+ * do — pause, resume, step, stop, navigate away and back — is the app's own
+ * state, and all of it keeps working. `cancel()` is left alone, because counting
+ * it is the whole point of the first test.
+ *
+ * Note this is not the same as an engine that *fails*: an engine that fires
+ * `error` on every utterance stalls the queue, which also keeps the session
+ * alive, and that was measured too. This one is the honest version — the app is
+ * left doing exactly what it does on a reader's machine, only slower.
+ */
+function installVoiceThatNeverFinishes(): void {
+  const proto = window.SpeechSynthesis?.prototype;
+  if (!proto) return;
+  const voice = {
+    name: "Test Voice",
+    lang: "zh-CN",
+    default: true,
+    localService: true,
+    voiceURI: "test",
+  } as SpeechSynthesisVoice;
+  proto.getVoices = () => [voice];
+  proto.speak = () => {};
+  proto.pause = () => {};
+  proto.resume = () => {};
+}
+
 /** Opens a demo book and waits for the reader's chrome, which is the earliest
  *  thing that says the page is up and the footer is there to be pressed. */
 async function openBook(page: Page, query: string, book: RegExp): Promise<void> {
+  await page.addInitScript(installVoiceThatNeverFinishes);
   await page.goto(query);
   await page.getByRole("button", { name: book }).first().click();
   await expect(page.getByRole("button", { name: "阅读设置" }).first()).toBeVisible({

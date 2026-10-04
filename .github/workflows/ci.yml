@@ -58,14 +58,18 @@ jobs:
       # GitHub keeps only 10 annotations per step and silently drops the rest,
       # so collapse each failure block into ONE line (`N) [project] › spec ›
       # test` + its message) before emitting — one annotation per failing test,
-      # and the Expected/Received survive the cut.
+      # and the Expected/Received survive the cut. The cut itself is generous on
+      # purpose: at 900 characters a Playwright call log stops in the middle of
+      # its retry list, which is the part that says *why* an element was never
+      # clickable. Ten of them at 4k is still well inside what the annotations
+      # endpoint serves.
       - name: Annotate e2e failures
         if: ${{ steps.e2e.outcome == 'failure' }}
         run: |
           awk '/^[[:space:]]+[0-9]+\) /{ if (b) print b; b=$0; next } { if (b) b=b " " $0 } END { if (b) print b }' e2e.log |
             head -20 |
             while IFS= read -r line; do
-              printf '::error::%s\n' "$(printf '%s' "$line" | cut -c1-900)"
+              printf '::error::%s\n' "$(printf '%s' "$line" | cut -c1-4000)"
             done
       - name: Fail the job if e2e failed
         if: ${{ steps.e2e.outcome == 'failure' }}
