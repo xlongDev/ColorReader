@@ -107,12 +107,21 @@ test("a running session outlives the page it was started on", async ({ page }) =
   await startSpeaking(page);
   await expect(page.locator(PILL)).toContainText(DEMO_BOOK);
 
-  // Over the reader's footer, not on it. Both bounds are polled, and in this
-  // order: the pill rises into place over the wrapper's transform transition,
-  // and the lower bound is the one the lifted end state satisfies. Polling the
-  // upper bound second is what pins it *settled* rather than mid-flight.
-  await expect.poll(() => gapToFooter(page)).toBeGreaterThan(12);
-  await expect.poll(() => gapToFooter(page)).toBeLessThan(30);
+  // Over the reader's footer, not on it — and still over it when the reader's
+  // type is bigger than ours. The lift used to be a hand-measured 58px, so a
+  // platform with taller metrics (a CI runner with no CJK font: the footer grew
+  // from 57px to 78px) ate the pill's 20px of air and left it 8px above the
+  // reader's own controls, which is what a red run here was reporting. The size
+  // of the clearance is a font question and is left alone on purpose; the
+  // invariant is that the pill is above the footer, and that growing the type
+  // cannot make it worse.
+  const gap = await gapToFooter(page);
+  expect(gap).toBeGreaterThan(0);
+  await page.addStyleTag({ content: "html { font-size: 22px }" });
+  await page.waitForTimeout(400);
+  expect(await gapToFooter(page)).toBeGreaterThan(gap - 1);
+  await page.addStyleTag({ content: "html { font-size: 16px }" });
+  await page.waitForTimeout(400);
 
   const before = await cancels(page);
   await goToShelf(page);

@@ -17,6 +17,7 @@ import {
   type MiniBarVoices,
 } from "@/lib/ipc";
 import { SPRING } from "@/lib/motion";
+import { useChrome } from "@/stores/chrome";
 import { useReaderSettings } from "@/stores/reader";
 import { useSpeechSession } from "@/stores/speech";
 
@@ -68,6 +69,8 @@ export function TtsPlayer({
   liftForFooter: boolean;
 }) {
   const reduce = useReducedMotion();
+  // The reader's footer, measured by the reader. `0` on every other route.
+  const footerHeight = useChrome((state) => state.readerFooterHeight);
   const navigate = useNavigate();
   const { tts, sleep: sleepTimer } = useTtsHost();
   const { voices, edgeError } = useSpeechVoices();
@@ -331,15 +334,24 @@ export function TtsPlayer({
        lifted by exactly that footer's height and both surfaces keep the 20px of
        air they had when they lived inside the reading viewport. Fullscreen docks
        the footer past the bottom edge, so nothing lifts.
-       ponytail: 58 is the windowed footer measured (57px + its hairline). It is
-       a fixed-height bar, but if it ever grows this drifts with it. */
+       ponytail: the height is the reader's to report (`readerFooterHeight`, fed
+       by a `ResizeObserver` on the footer itself), not a number written down
+       here. It used to be 58px, measured by hand, with a note admitting it would
+       drift — and it did: a platform whose type metrics are taller than ours grew
+       the footer to 78px and left the pill 8px above the reader's controls
+       instead of 20. */
     <div
       className={cn(
         "pointer-events-none absolute inset-0 z-40",
-        "transition-transform duration-200 ease-out motion-reduce:transition-none",
-        liftForFooter && "-translate-y-[58px]",
+        // `translate`, not `transform`: the individual property is what a
+        // `translate-y` utility sets, so transitioning the shorthand would leave
+        // the lift snapping instead of easing.
+        "transition-[translate] duration-200 ease-out motion-reduce:transition-none",
       )}
-      style={surfaceVars}
+      style={{
+        ...surfaceVars,
+        translate: liftForFooter && footerHeight > 0 ? `0 -${footerHeight}px` : undefined,
+      }}
     >
       <AnimatePresence>
         {live && !open && (

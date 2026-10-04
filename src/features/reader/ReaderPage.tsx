@@ -75,6 +75,7 @@ import {
   useUpdateAnnotation,
 } from "@/hooks/useAnnotations";
 import { useBookmarks, useCreateBookmark, useDeleteBookmark } from "@/hooks/useBookmarks";
+import { useElementHeight } from "@/hooks/useElementHeight";
 import { useReadingSurface } from "@/hooks/useReadingSurface";
 import { useFonts } from "@/hooks/useFonts";
 import { useGamepadPager } from "@/hooks/useGamepadPager";
@@ -1982,6 +1983,13 @@ function ReaderView({
   const speechOpen = useSpeechSession((state) => state.open);
   const setSpeechOpen = useSpeechSession((state) => state.setOpen);
 
+  // …and the shell's pill floats over this footer, so it has to be told how tall
+  // it is rather than assume: a hand-measured constant drifts with the platform's
+  // type metrics, and this footer is not a fixed height.
+  const footerRef = useRef<HTMLElement | null>(null);
+  const setFooterHeight = useChrome((state) => state.setReaderFooterHeight);
+  useElementHeight(footerRef, setFooterHeight, !fullscreen);
+
   const footerInner = (
     <ReaderFooterControls
       speechStatus={readAloud.status}
@@ -2276,7 +2284,10 @@ function ReaderView({
       </div>
 
       {!fullscreen ? (
-        <footer className="border-hairline flex items-center justify-center gap-3 border-t px-6 py-3">
+        <footer
+          ref={footerRef}
+          className="border-hairline flex items-center justify-center gap-3 border-t px-6 py-3"
+        >
           {footerInner}
         </footer>
       ) : (

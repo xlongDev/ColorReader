@@ -24,6 +24,22 @@ interface ChromeState {
    */
   readerReturnPath: string;
   setReaderReturnPath: (path: string) => void;
+  /**
+   * How tall the reader's own windowed footer is right now, in CSS pixels, or
+   * `0` when it is not on screen.
+   *
+   * The read-aloud pill is anchored to the content pane's bottom edge and the
+   * footer is *inside* that pane, so the pill has to be lifted by however much
+   * the footer takes or it sits on the reader's controls. That number used to be
+   * a constant measured once by hand — 58px, carrying a `ponytail:` note that it
+   * would drift — and a platform whose type metrics are taller than ours (a CI
+   * runner with no CJK font installed, say) grew the footer to 78px, which left
+   * the pill 8px above the footer instead of 20. Measured where the footer
+   * already is, it is the same number everywhere; published here because the
+   * footer belongs to the reader and the pill to the shell.
+   */
+  readerFooterHeight: number;
+  setReaderFooterHeight: (height: number) => void;
 }
 
 export const useChrome = create<ChromeState>()((set) => ({
@@ -31,4 +47,6 @@ export const useChrome = create<ChromeState>()((set) => ({
   setReaderFullscreen: (readerFullscreen) => set({ readerFullscreen }),
   readerReturnPath: "/",
   setReaderReturnPath: (readerReturnPath) => set({ readerReturnPath }),
+  readerFooterHeight: 0,
+  setReaderFooterHeight: (readerFooterHeight) => set({ readerFooterHeight }),
 }));
