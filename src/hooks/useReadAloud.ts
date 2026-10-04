@@ -1,13 +1,4 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type Dispatch,
-  type RefObject,
-  type SetStateAction,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 
 import { speechSources, unitAtOffset } from "@/features/reader/chapterText";
 import type { FoliateHandle } from "@/features/reader/FoliateBookView";
@@ -20,16 +11,20 @@ import {
 } from "@/features/reader/selection";
 import {
   cursorAt,
+  paragraphIndex,
   pdfWashNeedle,
   speechUnits,
+  stepIndex,
   washSpan,
   type SpeechGranularity,
   type SpeechStatus,
+  type SpeechTransport,
   type SpeechUnit,
   type WashSpan,
 } from "@/features/reader/speech";
 import { useSpeechVoices, type Tts } from "@/features/reader/tts";
 import { defaultVoice, engineOf } from "@/features/reader/voice";
+import { useSpeechSession } from "@/stores/speech";
 
 /**
  * Read-aloud: the queue, the wash, and the transport over it.
@@ -95,10 +90,6 @@ export interface ReadAloudControls {
   span: WashSpan | null;
   /** The same wash as a needle into a PDF page's own text layer. */
   pdfWash: { text: string; from: number; to: number } | null;
-  /** The card; the pill opens it. */
-  playerOpen: boolean;
-  /** The card's own state setter — the footer toggles it without reading it. */
-  setPlayerOpen: Dispatch<SetStateAction<boolean>>;
   /** Speed reading, which takes over the reading area while it is on. */
   rsvpOpen: boolean;
   /** The footer's one button: the same button closes the overlay. */
@@ -116,6 +107,10 @@ export interface ReadAloudControls {
   seek: (index: number) => void;
   /** A rate or a voice the player changed. */
   applySettings: (change: { rate?: number; voice?: string }) => void;
+  /** Brings the sentence being read back on screen, centred — what the shell's
+   *  player asks for when the reader comes back to a page the voice has moved
+   *  on from (see `SpeechTransport.reveal`). */
+  reveal: () => void;
   /** 「朗读此处」: picks the voice up at the character the reader selected. */
   speakFromSelection: (range: TextRange) => void;
   /**
@@ -167,11 +162,22 @@ export function useReadAloud({
     [storedVoice, voices],
   );
 
-  /** The player card, and speed reading's overlay — the two surfaces this
-   *  layer owns. The sleep timer draws inside the card but is armed elsewhere
-   *  (`useSleepTimer`): it stops the voice rather than driving it. */
-  const [playerOpen, setPlayerOpen] = useState(false);
+  /** Speed reading's overlay — the one surface this layer still owns, now that
+   *  the player itself lives in the shell (`TtsPlayer`). The card is opened from
+   *  the reader's footer, the bar's cover and the reader's own shortcuts, which
+   *  write `useSpeechSession` directly; nothing here has to know. */
   const [rsvpOpen, setRsvpOpen] = useState(false);
+
+  /**
+   * The queue as it stands in the session store.
+   *
+   * Read for one caller: `reveal` on a page that mounted *after* the voice
+   * started. A Kindle queue is cut from the section's blocks and cannot be
+   * rebuilt from anything on this side — the prose path recomputes its own
+   * below — so the published copy is the only thing left of it, and it is the
+   * same array the engine was handed.
+   */
+  const sessionUnits = useSpeechSession((state) => state.units);
 
   // Read-aloud units for the prose path: the chapter split into sentences. The
   // foliate path builds its own from foliate's blocks, whose text lives in
@@ -209,6 +215,53 @@ export function useReadAloud({
   // resolve a unit index back to a block and a range inside the section. State
   // rather than a ref: the player renders their text as it comes in.
   const [foliateUnits, setFoliateUnits] = useState<SpeechUnit[]>([]);
+
+  /**
+   * Brings one unit of the section on screen — and washes it, except at word
+   * level, where nothing is washed until the engine reports where it is (a
+   * sentence that flashes before its word lands reads as a glitch).
+   *
+   * Shared by the follow effect and `reveal`: both are "go to this unit of the
+   * Kindle path", and the one thing that must not drift between them is how
+   * much of it gets washed.
+   */
+  const focusOn = useCallback(
+    (handle: FoliateHandle, at: SpeechUnit) => {
+      if (granularity === "word") {
+        handle.clearTts();
+        handle.focusUnit(at, null);
+        return;
+      }
+      handle.focusUnit(
+        at,
+        granularity === "paragraph" ? "block" : { start: at.start, end: at.end },
+      );
+    },
+    [granularity],
+  );
+
+  /**
+   * Runs `then` against the section view once there is one.
+   *
+   * A Kindle view is mounted lazily and renders its section a frame after that,
+   * so on a page that has just come back the handle is briefly absent. Every
+   * other path here waits for a dependency to change; `reveal` cannot — nothing
+   * changes while the voice holds still — so it looks a few times and gives up.
+   * Collecting the section's blocks is a separate wait, and `readFrom` already
+   * polls for that itself.
+   */
+  const whenFoliateReady = useCallback(
+    function wait(then: (handle: FoliateHandle) => void, attempt = 0) {
+      const handle = foliateRef.current;
+      if (handle !== null) {
+        then(handle);
+        return;
+      }
+      if (attempt >= 12) return;
+      window.setTimeout(() => wait(then, attempt + 1), 100);
+    },
+    [foliateRef],
+  );
 
   // Both settings live in refs inside the engine, which is what lets the player
   // hand them over inside its own click and restart immediately (see
@@ -256,16 +309,10 @@ export function useReadAloud({
     }
     const at = foliateUnits[unit];
     if (!at || !handle) return;
-    if (granularity === "word") {
-      // The word washed a moment ago belongs to the sentence before this one.
-      handle.clearTts();
-      handle.focusUnit(at, null);
-      return;
-    }
-    // The unit is one sentence at every level; the paragraph level asks for the
-    // whole block it sits in, whose extent only foliate knows.
-    handle.focusUnit(at, granularity === "paragraph" ? "block" : { start: at.start, end: at.end });
-  }, [useFoliate, unit, speechQueue, foliateUnits, granularity, scrollRef, foliateRef]);
+    focusOn(handle, at);
+    // `granularity` is not listed: `focusOn` carries it, and it is what decides
+    // how much of the unit gets washed.
+  }, [useFoliate, unit, speechQueue, foliateUnits, scrollRef, foliateRef, focusOn]);
 
   // Word-level narrowing: several of these land inside one sentence, so they
   // only re-wash the run — scrolling again for every word would jitter.
@@ -372,19 +419,22 @@ export function useReadAloud({
     openRsvp();
   };
 
-  /** Set when a rate or a voice changed while the voice was on hold: the
-   *  utterance being held was spoken with the old settings, so the transport
-   *  restarts it instead of playing it out. */
+  /** Set when the voice changed while the voice was on hold: the utterance
+   *  being held was spoken in the old one, so the transport restarts it instead
+   *  of playing it out. A rate sets nothing here — see `applySettings`. */
   const restartOnResume = useRef(false);
 
   /**
-   * Restarts the voice where it is, under settings the engine has not applied.
+   * Restarts the voice where it is, in the voice the engine has not applied.
    *
-   * Both engines commit the clip they are speaking, so a new rate or voice can
-   * only reach the reader on a fresh utterance; restarting at the position the
-   * voice has got to — not at the top of the sentence — is what makes the
-   * change land now rather than at the next sentence. Picking a held voice up
-   * again runs through here too, which is why a paused status is not a refusal.
+   * Both engines commit the clip they are speaking, so a new voice can only
+   * reach the reader on a fresh utterance; restarting at the position the voice
+   * has got to — not at the top of the sentence — is what makes the change land
+   * now rather than at the next sentence. Picking a held voice up again runs
+   * through here too, which is why a paused status is not a refusal.
+   *
+   * A *rate* deliberately does not come through here: it costs nothing to wait
+   * one utterance for, and restarting would cost every clip already decoded.
    *
    * The highlight level needs none of this: it decides how much text the wash
    * covers, and the queue the voice walks is always cut per sentence.
@@ -414,11 +464,16 @@ export function useReadAloud({
   ]);
 
   /**
-   * The player's two settings that only a fresh utterance can carry: both
-   * engines commit the clip they are speaking. The change is handed to the
-   * engine first — it reads both out of refs, so the restart already speaks at
-   * the new rate and in the new voice — and the reading then carries on from
-   * where the voice was.
+   * The player's two settings, and the two different prices they have.
+   *
+   * A voice still only reaches the reader on a fresh utterance — both engines
+   * commit the clip they are speaking — so it is handed to the engine and then
+   * restarted at the position the voice has got to.
+   *
+   * A rate reaches the engine and stops there. It is applied to the samples as
+   * they are scheduled, so the utterance in flight keeps the old one and the
+   * next is stretched to the new: no request, no restart, and nothing decoded
+   * is thrown away.
    */
   const applySettings = (change: { rate?: number; voice?: string }) => {
     if (change.rate !== undefined) {
@@ -433,6 +488,12 @@ export function useReadAloud({
       setVoice(change.voice);
       if (crossed) return;
     }
+    // A rate needs no restart, and restarting for one is exactly what used to
+    // make it slow. Nothing is synthesised with a rate any more — the engine
+    // stretches on its way to the speaker (see `timeStretch`) — so the next
+    // utterance simply carries it. Making it land now would mean throwing away
+    // every clip already decoded, which is the stall this was.
+    if (change.voice === undefined) return;
     // A voice that is on hold is restarted by the transport instead: the reader
     // gets the new setting when they pick the reading up again.
     if (status === "paused") {
@@ -456,30 +517,68 @@ export function useReadAloud({
     );
   };
 
+  /**
+   * Brings the sentence being read back on screen, centred.
+   *
+   * The direction the follow effect does not cover. That one fires while the
+   * voice moves; this one is asked for when the reader comes back to a page the
+   * voice has walked on from — the shell's player asks through the transport,
+   * because only the reader knows which renderer is on screen.
+   *
+   * `unit` is an index into the queue the *engine* was given. On the prose path
+   * that queue is recomputed from the chapter's paragraphs, so the index still
+   * means the same sentence; on the Kindle path it is not recomputable here, and
+   * the published copy stands in — its `source` is the section's block index,
+   * which is what `focusUnit` maps through, so the block is right even when the
+   * list it was read from is not.
+   */
+  const reveal = useCallback(() => {
+    if (unit === null) return;
+    if (useFoliate) {
+      const at = foliateUnits[unit] ?? sessionUnits[unit];
+      if (!at) return;
+      void whenFoliateReady((handle) => {
+        // `readFrom` is the caller that collects the section's blocks, which
+        // `focusUnit` resolves the unit's block through; its own return value
+        // is the queue from the first visible block, which is not what this
+        // wants and is dropped. It polls, so a section still rendering is fine.
+        void handle.readFrom().then(() => focusOn(handle, at));
+      });
+      return;
+    }
+    // Prose and CBZ share this branch; a PDF paints the chapters as pages and
+    // no paragraph elements at all, so there is nothing here to scroll to. It
+    // costs nothing: a PDF's chapter *is* the picture the voice is on, and
+    // landing on the chapter is landing on the place.
+    const source = speechQueue[unit]?.source;
+    if (source === undefined) return;
+    scrollRef.current
+      ?.querySelector(`[data-para-idx="${source}"]`)
+      ?.scrollIntoView({ block: "center" });
+  }, [
+    unit,
+    useFoliate,
+    foliateUnits,
+    sessionUnits,
+    focusOn,
+    whenFoliateReady,
+    speechQueue,
+    scrollRef,
+  ]);
+
   /** One utterance. */
   const step = (dir: 1 | -1) => {
     if (unit === null) return;
-    seek(unit + dir);
+    seek(stepIndex(activeUnits, unit, dir));
   };
 
-  /** One paragraph: the neighbouring run of units from a different block. */
+  /** One paragraph: the neighbouring run of units from a different block. The
+   *  index maths lives in `speech.ts`, because the shell's player walks the same
+   *  queue when no reader is there to walk it for them. */
   const skip = (dir: 1 | -1) => {
     if (unit === null || activeUnits.length === 0) return;
-    const source = activeUnits[unit]?.source;
-    if (dir === 1) {
-      const next = activeUnits.findIndex((at, index) => index > unit && at.source !== source);
-      if (next >= 0) seek(next);
-      return;
-    }
-    // Rewind to this block's own first unit, then to the start of the one
-    // before it — the usual "previous track" behaviour.
-    let head = unit;
-    while (head > 0 && activeUnits[head - 1]!.source === source) head -= 1;
-    if (head === 0) return;
-    const previous = activeUnits[head - 1]!.source;
-    let target = head - 1;
-    while (target > 0 && activeUnits[target - 1]!.source === previous) target -= 1;
-    seek(target);
+    const target = paragraphIndex(activeUnits, unit, dir);
+    if (target >= 0) seek(target);
   };
 
   /**
@@ -588,6 +687,56 @@ export function useReadAloud({
     );
   }, [speechQueue, play, onChapterEnd]);
 
+  /**
+   * Lends this reader's transport to the shell's player.
+   *
+   * The bar and the card sit above the routes, so they cannot call these
+   * directly — and they must not hold the closures either: `step` and `seek` are
+   * rebuilt every render, and a stored copy would drive a queue that no longer
+   * exists. What is published is one stable wrapper per call over a ref that is
+   * refreshed each render, so the player always reaches the current reader and
+   * the store is written exactly twice: mounted, and gone.
+   */
+  const latest = useRef<SpeechTransport>({
+    toggle: () => {},
+    step: () => {},
+    skip: () => {},
+    seek: () => {},
+    applySettings: () => {},
+    reveal: () => {},
+  });
+  useEffect(() => {
+    latest.current = { toggle, step, skip, seek, applySettings, reveal };
+  });
+  const setControls = useSpeechSession((state) => state.setControls);
+  const publishSession = useSpeechSession((state) => state.publish);
+  useEffect(() => {
+    setControls({
+      toggle: () => latest.current.toggle(),
+      step: (dir) => latest.current.step(dir),
+      skip: (dir) => latest.current.skip(dir),
+      seek: (at) => latest.current.seek(at),
+      applySettings: (change) => latest.current.applySettings(change),
+      reveal: () => latest.current.reveal(),
+    });
+    // Gone means "the voice plays on alone", not "stop": the player behind the
+    // bar still drives the engine, it just cannot roll into the next chapter.
+    return () => setControls(null);
+  }, [setControls]);
+  // The queue the player's clocks and scrubber run on. Published rather than
+  // worked out again up there: the engine knows where the voice is, but only the
+  // reader knows what the utterances are.
+  //
+  // An empty queue is never news. A page that mounted *after* the voice started
+  // has nothing of its own to publish yet — the Kindle path has no way to
+  // rebuild the section's queue until it collects the blocks — and overwriting
+  // the published copy would take the clock, the scrubber and the「回到阅读」
+  // landing down with it. So the copy stands until there is something to say.
+  useEffect(() => {
+    if (activeUnits.length === 0) return;
+    publishSession({ units: activeUnits });
+  }, [activeUnits, publishSession]);
+
   return {
     status,
     unit,
@@ -597,8 +746,6 @@ export function useReadAloud({
     units: activeUnits,
     span,
     pdfWash,
-    playerOpen,
-    setPlayerOpen,
     rsvpOpen,
     toggleRsvp,
     closeRsvp,
@@ -609,6 +756,7 @@ export function useReadAloud({
     skip,
     seek,
     applySettings,
+    reveal,
     speakFromSelection,
     playFromStart,
   };

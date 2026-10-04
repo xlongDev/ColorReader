@@ -126,9 +126,13 @@ export function useTts({ trackBoundary = false }: Options = {}) {
   }, [trackBoundary]);
 
   useEffect(() => {
-    // Leaving the reader must never leave a voice behind; no state to settle.
+    // The *app* going away must not leave a voice behind. Deliberately not "the
+    // reader going away": the session outlives that page now (see `TtsHost`),
+    // and cancelling here would end it every time the reader browsed their
+    // shelf. `speechSynthesis` is absent where the shell is mounted without a
+    // browser speech API — jsdom — and the teardown has to survive it.
     return () => {
-      window.speechSynthesis.cancel();
+      window.speechSynthesis?.cancel();
       edgeRef.current?.stop();
     };
   }, []);
@@ -345,20 +349,42 @@ export function useTts({ trackBoundary = false }: Options = {}) {
    *  here even while the reader is only washing sentences. */
   const boundaryAt = useCallback((): SpeechBoundary | null => lastBoundary.current, []);
 
-  return {
-    status,
-    unit,
-    boundary,
-    error,
-    loading,
-    play,
-    stop,
-    pause,
-    resume,
-    setRate,
-    setVoice,
-    boundaryAt,
-  };
+  return useMemo(
+    () => ({
+      status,
+      unit,
+      boundary,
+      error,
+      loading,
+      play,
+      stop,
+      pause,
+      resume,
+      setRate,
+      setVoice,
+      boundaryAt,
+    }),
+    // One object, not a fresh one per render. This hook is read through a
+    // context in the shell (`TtsHost`), and a value that changes identity every
+    // render would re-render every consumer — including the whole reader — for
+    // reasons that have nothing to do with the voice. The dependencies are the
+    // engine's own state and its (all stable) callbacks, so the identity moves
+    // when, and only when, a consumer has something new to draw.
+    [
+      status,
+      unit,
+      boundary,
+      error,
+      loading,
+      play,
+      stop,
+      pause,
+      resume,
+      setRate,
+      setVoice,
+      boundaryAt,
+    ],
+  );
 }
 
 /**

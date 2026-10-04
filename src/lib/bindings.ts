@@ -402,9 +402,61 @@ export const commands = {
     __TAURI_INVOKE<null>("book_set_tags", { ids, add, remove }),
   /**  `tts.edgeVoices` — every voice the service offers. */
   ttsEdgeVoices: () => __TAURI_INVOKE<EdgeVoice[]>("tts_edge_voices"),
-  /**  `tts.edgeSpeak` — one utterance, with its word timings. */
-  ttsEdgeSpeak: (text: string, voice: string, rate: number | null) =>
-    __TAURI_INVOKE<EdgeClip>("tts_edge_speak", { text, voice, rate }),
+  /**
+   *  `tts.edgeSpeak` — one utterance, with its word timings.
+   *
+   *  No rate: the clip comes back at the service's own pace and the renderer
+   *  stretches it to the reader's speed, so one clip answers for every speed.
+   */
+  ttsEdgeSpeak: (text: string, voice: string) =>
+    __TAURI_INVOKE<EdgeClip>("tts_edge_speak", { text, voice }),
+  /**
+   *  `mini_bar.watch` — the frontend's answer to "is a voice on, and is the bar
+   *  allowed to appear".
+   *
+   *  Also the switch for the ticker: the poll only runs while this is true, so an
+   *  app that is not reading anything does not wake up four times a second.
+   */
+  miniBarWatch: (active: boolean) => __TAURI_INVOKE<void>("mini_bar_watch", { active }),
+  /**
+   *  `mini_bar.dismiss` — the bar's own fold-away button.
+   *
+   *  Separate from `watch(false)` because the two mean different things: that one
+   *  is the session ending, this is "get out of the way, I am still listening".
+   */
+  miniBarDismiss: () => __TAURI_INVOKE<void>("mini_bar_dismiss"),
+  /**
+   *  `mini_bar.reveal` — puts the main window back on screen.
+   *
+   *  Wanted by the bar's own「回到阅读」, which the bar forwards as a `focus` event
+   *  rather than calling this: only the main window can also take the reader to
+   *  the sentence being spoken, so the two steps belong to the same side.
+   *
+   *  Nothing is reset here: the ticker sees a visible, un-minimized main window
+   *  on its next pass and takes the bar down itself.
+   */
+  miniBarReveal: () => __TAURI_INVOKE<void>("mini_bar_reveal"),
+  /**
+   *  `mini_bar.expand` — resizes the bar's window to the face it is about to
+   *  draw.
+   *
+   *  The bar has five faces and one window: the capsule, which is the bar at
+   *  rest, and the player card — the *app's own* card, drawn in this window so a
+   *  reader who asked for it does not have to bring the whole app back — on one
+   *  of its four views. Every face has its own height, and the window has to
+   *  change for each: the card's drill-downs are a third the height of its main
+   *  view, and leaving the window tall enough for the list behind a row of rate
+   *  chips is what an empty half of a floating panel looks like.
+   *
+   *  The frontend cannot do any of this — a webview sees its own content, not its
+   *  frame — so it says which face it is drawing and this works out the geometry.
+   *
+   *  Called with the face it already has (the tick, a re-render) it is a no-op in
+   *  everything but two syscalls, which is the right trade for not having to keep
+   *  a second copy of "which view is open" on this side of the IPC.
+   */
+  miniBarExpand: (face: BarFace, minimal: boolean) =>
+    __TAURI_INVOKE<void>("mini_bar_expand", { face, minimal }),
 };
 
 /* Types */
@@ -506,6 +558,33 @@ export type BackupSummary = {
   /**  Bytes before compression. */
   bytes: number;
 };
+
+/**
+ *  Which face the bar's window is drawing.
+ *
+ *  The bar has five faces and one window, and the split of knowledge decides
+ *  who names them: the frontend can see the content and not the frame, this
+ *  module can see the frame and not the content — so the frontend says which
+ *  face it is about to draw and the geometry is worked out here.
+ *
+ *  The names are the card's own (`SpeechView`) with the capsule added in front,
+ *  so neither side translates the other and a face cannot be reported as
+ *  something the card has no view for.
+ */
+export type BarFace =
+  /**  The bar at rest: the capsule, with no card behind it. */
+  | "capsule"
+  /**  The card's main view — the sentence list, the scrubber, the three tiles. */
+  | "main"
+  /**  语速. */
+  | "speed"
+  /**
+   *  The voice catalogue. A scroll of a hundred-odd rows, so it wants the box
+   *  the main view gets rather than a height of its own.
+   */
+  | "voice"
+  /**  定时关闭. */
+  | "timer";
 
 /**
  *  Formats the library can hold today.

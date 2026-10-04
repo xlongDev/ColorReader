@@ -1,434 +1,387 @@
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type CSSProperties,
-  type ReactNode,
-} from "react";
+import { useEffect, useMemo } from "react";
+import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import {
-  BookOpen,
-  CaretDoubleLeft,
-  CaretDoubleRight,
-  CaretLeft,
-  Check,
-  Gauge,
-  Pause,
-  Play,
-  SkipBack,
-  SkipForward,
-  SpeakerHigh,
-  Timer,
-  X,
-} from "@phosphor-icons/react";
+import { PictureInPicture } from "@phosphor-icons/react";
 
-import { IconSwap } from "@/components/motion/IconSwap";
+import { useReadingSurface } from "@/hooks/useReadingSurface";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
+import { useResolvedTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/cn";
+import {
+  ipc,
+  onMiniBarAsk,
+  onSpeechControl,
+  publishMiniBarState,
+  publishMiniBarVoices,
+  type MiniBarState,
+  type MiniBarVoices,
+} from "@/lib/ipc";
+import { SPRING } from "@/lib/motion";
+import { useReaderSettings } from "@/stores/reader";
+import { useSpeechSession } from "@/stores/speech";
 
 import { reloadEdgeVoices } from "./edge";
-import { formatClock, queuePosition, speechSeconds, unitAtChar, type SpeechUnit } from "./speech";
-import type { SpeechPlayerStyle } from "./speech";
-import { useSpeechVoices, type SpeechStatus } from "./tts";
+import { SpeechCard } from "./SpeechCard";
 import {
-  DEFAULT_VOICE_NAME,
-  bookLangVoices,
-  defaultVoice,
-  defaultVoiceMissing,
-  languageName,
-  voiceGroups,
-} from "./voice";
-import { EASE_OUT, SPRING } from "@/lib/motion";
+  formatClock,
+  paragraphIndex,
+  queuePosition,
+  speechSeconds,
+  stepIndex,
+  type SpeechTransport,
+} from "./speech";
+import { readerGlassVars } from "./theme";
+import { useTtsHost } from "./TtsHost";
+import { barClock, LoadingBars, minimizeWindow, Pill, Transport } from "./ttsParts";
+import { useSpeechVoices } from "./tts";
+import { defaultVoice } from "./voice";
 
 /**
- * The read-aloud player: a pill docked above the footer while a session runs,
- * expanding into a card with the transport, a sentence scrubber, and the three
- * settings readest puts behind its transport row (speed, voice, sleep timer).
+ * Read-aloud, drawn by the shell rather than by the reader.
  *
- * Both surfaces are the same card at two sizes, so the reader never loses the
- * voice's position or the controls they were using. Neither takes a modal: the
- * page stays readable and selectable underneath, which is the whole point of
- * listening to a book you are also looking at.
+ * Two surfaces over one session: the pill, which is up whenever the voice is,
+ * and the card behind it — `SpeechCard`, the same panel the floating bar opens
+ * — with the sentence list, the scrubber and the three settings. Both take no
+ * modal — the page stays readable under them, which is the point of listening
+ * to a book you are also looking at.
+ *
+ * Neither belongs to `ReaderPage` any more. The engine outlives that page (see
+ * `TtsHost`), so a reader who walks off to their shelf keeps listening; what the
+ * reader lends while it *is* on screen is the transport, and it gets it back the
+ * moment the page mounts again. Everything else — what is being read, how far
+ * in, the settings — is either published to `useSpeechSession` or reached
+ * through the engine.
+ *
+ * This file is now the *wiring*: it owns the two events the bar speaks, the
+ * session, the engine and the settings, and hands the card the plain facts it
+ * draws. The card itself is shared with the bar, which has none of those.
  */
-
-/** Rates the speed view offers, in picker order. */
-const SPEECH_RATES = [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2] as const;
-
-/** Sleep-timer choices. */
-const SLEEP_MINUTES = [5, 15, 30, 60] as const;
-
-/** What the sleep timer will do when it fires. */
-export type SleepTimer =
-  { kind: "minutes"; minutes: number; endsAt: number } | { kind: "chapter" } | null;
-
-/** A sleep-timer choice as the view reports it back. */
-export type SleepChoice = "off" | "chapter" | number;
-
-export interface TtsPlayerProps {
-  /** Card open; the pill is governed by `status` instead. */
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  title: string;
-  coverUrl: string | null;
-  /** Chapter (prose) or section (Kindle) label under the title. */
-  chapter: string;
-  /** Utterances of the chapter or section being read. */
-  units: readonly SpeechUnit[];
-  /** The unit the voice is on; `null` before the first one starts. */
-  index: number | null;
-  status: SpeechStatus;
-  /** Set when the last attempt to speak failed. Shown on the pill and in full
-   *  in the card: a session that stops for no visible reason is the one
-   *  failure a reader cannot act on. */
-  error: string | null;
-  /** True while the Edge engine is synthesising a clip it has no cache for —
-   *  drawn as rising bars beside the sentence instead of a frozen clock. */
-  loading: boolean;
-  rate: number;
-  onRate: (rate: number) => void;
-  /** Chosen voice URI; `null` shows the default pick as selected. */
-  voiceUri: string | null;
-  onVoice: (uri: string) => void;
-  /** BCP-47 tag of the book's language, or `null` when the book carries none.
-   *  The voice picker leads with voices of this language, with a one-chip way
-   *  out to the full catalogue. */
-  bookLanguage: string | null;
-  sleep: SleepTimer;
-  onSleep: (choice: SleepChoice) => void;
-  onToggle: () => void;
-  onStop: () => void;
-  /** One utterance. */
-  onStep: (dir: 1 | -1) => void;
-  /** One paragraph: the next unit belonging to a different source block. */
-  onSkip: (dir: 1 | -1) => void;
-  onSeek: (index: number) => void;
-  /** How much of the player the reader asked for. `minimal` keeps the card to
-   *  the transport and where the voice is; the pill is the same either way. */
-  playerStyle: SpeechPlayerStyle;
-}
-
-/** One tick a second. Never read during render: the countdown below is the
- *  only consumer, and it mounts only while a timer is armed, so an idle reader
- *  runs no clock at all. */
-const subscribeTick = (onTick: () => void) => {
-  const id = window.setInterval(onTick, 1000);
-  return () => window.clearInterval(id);
-};
-
-const snapshotSecond = () => Math.floor(Date.now() / 1000);
-
-/** Cross-fade shared by the card's view switches. Opacity only, no travel:
- *  the card's height change is animated by the root's `layout` spring, and a
- *  `y` offset here just makes the content swim inside a moving box. */
-const VIEW_FADE = {
-  initial: { opacity: 0 },
-  animate: { opacity: 1 },
-  exit: { opacity: 0 },
-  transition: { duration: 0.15 },
-};
-
-/** Three rising bars: the service is synthesising and the voice has nothing to
- *  say yet. Reduced motion holds a low, steady bar — the movement carries no
- *  information the label does not. */
-function LoadingBars({ className }: { className?: string }) {
-  const reduce = useReducedMotion();
-  return (
-    <output
-      className={cn("inline-flex h-3 shrink-0 items-end gap-[3px]", className)}
-      aria-label="正在加载语音"
-    >
-      {[0, 1, 2].map((bar) => (
-        <motion.span
-          key={bar}
-          className="bg-accent h-3 w-[3px] origin-bottom rounded-full"
-          initial={{ scaleY: 0.3 }}
-          animate={reduce ? undefined : { scaleY: [0.3, 1, 0.3] }}
-          transition={
-            reduce
-              ? undefined
-              : { duration: 0.9, repeat: Infinity, ease: "easeInOut", delay: bar * 0.18 }
-          }
-        />
-      ))}
-    </output>
-  );
-}
-
-/** `m:ss` left before `endsAt`, ticking. */
-function Countdown({ endsAt }: { endsAt: number }) {
-  const second = useSyncExternalStore(subscribeTick, snapshotSecond);
-  return <>{formatClock(Math.max(0, endsAt / 1000 - second))}</>;
-}
-
-/** Cover thumbnail, falling back to a glyph when the book has no artwork. */
-function Cover({ url, className }: { url: string | null; className?: string }) {
-  if (url) {
-    return <img src={url} alt="" draggable={false} className={cn("object-cover", className)} />;
-  }
-  return (
-    <span className={cn("bg-surface-2 text-text-3 grid place-items-center", className)}>
-      <BookOpen size={14} />
-    </span>
-  );
-}
-
-function Transport({
-  label,
-  onClick,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      aria-label={label}
-      title={label}
-      onClick={onClick}
-      className="press text-text-2 hover:text-text-1 hover:bg-surface-2 focus-visible:focus-ring grid size-8 place-items-center rounded-full"
-    >
-      {children}
-    </button>
-  );
-}
-
-function Chip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "press focus-visible:focus-ring shrink-0 rounded-full px-3 py-1.5 text-[12px] font-medium",
-        active ? "bg-accent text-on-accent" : "text-text-2 hover:text-text-1 bg-surface-2",
-      )}
-    >
-      {children}
-    </button>
-  );
-}
-
-/** One of the three tiles at the foot of the card. Each is its own card rather
- *  than a column under one rule: the row used to read as a single flat strip
- *  with three labels, and the tap targets were impossible to see. */
-function SettingsRow({
-  icon,
-  label,
-  caption,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: ReactNode;
-  caption: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className="press bg-surface-2 hover:bg-surface-3 focus-visible:focus-ring flex flex-1 flex-col items-center gap-1 rounded-md px-1 py-2"
-    >
-      <span className="text-text-2">{icon}</span>
-      <span className="text-text-1 max-w-full truncate text-[12px] font-medium">{label}</span>
-      <span className="text-text-3 text-[11px]">{caption}</span>
-    </button>
-  );
-}
-
-/** Label for the sleep row: what the timer will do, in three words or less. */
-const sleepLabel = (sleep: SleepTimer): ReactNode => {
-  if (!sleep) return "关闭";
-  if (sleep.kind === "chapter") return "本章结束";
-  return <Countdown endsAt={sleep.endsAt} />;
-};
-
 export function TtsPlayer({
-  open,
-  onOpenChange,
-  title,
-  coverUrl,
-  chapter,
-  units,
-  index,
-  status,
-  error,
-  loading,
-  rate,
-  onRate,
-  voiceUri,
-  onVoice,
-  bookLanguage,
-  sleep,
-  onSleep,
-  onToggle,
-  onStop,
-  onStep,
-  onSkip,
-  onSeek,
-  playerStyle,
-}: TtsPlayerProps) {
+  onReadingSurface,
+  liftForFooter,
+}: {
+  /** A reader is on screen, so this chrome is floating on the reading surface —
+   *  the page's own ink and paper, not the app's. */
+  onReadingSurface: boolean;
+  /** …and the reader's footer is on screen too, which is what takes the content
+   *  pane's bottom edge away from us. */
+  liftForFooter: boolean;
+}) {
   const reduce = useReducedMotion();
+  const navigate = useNavigate();
+  const { tts, sleep: sleepTimer } = useTtsHost();
   const { voices, edgeError } = useSpeechVoices();
-  const [viewState, setView] = useState<"main" | "speed" | "voice" | "timer">("main");
-  // A minimal player has nothing behind the drill-downs, so the card is always
-  // on the transport view. Derived rather than reset, which would take an
-  // effect and a frame showing a view that no longer exists.
-  const minimal = playerStyle === "minimal";
-  const view = minimal ? "main" : viewState;
-  // Adjust during render: a freshly opened card starts on the transport, not
-  // wherever it was left, and the first paint must already show it.
-  const [wasOpen, setWasOpen] = useState(open);
-  if (open !== wasOpen) {
-    setWasOpen(open);
-    if (open) setView("main");
-  }
+  const session = useSpeechSession();
+  const surface = useReadingSurface();
+  const minimal = useReaderSettings((state) => state.speechPlayerStyle === "minimal");
+  const rate = useReaderSettings((state) => state.speechRate);
+  const storedVoice = useReaderSettings((state) => state.speechVoiceURI);
+  const updateSettings = useReaderSettings((state) => state.update);
+
+  const { status, unit: index, error, loading } = tts;
+  const { sleep, choose: onSleep } = sleepTimer;
+  const units = session.units;
+
+  // The reading surface's glass tokens, and only while a reader is under us: on
+  // the shelf there is no page, and the app's own tokens are the ones that
+  // match. Applied to the whole layer so the card is the same material as the
+  // pill it replaces.
+  const surfaceVars = useMemo(
+    () => (onReadingSurface ? readerGlassVars(surface) : undefined),
+    [onReadingSurface, surface],
+  );
+
+  // `open` is the reader's, but only while there is something to draw behind it:
+  // a session left behind on another route has no controls to lend, and an idle
+  // card over the shelf is a card with nothing in it.
+  const live = status !== "idle" || error !== null;
+  const open = session.open && (live || session.controls !== null);
 
   // Esc closes the card. It is not modal, so nothing else claims the key while
   // it is open; the reader's own shortcuts are behind this listener.
   useEffect(() => {
     if (!open) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onOpenChange(false);
+      if (event.key === "Escape") session.setOpen(false);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onOpenChange]);
+  }, [open, session]);
 
-  const active = useMemo(() => defaultVoice(voices, voiceUri), [voices, voiceUri]);
-  // A book in a known language leads the picker with that language's voices;
-  // `null` from `bookLangVoices` (no tag, or nothing in the catalogue) means
-  // the full list — an empty picker helps no one.
-  const bookVoices = useMemo(() => bookLangVoices(voices, bookLanguage), [voices, bookLanguage]);
-  const [allLangs, setAllLangs] = useState(false);
-  const shownVoices = bookVoices !== null && !allLangs ? bookVoices : voices;
-  const groups = useMemo(() => voiceGroups(shownVoices), [shownVoices]);
-  const missingDefault = useMemo(() => defaultVoiceMissing(voices), [voices]);
+  /* The voice the picker marks as the current one: the saved pick, resolved
+     against the live catalogue so a voice a macOS update removed degrades
+     instead of going silent. The card resolves the row from this id itself, so
+     the two hosts cannot disagree about which one it is. */
+  const voiceUri = useMemo(
+    () => storedVoice ?? defaultVoice(voices, null)?.uri ?? null,
+    [storedVoice, voices],
+  );
 
   const { spoken, total } = queuePosition(units, index);
   const elapsed = speechSeconds(spoken, rate);
   const remaining = speechSeconds(total - spoken, rate);
   const percent = total > 0 ? Math.round((spoken / total) * 100) : 0;
-  const scrolled = percent > 0 && percent < 100;
 
-  // The scrollable sentence list the reference player reads from: the active
-  // sentence glides to the middle of the stack, and any sentence clicked becomes
-  // the one being read. Reduced motion jumps instead of gliding.
-  const listRef = useRef<HTMLDivElement | null>(null);
-  const rowRefs = useRef(new Map<number, HTMLButtonElement>());
+  /**
+   * The floating bar, for a reader who puts the app away.
+   *
+   * Two halves, and they are two different questions. `watch` is whether the
+   * bar should exist at all — a session is on *and* the setting allows it, and
+   * both are answers only this window has. The payloads below are what it
+   * should draw, pushed on every change, because the bar is a second webview
+   * with no store of its own to read.
+   *
+   * The catalogue travels on its own event: it is a hundred-odd rows and it
+   * changes about as often as the network does, while this payload is published
+   * once per sentence.
+   */
+  const miniBarAllowed = useReaderSettings((state) => state.speechMiniPlayer);
+  const theme = useResolvedTheme();
   useEffect(() => {
-    const row = index === null ? undefined : rowRefs.current.get(index);
-    const list = listRef.current;
-    if (!row || !list) return;
-    const top = row.offsetTop - list.clientHeight / 2 + row.offsetHeight / 2;
-    list.scrollTo({ top: Math.max(0, top), behavior: reduce ? "auto" : "smooth" });
-  }, [index, reduce]);
+    void ipc.miniBarWatch(miniBarAllowed && live);
+  }, [miniBarAllowed, live]);
 
-  // The sleep timer's custom minutes, kept as text while it is being typed —
-  // prefilled from a non-preset timer already running, blank otherwise.
-  const [customMinutes, setCustomMinutes] = useState(() =>
-    sleep?.kind === "minutes" && !SLEEP_MINUTES.some((preset) => preset === sleep.minutes)
-      ? String(sleep.minutes)
-      : "",
+  // Memoised on the values rather than rebuilt per render: the shell re-renders
+  // for reasons of its own, and every one of them would otherwise push a fresh
+  // payload at a window that has nothing new to draw.
+  const barState = useMemo<MiniBarState>(
+    () => ({
+      live,
+      playing: status === "playing",
+      loading,
+      title: session.title,
+      chapter: session.chapter,
+      coverUrl: session.coverUrl,
+      elapsed: formatClock(elapsed),
+      remaining: formatClock(remaining),
+      percent,
+      error,
+      theme,
+      // The queue as the card lists it, and the scale its scrubber works on.
+      units,
+      index,
+      spoken,
+      total,
+      rate,
+      voice: voiceUri,
+      bookLanguage: session.bookLanguage,
+      sleep,
+      minimal,
+    }),
+    [
+      live,
+      status,
+      loading,
+      session.title,
+      session.chapter,
+      session.coverUrl,
+      session.bookLanguage,
+      elapsed,
+      remaining,
+      percent,
+      error,
+      theme,
+      units,
+      index,
+      spoken,
+      total,
+      rate,
+      voiceUri,
+      sleep,
+      minimal,
+    ],
   );
-  const isCustomSleep =
-    sleep?.kind === "minutes" && !SLEEP_MINUTES.some((preset) => preset === sleep.minutes);
-  const applyCustomSleep = () => {
-    const minutes = Math.round(Number(customMinutes));
-    if (!Number.isFinite(minutes) || minutes < 1) return;
-    onSleep(Math.min(minutes, 720));
-  };
+  const catalogue = useMemo<MiniBarVoices>(() => ({ voices, edgeError }), [voices, edgeError]);
+
+  useEffect(() => {
+    void publishMiniBarState(barState);
+  }, [barState]);
+  useEffect(() => {
+    void publishMiniBarVoices(catalogue);
+  }, [catalogue]);
+
+  // A bar that was just built has missed everything published so far — it is
+  // created the moment it is needed, which is *after* the payload it would have
+  // drawn — so it asks, and the freshest payloads answer. `useTauriEvent` reads
+  // the handler through a ref, so an inline arrow does not resubscribe.
+  useTauriEvent(onMiniBarAsk, () => {
+    void publishMiniBarState(barState);
+    void publishMiniBarVoices(catalogue);
+  });
+
+  /**
+   * The transport the bar and the card drive.
+   *
+   * While a reader is on screen it is the reader's own: that layer knows the
+   * page's geometry, the wash and what a finished chapter rolls into. With no
+   * reader the engine is driven directly — the queue still plays to its end, but
+   * there is nothing to roll into, so the voice simply stops there. A rate or a
+   * voice changed on this path reaches the next utterance rather than restarting
+   * the current one, which is the one thing only a page can do.
+   */
+  const detached = useMemo<SpeechTransport>(() => {
+    const jump = (at: number) =>
+      tts.play(
+        units.map((unit) => unit.text),
+        at,
+      );
+    return {
+      toggle: () => (tts.status === "playing" ? tts.pause() : tts.resume()),
+      step: (dir) => jump(stepIndex(units, tts.unit ?? 0, dir)),
+      skip: (dir) => {
+        const at = paragraphIndex(units, tts.unit ?? 0, dir);
+        if (at >= 0) jump(at);
+      },
+      seek: jump,
+      applySettings: (change) => {
+        if (change.rate !== undefined) {
+          updateSettings({ speechRate: change.rate });
+          tts.setRate(change.rate);
+        }
+        if (change.voice !== undefined) {
+          updateSettings({ speechVoiceURI: change.voice });
+          tts.setVoice(change.voice);
+        }
+      },
+      // With no reader there is no page to bring anything into view on. The
+      // player answers「回到阅读」itself in that case, by navigating (see the
+      // control handler below), so this is honestly nothing.
+      reveal: () => {},
+    };
+  }, [tts, units, updateSettings]);
+  const transport = session.controls ?? detached;
+
+  /**
+   * What the tray menu and the bar ask for, wired to the same transport the
+   * pill drives.
+   *
+   * This is the one control surface that has to work with the window hidden on
+   * the other side of the Dock, which is why it is here rather than in the
+   * reader: the shell is mounted either way, and the transport already knows
+   * how to drive the engine with no page behind it. The bar's card asks for
+   * more than a menu entry can name — a sentence to jump to, a chip's value —
+   * so those arrive as objects; both shapes are handled in one place because
+   * both are the same question.
+   */
+  useTauriEvent(onSpeechControl, (control) => {
+    if (typeof control !== "string") {
+      switch (control.kind) {
+        case "seek":
+          transport.seek(control.index);
+          break;
+        case "skip":
+          transport.skip(control.dir);
+          break;
+        case "rate":
+          transport.applySettings({ rate: control.value });
+          break;
+        case "voice":
+          transport.applySettings({ voice: control.uri });
+          break;
+        case "sleep":
+          // The timer is not the transport's: it belongs to the engine's host,
+          // which is where `useSleepTimer` was mounted and where the voice it
+          // stops lives.
+          onSleep(control.choice);
+          break;
+        default:
+          break;
+      }
+      return;
+    }
+    switch (control) {
+      case "toggle":
+        transport.toggle();
+        break;
+      case "prev":
+        transport.step(-1);
+        break;
+      case "next":
+        transport.step(1);
+        break;
+      case "stop":
+        tts.stop();
+        break;
+      case "focus":
+        void ipc.miniBarReveal();
+        // Where the reader is told to go is the reader's business, and only a
+        // mounted one can move its own page: a prose scroller, a Kindle
+        // section and a PDF page are three different answers. With none on
+        // screen the way back is a navigation, and the chapter is what a
+        // freshly opened reader can act on — the prose path then centres the
+        // sentence the voice is on, once the chapter has rendered.
+        if (session.bookId === null) break;
+        if (session.controls !== null) session.controls.reveal();
+        else navigate(`/reader?book=${session.bookId}&chapter=${session.chapterIdx}`);
+        break;
+      default:
+        // A name this build does not know. The backend forwards whatever the
+        // menu item is called, and the two spellings are not generated from
+        // each other — so an unknown one is ignored, not guessed at.
+        break;
+    }
+  });
 
   return (
-    <>
+    /* One layer over the content pane, holding both surfaces: the pill while
+       the voice is on, the card while it is open. Anchored to the pane rather
+       than to the window, so it follows the reader from route to route rather
+       than dying with the page it was born on. While the reader's own footer is
+       on screen the pane's bottom edge is spoken for, so the whole layer is
+       lifted by exactly that footer's height and both surfaces keep the 20px of
+       air they had when they lived inside the reading viewport. Fullscreen docks
+       the footer past the bottom edge, so nothing lifts.
+       ponytail: 58 is the windowed footer measured (57px + its hairline). It is
+       a fixed-height bar, but if it ever grows this drifts with it. */
+    <div
+      className={cn(
+        "pointer-events-none absolute inset-0 z-40",
+        "transition-transform duration-200 ease-out motion-reduce:transition-none",
+        liftForFooter && "-translate-y-[58px]",
+      )}
+      style={surfaceVars}
+    >
       <AnimatePresence>
-        {(status !== "idle" || error !== null) && !open && (
+        {live && !open && (
           <motion.div
             key="tts-pill"
-            className="pointer-events-none absolute inset-x-0 bottom-5 z-40 flex justify-center px-4"
+            className="absolute inset-x-0 bottom-5 flex justify-center px-4"
             initial={reduce ? { opacity: 1 } : { opacity: 0, y: 12 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduce ? { opacity: 1 } : { opacity: 0, y: 12 }}
             transition={SPRING.panel}
           >
-            <div className="glass-solid pointer-events-auto relative flex w-[min(92vw,380px)] items-center gap-2.5 overflow-hidden rounded-full py-1.5 pr-2 pl-1.5">
-              {/* The cover opens the card too: a target this obvious should not
-                  be dead surface when the title beside it already opens. */}
-              <button
-                type="button"
-                onClick={() => onOpenChange(true)}
-                aria-label="展开朗读播放器"
-                className="press focus-visible:focus-ring shrink-0 rounded-xs"
-              >
-                <Cover url={coverUrl} className="shadow-panel size-8 rounded-md" />
-              </button>
-              <button
-                type="button"
-                onClick={() => onOpenChange(true)}
-                aria-label="展开朗读播放器"
-                className="focus-visible:focus-ring min-w-0 flex-1 rounded-xs text-left"
-              >
-                <p className="text-text-1 truncate text-[12px] font-medium">
-                  {title}
-                  {chapter !== "" && <span className="text-text-3"> · {chapter}</span>}
-                </p>
-                <p className="text-text-3 truncate text-[11px] tabular-nums">
-                  {error ?? (
-                    <>
-                      {loading ? (
-                        <LoadingBars />
-                      ) : (
-                        <>
-                          {status === "paused" ? "已暂停 · " : ""}
-                          {formatClock(elapsed)} · -{formatClock(remaining)}
-                        </>
-                      )}
-                    </>
-                  )}
-                </p>
-              </button>
-              <Transport label="上一句" onClick={() => onStep(-1)}>
-                <SkipBack size={14} weight="fill" />
-              </Transport>
-              <button
-                type="button"
-                aria-label={status === "playing" ? "暂停" : "继续"}
-                onClick={onToggle}
-                className="bg-accent text-on-accent focus-visible:focus-ring grid size-9 shrink-0 place-items-center rounded-full transition-opacity hover:opacity-90"
-              >
-                <IconSwap state={status}>
-                  {status === "playing" ? (
-                    <Pause size={15} weight="fill" />
-                  ) : (
-                    <Play size={15} weight="fill" />
-                  )}
-                </IconSwap>
-              </button>
-              <Transport label="下一句" onClick={() => onStep(1)}>
-                <SkipForward size={14} weight="fill" />
-              </Transport>
-              <Transport label="停止朗读" onClick={onStop}>
-                <X size={14} weight="bold" />
-              </Transport>
-              {/* Position, drawn on the pill's own bottom edge: the narrowest
-                  honest progress readout for a bar this short. */}
-              {scrolled && (
-                <span
-                  aria-hidden
-                  className="bg-accent absolute inset-x-0 bottom-0 h-0.5 origin-left"
-                  style={{ transform: `scaleX(${percent / 100})` }}
-                />
-              )}
-            </div>
+            <Pill
+              coverUrl={session.coverUrl}
+              title={session.title}
+              chapter={session.chapter}
+              line={
+                error ??
+                (loading ? (
+                  <LoadingBars />
+                ) : (
+                  <>{barClock(status === "paused", formatClock(elapsed), formatClock(remaining))}</>
+                ))
+              }
+              percent={percent}
+              status={status}
+              onOpen={() => session.setOpen(true)}
+              openLabel="展开朗读播放器"
+              onPrev={() => transport.step(-1)}
+              onToggle={transport.toggle}
+              onNext={() => transport.step(1)}
+              onStop={tts.stop}
+              trailing={
+                /* The window and the bar are two surfaces of one session, and
+                   this is the seam between them. It is safe to hand the session
+                   over because the bar is the transport that outlives the
+                   window — which is the whole reason the bar exists — so the
+                   button sends the app to the Dock rather than to silence. */
+                <Transport label="最小化到悬浮条" onClick={minimizeWindow}>
+                  <PictureInPicture size={14} weight="bold" />
+                </Transport>
+              }
+            />
           </motion.div>
         )}
       </AnimatePresence>
@@ -437,7 +390,7 @@ export function TtsPlayer({
         {open && (
           <motion.div
             key="tts-card"
-            className="pointer-events-none absolute inset-x-0 top-5 bottom-5 z-40 flex items-end justify-center px-4"
+            className="absolute inset-x-0 top-5 bottom-5 flex items-end justify-center px-4"
             initial={reduce ? { opacity: 1 } : { opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={reduce ? { opacity: 1 } : { opacity: 0, y: 16 }}
@@ -446,385 +399,49 @@ export function TtsPlayer({
             {/* Capped, not `max-h-full`: a card free to grow fills the reading
                 viewport and the page behind it stops being worth looking at.
                 Sentence stack and voice list both take what is left of the cap.
-                `layout`: the four views are different heights, and the swap
-                used to jump between them — the spring carries the card from
-                one height to the next instead. */}
-            <motion.div
-              layout
-              transition={SPRING.panel}
-              className="glass-solid pointer-events-auto relative flex max-h-[min(68vh,520px)] w-[min(92vw,420px)] flex-col overflow-hidden rounded-lg p-4"
-            >
-              <header className="flex items-start gap-3">
-                <IconSwap state={view} className="size-11 shrink-0">
-                  {view === "main" ? (
-                    <Cover url={coverUrl} className="shadow-panel size-11 rounded-md" />
-                  ) : (
-                    <button
-                      type="button"
-                      aria-label="返回"
-                      onClick={() => setView("main")}
-                      className="text-text-2 hover:text-text-1 hover:bg-surface-2 focus-visible:focus-ring grid size-11 place-items-center rounded-sm transition-colors"
-                    >
-                      <CaretLeft size={16} weight="bold" />
-                    </button>
-                  )}
-                </IconSwap>
-                <div className="min-w-0 flex-1 pt-0.5">
-                  <p className="text-text-1 truncate text-[13.5px] font-medium">{title}</p>
-                  <p className="text-text-3 mt-0.5 truncate text-[11px]">
-                    {chapter !== "" ? chapter : "朗读"}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  aria-label="收起播放器"
-                  onClick={() => onOpenChange(false)}
-                  className="text-text-3 hover:text-text-1 hover:bg-surface-2 focus-visible:focus-ring grid size-7 shrink-0 place-items-center rounded-full transition-colors"
-                >
-                  <X size={14} weight="bold" />
-                </button>
-              </header>
-
-              {/* The sentence stack, readest-style: one row per unit, the voice's
-                  row kept mid-list by the scroll effect above, any row clicked
-                  becoming the one read. The highlight is a shared-layout element,
-                  so it glides from row to row as the voice moves. */}
-              <AnimatePresence mode="popLayout" initial={false}>
-                {view === "main" && (
-                  <motion.div key="main" className="flex min-h-0 flex-1 flex-col" {...VIEW_FADE}>
-                    {error !== null && (
-                      <p className="text-text-2 mt-3 text-[12px] leading-relaxed">{error}</p>
-                    )}
-                    {/* The sentence stack is what makes the card worth the space;
-                        a reader who asked for the minimal player gets the clock
-                        and the scrubber and nothing else. */}
-                    {!minimal && (
-                      <div
-                        ref={listRef}
-                        className="scroll-fade relative mt-3 min-h-0 flex-1 overflow-y-auto"
-                        aria-live="polite"
-                      >
-                        {units.length === 0 ? (
-                          <p className="text-text-3 px-2 py-1.5 text-[13px] leading-relaxed">
-                            选一段开始朗读
-                          </p>
-                        ) : (
-                          units.map((unit, i) => {
-                            const isActive = i === index;
-                            return (
-                              <button
-                                key={`${unit.source}:${unit.start}`}
-                                type="button"
-                                ref={(el) => {
-                                  if (el === null) rowRefs.current.delete(i);
-                                  else rowRefs.current.set(i, el);
-                                }}
-                                onClick={() => onSeek(i)}
-                                aria-current={isActive || undefined}
-                                className={cn(
-                                  // The gap between the line being read and the
-                                  // rest is spacing and weight, never opacity:
-                                  // the dim tier is already at 5.3:1 on the
-                                  // darkest card, and a fade takes it under AA.
-                                  "relative flex w-full items-start gap-2 rounded-sm px-2 text-left leading-relaxed transition-colors",
-                                  isActive
-                                    ? "text-text-1 py-2 text-[13.5px] font-medium"
-                                    : "text-text-3 hover:bg-surface-2 hover:text-text-2 py-1 text-[13px]",
-                                )}
-                              >
-                                {isActive && (
-                                  <motion.span
-                                    layoutId="tts-active-sentence"
-                                    aria-hidden
-                                    className="absolute inset-0 rounded-sm bg-(--accent-soft)"
-                                    transition={reduce ? { duration: 0 } : SPRING.layout}
-                                  />
-                                )}
-                                <span className="relative flex-1">{unit.text}</span>
-                                {isActive && loading && <LoadingBars className="mt-1" />}
-                              </button>
-                            );
-                          })
-                        )}
-                      </div>
-                    )}
-
-                    <div className="text-text-3 mt-3 flex items-center gap-3 text-[11px] tabular-nums">
-                      <span>{formatClock(elapsed)}</span>
-                      <input
-                        type="range"
-                        className="range flex-1"
-                        min={0}
-                        max={Math.max(total, 1)}
-                        value={spoken}
-                        disabled={units.length < 2}
-                        aria-label="朗读进度"
-                        onChange={(event) => onSeek(unitAtChar(units, Number(event.target.value)))}
-                        style={{ "--range-fill": `${percent}%` } as CSSProperties}
-                      />
-                      <span>-{formatClock(remaining)}</span>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {/* Transport sits outside the view switch: tuning the rate or
-                  picking a voice is something you do *while listening*, and the
-                  old drill-down took play/pause away with the text. */}
-              <div className="mt-2.5 flex items-center justify-center gap-2.5">
-                {!minimal && (
-                  <>
-                    <Transport label="上一段" onClick={() => onSkip(-1)}>
-                      <CaretDoubleLeft size={15} weight="bold" />
-                    </Transport>
-                    <Transport label="上一句" onClick={() => onStep(-1)}>
-                      <SkipBack size={15} weight="fill" />
-                    </Transport>
-                  </>
-                )}
-                <button
-                  type="button"
-                  aria-label={status === "playing" ? "暂停" : "播放"}
-                  onClick={onToggle}
-                  className="bg-accent text-on-accent focus-visible:focus-ring mx-1 grid size-12 place-items-center rounded-full transition-opacity hover:opacity-90"
-                >
-                  <IconSwap state={status}>
-                    {status === "playing" ? (
-                      <Pause size={19} weight="fill" />
-                    ) : (
-                      <Play size={19} weight="fill" />
-                    )}
-                  </IconSwap>
-                </button>
-                {!minimal && (
-                  <>
-                    <Transport label="下一句" onClick={() => onStep(1)}>
-                      <SkipForward size={15} weight="fill" />
-                    </Transport>
-                    <Transport label="下一段" onClick={() => onSkip(1)}>
-                      <CaretDoubleRight size={15} weight="bold" />
-                    </Transport>
-                  </>
-                )}
-              </div>
-
-              <AnimatePresence mode="popLayout" initial={false}>
-                {!minimal && view === "main" && (
-                  <motion.div key="main" className="mt-3 flex gap-1.5" {...VIEW_FADE}>
-                    <SettingsRow
-                      icon={<Gauge size={16} />}
-                      label={`${rate}×`}
-                      caption="语速"
-                      onClick={() => setView("speed")}
-                    />
-                    <SettingsRow
-                      icon={<SpeakerHigh size={16} />}
-                      label={active?.name ?? "默认"}
-                      caption={active?.engine === "edge" ? "在线语音" : "语音"}
-                      onClick={() => setView("voice")}
-                    />
-                    <SettingsRow
-                      icon={<Timer size={16} />}
-                      label={sleepLabel(sleep)}
-                      caption="定时关闭"
-                      onClick={() => setView("timer")}
-                    />
-                  </motion.div>
-                )}
-                {view === "speed" && (
-                  <motion.div key="speed" className="mt-3 flex flex-wrap gap-1.5" {...VIEW_FADE}>
-                    {SPEECH_RATES.map((value) => (
-                      <Chip key={value} active={value === rate} onClick={() => onRate(value)}>
-                        {value}×
-                      </Chip>
-                    ))}
-                  </motion.div>
-                )}
-                {view === "voice" && (
-                  // The picker is the one view that replaces a scroll of prose
-                  // with a scroll of choices, so it announces itself: the whole
-                  // block rises in, then the language switch and the list
-                  // follow a beat later. Height, as always, is the card's
-                  // layout spring — nothing here moves on the y axis of the
-                  // card itself.
-                  <motion.div
-                    key="voice"
-                    className="mt-3 flex min-h-0 flex-1 flex-col"
-                    initial={reduce ? { opacity: 0 } : { opacity: 0, y: 14 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={{ duration: 0.26, ease: EASE_OUT }}
-                  >
-                    {edgeError !== null ? (
-                      <p className="text-text-3 mb-2 text-[12px] leading-relaxed">
-                        {edgeError}
-                        <button
-                          type="button"
-                          onClick={reloadEdgeVoices}
-                          className="focus-visible:focus-ring text-accent ml-1 underline"
-                        >
-                          重试
-                        </button>
-                      </p>
-                    ) : (
-                      missingDefault && (
-                        <p className="text-text-3 mb-2 text-[12px] leading-relaxed">
-                          没有找到 {DEFAULT_VOICE_NAME}，朗读会用下面选中的语音；连上网络即可使用
-                          Edge 在线语音里的 {DEFAULT_VOICE_NAME}。
-                        </p>
-                      )
-                    )}
-                    {/* The book's language against the whole catalogue. Only
-                      rendered when the book carries a language the catalogue
-                      can speak — otherwise there is nothing to switch. */}
-                    {bookVoices !== null && (
-                      <motion.div
-                        className="mb-2 flex gap-1.5"
-                        initial={reduce ? { opacity: 0 } : { opacity: 0, y: 8 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.24, ease: EASE_OUT, delay: 0.08 }}
-                      >
-                        <Chip active={!allLangs} onClick={() => setAllLangs(false)}>
-                          {languageName(bookLanguage ?? "")}
-                        </Chip>
-                        <Chip active={allLangs} onClick={() => setAllLangs(true)}>
-                          全部语言
-                        </Chip>
-                      </motion.div>
-                    )}
-                    {/* One scroll, two headings deep: the engine, then the language.
-                      The engine is the one thing the two sources cannot be merged
-                      on — only the service needs a connection — and the language
-                      has to stay visible while its own voices scroll, which a
-                      horizontal strip of chips cannot do (it scrolls the language
-                      you are on out of sight while its voices stay put). Both
-                      headings are one fixed row tall, so the second can stick
-                      directly beneath the first. */}
-                    <motion.div
-                      className="border-hairline min-h-0 flex-1 overflow-y-auto border-t"
-                      initial={reduce ? { opacity: 0 } : { opacity: 0, y: 10 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.28, ease: EASE_OUT, delay: 0.14 }}
-                    >
-                      {groups.map((group) => (
-                        <div key={group.engine}>
-                          <p className="bg-surface-2 text-text-2 sticky top-0 flex h-6 items-center px-2 text-[11px] font-medium">
-                            {group.label}
-                          </p>
-                          {group.sections.map((section) => (
-                            <div key={section.lang}>
-                              <p className="bg-surface-3 text-text-3 sticky top-6 flex h-6 items-center px-2 text-[11px]">
-                                {section.label}
-                              </p>
-                              {section.voices.map((voice) => (
-                                <button
-                                  key={voice.uri}
-                                  type="button"
-                                  onClick={() => onVoice(voice.uri)}
-                                  className={cn(
-                                    "press focus-visible:focus-ring hover:bg-surface-2 flex w-full items-center gap-2 rounded-xs px-2 py-2 text-left",
-                                    voice.uri === active?.uri && "text-accent",
-                                  )}
-                                >
-                                  <span className="text-text-1 flex-1 truncate text-[12px]">
-                                    {voice.name}
-                                  </span>
-                                  {/* The service tags nearly every voice
-                                    "General"; the label only earns its row
-                                    when it actually tells voices apart. */}
-                                  {voice.categories !== "" && voice.categories !== "General" && (
-                                    <span className="text-text-3 shrink-0 text-[11px]">
-                                      {voice.categories}
-                                    </span>
-                                  )}
-                                  {voice.uri === active?.uri && <Check size={13} weight="bold" />}
-                                </button>
-                              ))}
-                            </div>
-                          ))}
-                        </div>
-                      ))}
-                    </motion.div>
-                  </motion.div>
-                )}
-                {view === "timer" && (
-                  <motion.div key="timer" className="mt-3 space-y-3" {...VIEW_FADE}>
-                    <div>
-                      <p className="text-text-3 px-1 pb-1.5 text-[11px] font-medium">常用</p>
-                      <div className="flex flex-wrap gap-1.5">
-                        <Chip active={sleep === null} onClick={() => onSleep("off")}>
-                          关闭
-                        </Chip>
-                        {SLEEP_MINUTES.map((minutes) => (
-                          <Chip
-                            key={minutes}
-                            active={sleep?.kind === "minutes" && sleep.minutes === minutes}
-                            onClick={() => onSleep(minutes)}
-                          >
-                            {minutes} 分钟
-                          </Chip>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <p className="text-text-3 px-1 pb-1.5 text-[11px] font-medium">其他</p>
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Chip active={sleep?.kind === "chapter"} onClick={() => onSleep("chapter")}>
-                          本章结束
-                        </Chip>
-                        {/* Custom minutes: type a number, Enter or 开始 arms it.
-                            A form, so the keyboard comes for free. The armed
-                            state is a ring, not the accent fill — the input has
-                            to stay readable on whatever it sits on. */}
-                        <form
-                          onSubmit={(event) => {
-                            event.preventDefault();
-                            applyCustomSleep();
-                          }}
-                          className={cn(
-                            "bg-surface-2 focus-within:ring-accent flex shrink-0 items-center gap-1 rounded-full py-1 pr-1 pl-3.5 focus-within:ring-1",
-                            isCustomSleep && "ring-accent ring-1",
-                          )}
-                        >
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            min={1}
-                            max={720}
-                            value={customMinutes}
-                            onChange={(event) => setCustomMinutes(event.target.value)}
-                            placeholder="自定义"
-                            aria-label="自定义定时分钟数"
-                            className="text-text-1 placeholder:text-text-3 w-11 [appearance:textfield] bg-transparent text-center text-[12px] outline-none [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-                          />
-                          <span className="text-text-3 text-[12px]">分钟</span>
-                          <button
-                            type="submit"
-                            className="press bg-accent text-on-accent focus-visible:focus-ring rounded-full px-2.5 py-1 text-[12px] font-medium"
-                          >
-                            开始
-                          </button>
-                        </form>
-                      </div>
-                    </div>
-                    <p className="text-text-3 text-[12px] leading-relaxed">
-                      {sleep === null ? (
-                        "到点自动停止朗读，适合睡前听。"
-                      ) : sleep.kind === "chapter" ? (
-                        "读完当前章节后停止。"
-                      ) : (
-                        <>
-                          还剩 <Countdown endsAt={sleep.endsAt} /> 停止朗读。
-                        </>
-                      )}
-                    </p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
+                The card hugs its content, so the four views are four heights —
+                and it *takes* each height in the frame the view changes rather
+                than animating between them, because motion's way of animating a
+                box is a transform, and a transform on a box that is changing
+                height stretches what is inside it. See `VIEW_FADE`. */}
+            <SpeechCard
+              className="max-h-[min(68vh,520px)] w-[min(92vw,420px)]"
+              title={session.title}
+              chapter={session.chapter}
+              coverUrl={session.coverUrl}
+              units={units}
+              index={index}
+              status={status}
+              loading={loading}
+              error={error}
+              elapsed={formatClock(elapsed)}
+              remaining={formatClock(remaining)}
+              percent={percent}
+              spoken={spoken}
+              total={total}
+              rate={rate}
+              voice={voiceUri}
+              voices={voices}
+              bookLanguage={session.bookLanguage}
+              edgeError={edgeError}
+              sleep={sleep}
+              minimal={minimal}
+              // The card mounts fresh on every open, so this is read once — and
+              // it is how the reader's 倍速 button skips the tiles.
+              initialView={session.openAt}
+              onClose={() => session.setOpen(false)}
+              onToggle={transport.toggle}
+              onStep={(dir) => transport.step(dir)}
+              onSkip={(dir) => transport.skip(dir)}
+              onSeek={(at) => transport.seek(at)}
+              onRate={(value) => transport.applySettings({ rate: value })}
+              onVoice={(uri) => transport.applySettings({ voice: uri })}
+              onSleep={onSleep}
+              onReloadVoices={reloadEdgeVoices}
+            />
           </motion.div>
         )}
       </AnimatePresence>
-    </>
+    </div>
   );
 }

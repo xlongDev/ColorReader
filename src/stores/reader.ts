@@ -33,6 +33,10 @@ interface ReaderState {
   /** How much of the player is on screen while a session runs: the whole card,
    *  or the transport and the scrubber alone. */
   speechPlayerStyle: SpeechPlayerStyle;
+  /** Whether the floating bar comes out when the main window is put away while
+   *  a session is on. It is the only thing that can control the voice from
+   *  outside the app, apart from the menu-bar icon. */
+  speechMiniPlayer: boolean;
   /** Body typeface, a key into `FONT_STACKS`. */
   fontFamily: string;
   /** Index into `LINE_HEIGHTS`. */
@@ -379,6 +383,7 @@ export const DEFAULT_READER_SETTINGS = {
   speechWashColor: null,
   speechWashColors: [],
   speechPlayerStyle: "full",
+  speechMiniPlayer: true,
 } satisfies Partial<ReaderState>;
 
 export const useReaderSettings = create<ReaderState>()(

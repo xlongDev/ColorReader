@@ -50,6 +50,41 @@ export interface SpeechSource {
 }
 
 /**
+ * The transport a mounted reader lends the shell's player.
+ *
+ * The bar and the card live in the application shell, but the queue, the wash
+ * and the chapter roll-over belong to the reader that is on screen — only it
+ * knows the page's geometry and what "the chapter ended" means. While a reader
+ * is mounted it hands these six calls over; while none is, the player drives
+ * the engine itself and the voice stops at the end of its queue.
+ */
+export interface SpeechTransport {
+  /** Play/pause, or start reading from the page's own position when idle. */
+  toggle: () => void;
+  /** One utterance. */
+  step: (dir: 1 | -1) => void;
+  /** One paragraph: the neighbouring run of units from a different block. */
+  skip: (dir: 1 | -1) => void;
+  /** Jumps the voice to an utterance — a transport step, or the scrubber. */
+  seek: (index: number) => void;
+  /** A rate or a voice the player changed. A voice restarts the utterance the
+   *  voice is inside, which is the only way a committed clip can carry a new
+   *  one; a rate does not, because the engine stretches on its way to the
+   *  speaker and the next utterance simply carries it (see `useReadAloud`). */
+  applySettings: (change: { rate?: number; voice?: string }) => void;
+  /**
+   * Brings the sentence being read back on screen, centred.
+   *
+   * The page follows the voice by itself while the voice moves; this is for the
+   * other direction — the reader came back to a page the voice walked away
+   * from while nobody was looking, and the page has to be told where it went.
+   * Only the reader knows how to scroll its own renderer, so the shell's player
+   * asks here rather than moving anything itself.
+   */
+  reveal: () => void;
+}
+
+/**
  * Lifecycle of a read-aloud session.
  *
  * These two are what every engine reports, not what a unit is, so they live
@@ -58,6 +93,19 @@ export interface SpeechSource {
  * its own output.
  */
 export type SpeechStatus = "idle" | "playing" | "paused";
+
+/**
+ * Which panel the player is showing: the main view, or one of the three
+ * drill-downs behind its tiles.
+ *
+ * Here rather than inside the card because it is not the card's private
+ * business. The floating bar draws the same card in its own window, and a
+ * window has to be resized to whatever is about to be drawn — so the card says
+ * which view it is on, and that name travels to the backend, which is the only
+ * side that can see the frame. One vocabulary end to end: the card's view *is*
+ * the bar's face, and neither side translates the other.
+ */
+export type SpeechView = "main" | "speed" | "voice" | "timer";
 
 /** Where the engine says the voice is inside the current utterance. */
 export interface SpeechBoundary {
@@ -338,9 +386,11 @@ export function unitsFromOffset(
   return kept;
 }
 
-/** Where the voice sits in its queue: characters already spoken and in total. */
+/** Where the voice sits in its queue: characters already spoken and in total.
+ *  Only the text is read, so the shell's player can hand over a plain list of
+ *  strings rather than the units the reader built. */
 export function queuePosition(
-  units: readonly SpeechUnit[],
+  units: readonly { text: string }[],
   index: number | null,
 ): { spoken: number; total: number } {
   let spoken = 0;
@@ -357,11 +407,40 @@ export function queuePosition(
  * characters, since that is the only position Web Speech gives us. A thumb
  * placed by utterance index would sit where the track fill disagrees with it.
  */
-export function unitAtChar(units: readonly SpeechUnit[], chars: number): number {
+export function unitAtChar(units: readonly { text: string }[], chars: number): number {
   let acc = 0;
   for (let i = 0; i < units.length; i++) {
     acc += units[i]!.text.length;
     if (chars < acc) return i;
   }
   return Math.max(units.length - 1, 0);
+}
+
+/** One utterance away from `at`, clamped to the queue — a transport step. */
+export function stepIndex(units: readonly SpeechUnit[], at: number, dir: 1 | -1): number {
+  return Math.max(0, Math.min(at + dir, units.length - 1));
+}
+
+/**
+ * The neighbouring run of units from a different source block — "next
+ * paragraph" / "previous paragraph" — or `-1` when there is none, which the
+ * caller reads as "leave the voice where it is" rather than as a restart.
+ *
+ * Backwards goes to the *start* of the block before this one, the usual
+ * "previous track" behaviour: rewinding to the middle of a paragraph would put
+ * the voice a sentence in for no reason the reader can see.
+ */
+export function paragraphIndex(units: readonly SpeechUnit[], at: number, dir: 1 | -1): number {
+  const source = units[at]?.source;
+  if (source === undefined) return -1;
+  if (dir === 1) {
+    return units.findIndex((unit, index) => index > at && unit.source !== source);
+  }
+  let head = at;
+  while (head > 0 && units[head - 1]!.source === source) head -= 1;
+  if (head === 0) return -1;
+  const previous = units[head - 1]!.source;
+  let target = head - 1;
+  while (target > 0 && units[target - 1]!.source === previous) target -= 1;
+  return target;
 }

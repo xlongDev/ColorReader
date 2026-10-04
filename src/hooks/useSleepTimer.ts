@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import type { SleepChoice, SleepTimer } from "@/features/reader/TtsPlayer";
+/** What the sleep timer will do when it fires. */
+export type SleepTimer =
+  { kind: "minutes"; minutes: number; endsAt: number } | { kind: "chapter" } | null;
+
+/** A sleep-timer choice as the card reports it back. */
+export type SleepChoice = "off" | "chapter" | number;
 
 /**
  * The read-aloud sleep timer.
@@ -20,9 +25,12 @@ import type { SleepChoice, SleepTimer } from "@/features/reader/TtsPlayer";
  * the top of the chapter the moment a timer is armed. So both callbacks below
  * are identity-stable, and the value the caller compares is the ref's.
  *
- * `SleepTimer` / `SleepChoice` stay declared next to the player: they describe
- * that surface (its countdown label and the choice it reports back), and this
- * hook is the thing that acts on them.
+ * `SleepTimer` / `SleepChoice` are declared here rather than beside the card
+ * that draws them, which is where they started. The card is only a view of
+ * this, and the three modules involved are already in each other's import
+ * graph (`TtsHost` -> this hook -> the player -> `TtsHost`); a `import type`
+ * is erased so nothing breaks, but declaring them in the component would close
+ * that loop for real the first time the player is imported for a value.
  */
 export interface SleepTimerControls {
   sleep: SleepTimer;

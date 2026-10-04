@@ -63,8 +63,7 @@ import { washCss, washRule } from "@/features/reader/ttsWash";
 import { RsvpPlayer } from "@/features/reader/RsvpPlayer";
 import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionToolbar";
 import type { AnnotationStyle } from "@/types/ipc";
-import { useTts } from "@/features/reader/tts";
-import { TtsPlayer } from "@/features/reader/TtsPlayer";
+import { useTtsHost } from "@/features/reader/TtsHost";
 import { resolveFont, resolveSurface, readerGlassVars } from "@/features/reader/theme";
 import {
   useAnnotations,
@@ -76,7 +75,7 @@ import {
   useUpdateAnnotation,
 } from "@/hooks/useAnnotations";
 import { useBookmarks, useCreateBookmark, useDeleteBookmark } from "@/hooks/useBookmarks";
-import { useResolvedTheme } from "@/hooks/useTheme";
+import { useReadingSurface } from "@/hooks/useReadingSurface";
 import { useFonts } from "@/hooks/useFonts";
 import { useGamepadPager } from "@/hooks/useGamepadPager";
 import {
@@ -94,14 +93,8 @@ import { usePageCounter } from "@/hooks/usePageCounter";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
 import { useReaderPanels } from "@/hooks/useReaderPanels";
-import { useSleepTimer } from "@/hooks/useSleepTimer";
-import {
-  LINE_HEIGHTS,
-  PARA_GAPS,
-  useReaderSettings,
-  pageIsNight,
-  HIGHLIGHT_COLORS,
-} from "@/stores/reader";
+import { LINE_HEIGHTS, PARA_GAPS, useReaderSettings, HIGHLIGHT_COLORS } from "@/stores/reader";
+import { sessionNow, useSpeechSession } from "@/stores/speech";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import { useChrome } from "@/stores/chrome";
 import { cn } from "@/lib/cn";
@@ -230,7 +223,6 @@ function ReaderView({
     marginX,
     marginY,
     indent,
-    surface: surfaceKey,
     customSurface,
     pageTransition,
     layoutMode,
@@ -250,7 +242,6 @@ function ReaderView({
   const speechGranularity = settings.speechGranularity;
   const speechWashStyle = settings.speechWashStyle;
   const speechWashColor = settings.speechWashColor;
-  const speechPlayerStyle = settings.speechPlayerStyle;
   // The indicator is off, or it counts the unit the layout measured, or it
   // counts the whole book (the tally below, or foliate's own counter). One flag
   // for the two on-modes: the measurement below is what both of them need.
@@ -272,16 +263,18 @@ function ReaderView({
   // Reading time: accumulates while this book is the open one and hands the
   // total to the backend once a minute.
   useReadingClock(bookId);
-  // The engine binding stays here rather than moving into `useReadAloud`: `goTo`
-  // stops the voice on every chapter change, so `stop` has to exist before the
-  // read-aloud layer can be built. The hook is handed the binding instead — see
-  // it for why the dependency cannot run the other way.
-  const tts = useTts({ trackBoundary: speechGranularity === "word" });
+  // The engine binding comes from the shell, not from here: a session has to
+  // outlive the page it started on, or leaving the reader mid-sentence cancels
+  // the voice (see `TtsHost`). `goTo` still stops it on every chapter change —
+  // that is navigation's business, and the binding is shared rather than owned.
+  const { tts, sleep: sleepTimer } = useTtsHost();
   const stop = tts.stop;
 
-  /** The sleep timer and the two ways it changes. It is handed the voice's
-   *  `stop` because stopping is its job and the voice is not its business. */
-  const { sleep, choose: chooseSleep, clearIfChapterEnded } = useSleepTimer(stop);
+  /** The sleep timer's one question this page has to ask: has a chapter-scoped
+   *  timer fired? Arming and stopping live in the shell beside the engine,
+   *  because stopping the voice is the timer's job and the voice lives there —
+   *  and the player that draws the countdown is up there with it. */
+  const { clearIfChapterEnded } = sleepTimer;
 
   const annotations = annotationsQuery.data;
   const bookmarks = bookmarksQuery.data;
@@ -858,7 +851,49 @@ function ReaderView({
   // not statically checkable, and depending on `readAloud` itself would rebuild
   // them on every render — which for the position effect means re-applying the
   // pending scroll, i.e. snapping the page back to the top of the chapter.
-  const { span: speechSpan, playFromStart } = readAloud;
+  const { span: speechSpan, playFromStart, reveal } = readAloud;
+
+  /**
+   * A session left playing belongs to the reader that started it.
+   *
+   * Coming back to the chapter that was being read picks it up — that is the
+   * whole point of the engine outliving this page — but anything else has to end
+   * it: the queue the voice is walking is another chapter's, and the player
+   * behind the bar reads its clocks and its scrubber from what this page
+   * publishes below. Read once, off the store rather than off this render's
+   * subscription, because the publish lands after this effect runs.
+   *
+   * Read *during the first render* rather than inside the effect, because two
+   * things need the same answer — the effect, and the landing this page owes a
+   * voice that got here first — and the second of them is a render-time
+   * decision. By the time the effect runs, this page has already published a
+   * queue of its own.
+   */
+  const [inherited] = useState(sessionNow);
+  const ours =
+    inherited.bookId !== null && inherited.bookId === bookId && inherited.chapterIdx === chapterIdx;
+  /** The paragraph the voice is in, when the voice is the one that decides
+   *  where this page opens. Read by `applyPending`, ahead of the fraction. */
+  const pendingSpeechPara = useRef<number | null>(null);
+  const adopted = useRef(false);
+  useEffect(() => {
+    if (adopted.current) return;
+    adopted.current = true;
+    if (inherited.bookId !== null && !ours) {
+      stop();
+      return;
+    }
+    if (!ours || tts.unit === null || tts.status === "idle") return;
+    // A reader who comes back while the voice is on lands on the voice, not on
+    // wherever the page happened to be left. The prose path can do that exactly:
+    // the unit carries the paragraph it sits in, and `applyPending` centres it
+    // once the body has rendered. A Kindle book cannot — its blocks belong to
+    // the section, and only the view can collect them — so the section is asked
+    // to bring the unit into view, which is the same call「回到阅读」makes. A PDF
+    // or a CBZ needs neither: its chapter *is* the page the voice is on.
+    if (useFoliate) reveal();
+    else if (!chapterIsPage) pendingSpeechPara.current = inherited.units[tts.unit]?.source ?? null;
+  }, [stop, inherited, ours, tts.unit, tts.status, useFoliate, chapterIsPage, reveal]);
 
   // Set when the voice rolls off the end of a chapter, consumed by the
   // position effect below once the next chapter has rendered.
@@ -872,12 +907,26 @@ function ReaderView({
       }
       const focus = pendingFocus.current;
       pendingFocus.current = null;
+      // The voice's landing, when this page was opened by a session that was
+      // already running (see the adoption effect): a paragraph of the chapter
+      // on screen, centred. An index the chapter does not have is ignored
+      // rather than obeyed — it can be answered off a list that has since
+      // changed — and the fraction below has it, as it always did.
+      const speechPara = pendingSpeechPara.current;
+      pendingSpeechPara.current = null;
       const frac = pendingScroll.current;
       pendingScroll.current = 0;
       const paragraphs = chapterData?.paragraphs ?? [];
       const continueSpeech = autoAdvance.current;
       autoAdvance.current = false;
       if (continueSpeech) playFromStart();
+      if (speechPara !== null) {
+        const node = el.querySelector(`[data-para-idx="${speechPara}"]`);
+        if (node) {
+          node.scrollIntoView({ block: "center" });
+          return;
+        }
+      }
       if (focus !== null) {
         const target = paragraphAt(paragraphs, focus);
         el.querySelector(`[data-para-idx="${target}"]`)?.scrollIntoView({ block: "center" });
@@ -1577,14 +1626,10 @@ function ReaderView({
   const total = chapters.length;
   const chapterTitle = chapterData?.title ?? "";
   // Each appearance keeps its own reading surface: a dark shell starts on the
-  // night palette, and both stay user-changeable in the settings panel.
-  const appTheme = useResolvedTheme();
-  const surface = resolveSurface(
-    // The page palette is the reader's own choice now, not the app theme's:
-    // see `pageTheme` in the reader store. `follow` keeps the old coupling.
-    pageIsNight(settings.pageTheme, appTheme === "dark") ? settings.nightSurface : surfaceKey,
-    customSurface,
-  );
+  // night palette, and both stay user-changeable in the settings panel. Shared
+  // with the shell's read-aloud chrome, which floats on this same paper — see
+  // `useReadingSurface`.
+  const surface = useReadingSurface();
   // Re-root the glass token set on the reading surface: the header, footer and
   // every glass control inside the reader tint themselves from the same ink
   // and paper colours, so a sepia page reads warm edge to edge instead of
@@ -1863,6 +1908,15 @@ function ReaderView({
   const headerTotal = hasToc ? foliateToc.length : total;
   const headerChapter = hasToc ? foliateSectionLabel : chapterTitle;
 
+  // What the shell's player reads: which book, which chapter, under what cover.
+  // Published rather than looked up, because the player has no book of its own —
+  // it draws the same bar on 书架 and 设置, and only this page knows any of it.
+  // The queue itself is published by `useReadAloud`, which is what builds it.
+  const publishSession = useSpeechSession((state) => state.publish);
+  useEffect(() => {
+    publishSession({ bookId, title, coverUrl, chapter: headerChapter, chapterIdx, bookLanguage });
+  }, [publishSession, bookId, title, coverUrl, headerChapter, chapterIdx, bookLanguage]);
+
   // The toolbar's edit mode: when the reader tapped a painted highlight,
   // `pending` carries its id — resolve it to the whole annotation so the ink
   // row can show (and change) what it is painted with.
@@ -1924,11 +1978,15 @@ function ReaderView({
     />
   );
 
+  // The player card is the shell's now; the footer only opens and closes it.
+  const speechOpen = useSpeechSession((state) => state.open);
+  const setSpeechOpen = useSpeechSession((state) => state.setOpen);
+
   const footerInner = (
     <ReaderFooterControls
       speechStatus={readAloud.status}
       onToggleSpeech={readAloud.toggle}
-      onTogglePlayer={() => readAloud.setPlayerOpen((open) => !open)}
+      onTogglePlayer={() => setSpeechOpen(!speechOpen, "speed")}
       speechRate={speechRate}
       paged={paged}
       autoScrolling={autoScrollOn}
@@ -2199,39 +2257,10 @@ function ReaderView({
           </>
         )}
 
-        {/* Read-aloud: the pill while a session runs, the card on demand.
-            Anchored inside the reading viewport rather than the window, so it
-            clears the footer in the windowed chrome and still lands near the
-            bottom edge in fullscreen. Neither takes a modal: the page stays
-            readable under it, which is the point of reading along. */}
-        <TtsPlayer
-          open={readAloud.playerOpen}
-          onOpenChange={readAloud.setPlayerOpen}
-          title={title}
-          coverUrl={coverUrl}
-          chapter={headerChapter}
-          playerStyle={speechPlayerStyle}
-          units={readAloud.units}
-          index={readAloud.unit}
-          status={readAloud.status}
-          error={readAloud.error}
-          loading={readAloud.loading}
-          rate={speechRate}
-          onRate={(value) => readAloud.applySettings({ rate: value })}
-          voiceUri={readAloud.voiceUri}
-          onVoice={(uri) => readAloud.applySettings({ voice: uri })}
-          bookLanguage={bookLanguage}
-          sleep={sleep}
-          onSleep={chooseSleep}
-          onToggle={readAloud.toggle}
-          onStop={readAloud.stop}
-          onStep={readAloud.step}
-          onSkip={readAloud.skip}
-          onSeek={readAloud.seek}
-        />
-
         {/* Speed reading: takes the whole reading area while it runs, and
-            hands it back on close — the page is the same page underneath. */}
+            hands it back on close — the page is the same page underneath.
+            Read-aloud's own bar and card are not here: they belong to the shell
+            (`AppShell`), so that a session survives leaving this page. */}
         {readAloud.rsvpOpen && (
           <RsvpPlayer
             onClose={readAloud.closeRsvp}

@@ -363,8 +363,16 @@ export function ReaderChapterView({
                 segment.tts ? (
                   // The reading voice's own run. Same ink as a saved
                   // mark — one wash, both reading paths — and the same ink on
-                  // every format, whichever shape the reader picked.
-                  <mark key={segment.key} className="text-inherit" style={prose.ttsWash}>
+                  // every format, whichever shape the reader picked. The
+                  // attribute is what tells this mark from a highlight's: they
+                  // share the tag and the class, and a test that has to find
+                  // where the voice is cannot go by either.
+                  <mark
+                    key={segment.key}
+                    data-tts-wash
+                    className="text-inherit"
+                    style={prose.ttsWash}
+                  >
                     {segment.text}
                   </mark>
                 ) : segment.highlighted ? (

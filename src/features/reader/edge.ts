@@ -18,6 +18,12 @@
  * against a word-level highlight. It also sidesteps a media element's autoplay
  * policy, since the first network round trip necessarily happens *after* the
  * click that started it.
+ *
+ * The reader's speed does not reach the service. Every utterance is synthesised
+ * once, at rate 1.0, and stretched to the rate in force as it is scheduled (see
+ * `timeStretch`) — which is why changing the speed costs nothing but arithmetic
+ * on samples already decoded. The word timings the service reports therefore
+ * live in rate-1.0 time, and are read back through `rate` at playout.
  */
 
 import { useEffect, useSyncExternalStore } from "react";
@@ -25,6 +31,7 @@ import { useEffect, useSyncExternalStore } from "react";
 import { ipc } from "@/lib/ipc";
 
 import { wordCues, type WordCue } from "./speech";
+import { timeStretch } from "./timeStretch";
 import { edgeVoiceId, edgeVoices, type Voice } from "./voice";
 import type { SpeechBoundary, SpeechStatus } from "./tts";
 
@@ -97,8 +104,13 @@ function messageOf(error: unknown): string {
 /* The engine                                                                 */
 /* -------------------------------------------------------------------------- */
 
-/** Where the voice is inside one utterance. */
+/** Where the voice is inside one utterance.
+ *
+ *  Both halves are rate-1.0: the service never sees the reader's speed, so a
+ *  clip stays valid across any number of speed changes and the timings it
+ *  carries are read back through the rate in force at playout. */
 interface Ready {
+  /** Decoded, unstretched. Stretched copies are made per playout. */
   buffer: AudioBuffer;
   cues: WordCue[];
   /** Characters of the utterance as synthesised (after any head trim). The
@@ -174,8 +186,10 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
   let source: AudioBufferSourceNode | null = null;
   let frame = 0;
   let generation = 0;
-  /** Bumped whenever the voice or the rate changes, so clips synthesised under
-   *  the old settings are discarded instead of played back wrong. */
+  /** Bumped when the voice changes, so clips synthesised under the old one are
+   *  discarded instead of played back wrong. The rate is deliberately not in
+   *  this: nothing is synthesised with a rate, so a speed change has nothing to
+   *  invalidate. */
   let settings = 0;
 
   let texts: readonly string[] = [];
@@ -224,7 +238,8 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
     if (text.trim() === "") return;
     const mine = settings;
     try {
-      const clip = await ipc.ttsEdgeSpeak(text, voice, rate);
+      // No rate: one clip, every speed. See the module note and `timeStretch`.
+      const clip = await ipc.ttsEdgeSpeak(text, voice);
       if (generation !== current || mine !== settings) return;
       const buffer = await audio().decodeAudioData(bytesOf(clip.audio));
       if (generation !== current || mine !== settings) return;
@@ -270,8 +285,12 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
    *
    *  The loop runs for every clip, not only while words are being washed: the
    *  listener decides what to publish, and a reader who turns the word-level
-   *  wash on mid-clip needs the position this has been tracking all along. */
-  function follow(index: number, cues: readonly WordCue[], current: number): void {
+   *  wash on mid-clip needs the position this has been tracking all along.
+   *
+   *  `tempo` is the rate this clip was stretched by. The service timed the words
+   *  against rate-1.0 audio, so a clip playing `tempo` times faster is `tempo`
+   *  times further into that timeline than the wall clock says. */
+  function follow(index: number, cues: readonly WordCue[], current: number, tempo: number): void {
     cancelAnimationFrame(frame);
     if (cues.length === 0) return;
     let last = -1;
@@ -279,7 +298,7 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
       if (generation !== current) return;
       const ctx = context;
       if (!ctx || source === null) return;
-      const at = ctx.currentTime - startedAt;
+      const at = (ctx.currentTime - startedAt) * tempo;
       let hit = -1;
       for (let position = 0; position < cues.length; position += 1) {
         const cue = cues[position];
@@ -309,6 +328,27 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
     finish?.();
   }
 
+  /** The clip's channels, time-stretched to the rate in force.
+   *
+   *  One buffer per playout rather than one per clip: the same rate-1.0 decode
+   *  has to be reusable at any speed, and this is the only part of the pipeline
+   *  that depends on the rate at all. See `timeStretch` for why a stretch and
+   *  not `playbackRate`. */
+  function stretched(clip: Ready, tempo: number): AudioBuffer {
+    if (tempo === 1) return clip.buffer;
+    const channels: Float32Array<ArrayBuffer>[] = [];
+    for (let c = 0; c < clip.buffer.numberOfChannels; c += 1) {
+      channels.push(timeStretch(clip.buffer.getChannelData(c), clip.buffer.sampleRate, tempo));
+    }
+    const out = audio().createBuffer(
+      clip.buffer.numberOfChannels,
+      Math.max(...channels.map((channel) => channel.length)),
+      clip.buffer.sampleRate,
+    );
+    channels.forEach((channel, c) => out.copyToChannel(channel, c));
+    return out;
+  }
+
   async function start(index: number, current: number): Promise<void> {
     events.loading(true);
     const clip = await ensure(index, current);
@@ -321,8 +361,12 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
     const ctx = audio();
     await live(ctx);
     if (generation !== current) return;
+    // Read once and carried through the rest of this clip: a rate changed while
+    // it is speaking must not rescale the words already scheduled at the old
+    // one. It lands on the next utterance instead.
+    const tempo = rate;
     source = ctx.createBufferSource();
-    source.buffer = clip.buffer;
+    source.buffer = stretched(clip, tempo);
     source.connect(ctx.destination);
     source.addEventListener("ended", () => {
       if (generation !== current) return;
@@ -340,7 +384,7 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
     startedAt = ctx.currentTime;
     source.start();
     warm(index, current);
-    follow(index, clip.cues, current);
+    follow(index, clip.cues, current, tempo);
   }
 
   function play(units: readonly string[], from: number, options: PlayOptions): void {
@@ -373,13 +417,15 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
     events.status("playing");
   }
 
-  /** Settings apply from the next utterance: the clip being spoken was already
-   *  synthesised with the old ones, and the platform engine behaves the same
-   *  way, so the reader learns one rule for both.
+  /** A new voice applies from the next utterance: the clip being spoken was
+   *  already synthesised with the old one, and the platform engine behaves the
+   *  same way, so the reader learns one rule for both.
    *
    *  Both caches are dropped, and the in-flight ones with them: a request still
-   *  on the wire under the old settings must not be the thing the next
-   *  `ensure` waits for, or a rate change would look like the book ending. */
+   *  on the wire under the old voice must not be the thing the next `ensure`
+   *  waits for, or a voice change would look like the book ending.
+   *
+   *  The rate is not in this — see `setRate`. */
   function reconfigure(): void {
     settings += 1;
     ready.clear();
@@ -393,8 +439,12 @@ export function createEdgeEngine(events: EdgeEvents): EdgeEngine {
     resume,
     setRate(value) {
       if (value === rate) return;
+      // Nothing to invalidate, and that is the point of it: the clip being
+      // spoken and the two already decoded are rate-1.0 audio, stretched on
+      // their way to the speaker, so the next utterance picks the rate up
+      // without a request in flight — no load, no gap, and a cached sentence
+      // stays a cached sentence however many times the speed is changed.
       rate = value;
-      reconfigure();
     },
     setVoice(uri) {
       if (uri === null) return;

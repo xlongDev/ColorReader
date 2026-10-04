@@ -1,10 +1,11 @@
 import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { FoliateHandle } from "@/features/reader/FoliateBookView";
 import type { SpeechUnit } from "@/features/reader/speech";
 import type { Tts } from "@/features/reader/tts";
 import { useReadAloud, type ReadAloudOptions } from "@/hooks/useReadAloud";
+import { useSpeechSession } from "@/stores/speech";
 
 /**
  * The voice list is the one thing here that reaches outside the hook — it
@@ -58,6 +59,22 @@ function fakeHandle(overrides: Partial<Record<string, unknown>> = {}): FoliateHa
   } as unknown as FoliateHandle;
 }
 
+/**
+ * `reveal` moves the page with `Element.scrollIntoView`, which jsdom does not
+ * implement at all. The stub doubles as the assertion surface: which node the
+ * reader was sent to, and how it was asked to sit there.
+ */
+const scrollCalls: { node: Element; options?: ScrollIntoViewOptions }[] = [];
+
+beforeAll(() => {
+  Element.prototype.scrollIntoView = function (this: Element, options?: boolean | object) {
+    scrollCalls.push({
+      node: this,
+      options: typeof options === "object" ? (options as ScrollIntoViewOptions) : undefined,
+    });
+  };
+});
+
 function setup(overrides: Partial<ReadAloudOptions> = {}) {
   const tts = overrides.tts ?? fakeTts();
   const options: ReadAloudOptions = {
@@ -81,6 +98,92 @@ function setup(overrides: Partial<ReadAloudOptions> = {}) {
 }
 
 describe("useReadAloud", () => {
+  // The session is module state and outlives a single render, which is the
+  // point of it — but not across tests, where a leftover queue would answer the
+  // next case before it publishes one of its own.
+  beforeEach(() => {
+    useSpeechSession.setState({ units: [], controls: null });
+    scrollCalls.length = 0;
+  });
+
+  /**
+   * The one direction the follow effect does not cover: the page went away
+   * while the voice walked on, and has to be told where it went. `reveal` is
+   * what the shell's player asks across the transport in that case.
+   */
+  it("brings the paragraph being read back into the middle of the page", () => {
+    const scroller = document.createElement("div");
+    for (const index of [0, 1]) {
+      const paragraph = document.createElement("p");
+      paragraph.dataset.paraIdx = String(index);
+      scroller.append(paragraph);
+    }
+    const { result } = setup({
+      scrollRef: { current: scroller },
+      tts: fakeTts({ status: "playing", unit: 2 }),
+    });
+    // Mounting scrolls too — the voice is already on, so the follow effect
+    // nudges the paragraph into view. That is the other direction, and it is
+    // not what this is about.
+    scrollCalls.length = 0;
+
+    act(() => result.current.reveal());
+
+    // 第三句。 is the second paragraph, and it is centred — a jump back to a
+    // place, not the follow effect's nudge that only moves at the edge.
+    expect(scrollCalls).toHaveLength(1);
+    expect(scrollCalls[0]!.node).toBe(scroller.children[1]);
+    expect(scrollCalls[0]!.options).toEqual({ block: "center" });
+  });
+
+  it("has nothing to bring into view before the voice has started", () => {
+    const scroller = document.createElement("div");
+    const { result } = setup({ scrollRef: { current: scroller } });
+
+    act(() => result.current.reveal());
+
+    expect(scrollCalls).toHaveLength(0);
+  });
+
+  /**
+   * The case the published copy of the queue exists for: this page mounted
+   * *after* the voice started, so the section's blocks — which `focusUnit`
+   * resolves the unit's block through — were never collected here, and the
+   * queue being walked belongs to a page that is gone.
+   */
+  it("re-collects a Kindle section's blocks before going back to the unit", async () => {
+    const units: SpeechUnit[] = [
+      { text: "A", source: 0, start: 0, end: 1 },
+      { text: "B", source: 1, start: 0, end: 1 },
+    ];
+    const focusUnit = vi.fn();
+    const readFrom = vi.fn(() => Promise.resolve(units));
+    useSpeechSession.setState({ units });
+    const { result } = setup({
+      useFoliate: true,
+      foliateRef: { current: fakeHandle({ readFrom, focusUnit }) },
+      tts: fakeTts({ status: "playing", unit: 1 }),
+    });
+
+    await act(async () => result.current.reveal());
+
+    expect(readFrom).toHaveBeenCalledTimes(1);
+    // `source` is the section's block index, which is what survives the trip
+    // through the store — the offsets come from the same block either way.
+    expect(focusUnit).toHaveBeenCalledWith(units[1], { start: 0, end: 1 });
+  });
+
+  it("keeps the published queue when a fresh page has none of its own", () => {
+    const units: SpeechUnit[] = [{ text: "A", source: 0, start: 0, end: 1 }];
+    useSpeechSession.setState({ units });
+
+    setup({ useFoliate: true, foliateRef: { current: fakeHandle() } });
+
+    // The Kindle page publishes nothing until it has collected its blocks;
+    // overwriting here would blank the clock the bar is drawing from.
+    expect(useSpeechSession.getState().units).toEqual(units);
+  });
+
   it("starts the chapter from the top when nothing is on screen", () => {
     const { result, tts, options } = setup();
 
@@ -103,21 +206,39 @@ describe("useReadAloud", () => {
     expect(paused.tts.play).not.toHaveBeenCalled();
   });
 
-  /**
-   * Both engines commit the clip they are speaking, so a rate or a voice can
-   * only reach the reader on a fresh utterance. While the voice is on hold the
-   * restart is deferred to the resume instead — restarting now would speak at
-   * the new setting to nobody.
-   */
-  it("defers a settings change made while the voice is on hold", () => {
+  /** A rate costs nothing and buys nothing from a restart: the engine stretches
+   *  on its way to the speaker, so the next utterance simply carries it — while
+   *  a restart would drop every clip already decoded, which is the stall this
+   *  whole design exists to remove. */
+  it("hands a new rate to the engine and waits for the next utterance", () => {
     const { result, tts, options } = setup({
-      tts: fakeTts({ status: "paused", unit: 1 }),
+      tts: fakeTts({ status: "playing", unit: 1 }),
     });
 
     act(() => result.current.applySettings({ rate: 1.5 }));
 
     expect(options.updateSettings).toHaveBeenCalledWith({ speechRate: 1.5 });
     expect(tts.setRate).toHaveBeenCalledWith(1.5);
+    expect(tts.play).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A voice does need a fresh utterance: both engines commit the clip they are
+   * speaking. While the voice is on hold the restart is deferred to the resume
+   * instead — restarting now would speak in the new voice to nobody.
+   */
+  it("defers a settings change made while the voice is on hold", () => {
+    const { result, tts, options } = setup({
+      tts: fakeTts({ status: "paused", unit: 1 }),
+      storedVoice: "edge:zh-CN-YunjianNeural",
+    });
+
+    act(() => result.current.applySettings({ voice: "edge:zh-CN-XiaoxiaoNeural" }));
+
+    expect(options.updateSettings).toHaveBeenCalledWith({
+      speechVoiceURI: "edge:zh-CN-XiaoxiaoNeural",
+    });
+    expect(tts.setVoice).toHaveBeenCalledWith("edge:zh-CN-XiaoxiaoNeural");
     expect(tts.play).not.toHaveBeenCalled();
 
     act(() => result.current.toggle());
@@ -132,9 +253,10 @@ describe("useReadAloud", () => {
     const boundaryAt = vi.fn(() => ({ unit: 1, charIndex: 3, charLength: 2 }));
     const { result, tts, options } = setup({
       tts: fakeTts({ status: "playing", unit: 1, boundaryAt }),
+      storedVoice: "edge:zh-CN-YunjianNeural",
     });
 
-    act(() => result.current.applySettings({ rate: 2 }));
+    act(() => result.current.applySettings({ voice: "edge:zh-CN-XiaoxiaoNeural" }));
 
     expect(tts.play).toHaveBeenCalledWith(QUEUE, 1, options.onChapterEnd, 3);
   });
@@ -250,15 +372,32 @@ describe("useReadAloud", () => {
   });
 
   it("keeps the engine in step with the stored rate and the resolved voice", () => {
-    const { result, tts } = setup({ rate: 1.25 });
+    const { tts } = setup({ rate: 1.25 });
 
     expect(tts.setRate).toHaveBeenCalledWith(1.25);
     // No stored voice and no catalogue to resolve one from: `null` is "the
     // engine's own default", not a missing value.
     expect(tts.setVoice).toHaveBeenCalledWith(null);
+  });
 
-    act(() => result.current.setPlayerOpen(true));
-    expect(result.current.playerOpen).toBe(true);
+  it("lends its transport to the shell's player, and takes it back on the way out", () => {
+    const { tts, options, unmount } = setup({ tts: fakeTts({ status: "playing", unit: 1 }) });
+
+    // What the bar and the card drive: they live above the routes, so the only
+    // way they can reach this reader is through the store.
+    expect(useSpeechSession.getState().units.map((unit) => unit.text)).toEqual(QUEUE);
+    const controls = useSpeechSession.getState().controls;
+    expect(controls).not.toBeNull();
+
+    // One utterance along — and through the wrapper, which has to reach *this*
+    // render's closure rather than the one it happened to be published with.
+    act(() => controls!.step(1));
+    expect(tts.play).toHaveBeenCalledWith(QUEUE, 2, options.onChapterEnd);
+
+    // Gone means "the voice plays on alone": the player behind the bar still
+    // drives the engine, it just cannot roll into the next chapter.
+    unmount();
+    expect(useSpeechSession.getState().controls).toBeNull();
   });
 
   it("cuts the speed-reading tokens only while the overlay is open", () => {

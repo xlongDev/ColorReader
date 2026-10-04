@@ -4,10 +4,12 @@ import { segmentText } from "./selection";
 import {
   cursorAt,
   formatClock,
+  paragraphIndex,
   pdfWashNeedle,
   queuePosition,
   speechSeconds,
   speechUnits,
+  stepIndex,
   unitAtChar,
   unitsFromOffset,
   washSpan,
@@ -329,5 +331,58 @@ describe("wordCues", () => {
 
   it("has nothing to map when the engine timed nothing", () => {
     expect(wordCues("中文", [])).toEqual([]);
+  });
+});
+
+/**
+ * The two transport jumps, shared by the reader's footer and the shell's bar.
+ * The bar walks the same queue with no reader behind it, so the maths has to
+ * live where neither of them owns it.
+ */
+describe("stepIndex", () => {
+  const units: SpeechUnit[] = ["A", "B", "C"].map((text, at) => ({
+    text,
+    source: at,
+    start: 0,
+    end: 1,
+  }));
+
+  it("walks one utterance", () => {
+    expect(stepIndex(units, 1, 1)).toBe(2);
+    expect(stepIndex(units, 2, -1)).toBe(1);
+  });
+
+  it("clamps at both ends rather than answering an index outside the queue", () => {
+    expect(stepIndex(units, 2, 1)).toBe(2);
+    expect(stepIndex(units, 0, -1)).toBe(0);
+  });
+});
+
+describe("paragraphIndex", () => {
+  // Two blocks: three sentences, then one. The queue is cut per sentence, so the
+  // block a unit came from is the only thing that says where a paragraph ends.
+  const units: SpeechUnit[] = [
+    { text: "A", source: 0, start: 0, end: 1 },
+    { text: "B", source: 0, start: 1, end: 2 },
+    { text: "C", source: 0, start: 2, end: 3 },
+    { text: "D", source: 1, start: 0, end: 1 },
+  ];
+
+  it("goes on to the start of the next block", () => {
+    expect(paragraphIndex(units, 1, 1)).toBe(3);
+  });
+
+  it("rewinds to the start of the block before this one", () => {
+    expect(paragraphIndex(units, 3, -1)).toBe(0);
+  });
+
+  it("answers -1 when there is no such block, which reads as 'leave the voice'", () => {
+    expect(paragraphIndex(units, 3, 1)).toBe(-1);
+    expect(paragraphIndex(units, 1, -1)).toBe(-1);
+  });
+
+  it("has no answer for an empty queue or an index outside it", () => {
+    expect(paragraphIndex([], 0, 1)).toBe(-1);
+    expect(paragraphIndex(units, 9, 1)).toBe(-1);
   });
 });

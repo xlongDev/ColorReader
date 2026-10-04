@@ -3,6 +3,7 @@ import { CaretDown, ImageSquare, Plus, X } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 
 import { cn } from "@/lib/cn";
+import { GlassSwitch } from "@/components/glass/input";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import {
   DEFAULT_AUTO_SCROLL_SPEED,
@@ -621,6 +622,22 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
             value={settings.speechPlayerStyle}
             onChange={(key) => update({ speechPlayerStyle: key })}
           />
+        </Group>
+
+        {/* The bar is a second, always-on-top window, so it is the one setting
+            in here worth a sentence: what it does is not visible until the
+            reader puts the app away while listening. */}
+        <Group label="悬浮播放条">
+          <div className="flex w-full items-start gap-3">
+            <p className="text-text-3 min-w-0 flex-1 text-[12px] leading-relaxed">
+              最小化或关闭主窗口后，正在朗读时会在桌面底部浮出一条播放条，可以直接控制播放。
+            </p>
+            <GlassSwitch
+              checked={settings.speechMiniPlayer}
+              onCheckedChange={(next) => update({ speechMiniPlayer: next })}
+              ariaLabel="悬浮播放条"
+            />
+          </div>
         </Group>
 
         <Group label="自动滚动速度">

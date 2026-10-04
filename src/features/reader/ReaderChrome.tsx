@@ -335,8 +335,20 @@ export function ReaderFooterControls({
           {speechStatus === "playing" ? <Pause size={16} /> : <SpeakerHigh size={16} />}
         </IconSwap>
       </GlassIconButton>
-      <GlassIconButton label="朗读播放器" size="sm" className={CHROME_BTN} onClick={onTogglePlayer}>
-        <span className="text-[11px] font-semibold tabular-nums">{speechRate}×</span>
+      {/* The rate, and a shortcut past the card's tiles: the button says 1× and
+          opens 语速, which is where a reader who pressed it is going. Opening the
+          card on its transport view instead would be one tap more for the same
+          answer, and the tiles it skips are the card's own table of contents.
+
+          9px, and not out of timidity: the box is 32px with no padding, and the
+          longest rate in the reader's range is `1.75×` — five characters. At 11px
+          that measured **33px against a 32px button**, so the text was wider than
+          the circle holding it. 9px puts it at 27px, which is the same fraction
+          the shortest label (`0.5×`) occupied at 11px, so every rate in the range
+          now breathes the same. `tabular-nums` stays: the label changes under the
+          reader's finger and must not jitter. */}
+      <GlassIconButton label="倍速" size="sm" className={CHROME_BTN} onClick={onTogglePlayer}>
+        <span className="text-[9px] font-semibold tabular-nums">{speechRate}×</span>
       </GlassIconButton>
       {/* Speed reading, third next to listening and scrolling: it is the same
           job — taking in the chapter without moving your hands — done by the

@@ -15,8 +15,11 @@ pub async fn tts_edge_voices() -> AppResult<Vec<EdgeVoice>> {
 }
 
 /// `tts.edgeSpeak` — one utterance, with its word timings.
+///
+/// No rate: the clip comes back at the service's own pace and the renderer
+/// stretches it to the reader's speed, so one clip answers for every speed.
 #[tauri::command]
 #[specta::specta]
-pub async fn tts_edge_speak(text: String, voice: String, rate: f64) -> AppResult<EdgeClip> {
-    tts::speak(&text, &voice, rate).await
+pub async fn tts_edge_speak(text: String, voice: String) -> AppResult<EdgeClip> {
+    tts::speak(&text, &voice).await
 }

@@ -197,6 +197,16 @@ body {
   overflow: hidden;
 }
 
+/* The floating read-aloud bar is the same document in a transparent window, so
+   nothing in it may paint a surface: the frame is already gone, and the body's
+   own background would fill the rectangle around the capsule. Unlayered on
+   purpose — inside `@layer base` it would lose to the `body` rule above, which
+   is unlayered, and this rule has to beat it. See `main.tsx` for the class. */
+html.mini-bar,
+html.mini-bar body {
+  background: transparent;
+}
+
 ::selection {
   background: var(--accent-soft);
   color: var(--text-1);

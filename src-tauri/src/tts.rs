@@ -253,7 +253,16 @@ fn display_name(short_name: &str, locale: &str) -> String {
 }
 
 /// Reads one utterance.
-pub async fn speak(text: &str, voice: &str, rate: f64) -> AppResult<EdgeClip> {
+///
+/// There is no rate here, and that is the whole design: every clip comes back at
+/// the service's own pace and the reader's speed is applied to the samples as
+/// they are scheduled (see `features/reader/timeStretch`). Sending it would make
+/// every clip a function of the speed it was asked for, so one speed change
+/// would throw away everything already synthesised and refetch it — which is the
+/// stall this avoids. It also keeps the clip's word timings honest: they are
+/// measured against rate-1.0 audio, and one timeline is what the highlight
+/// reads.
+pub async fn speak(text: &str, voice: &str) -> AppResult<EdgeClip> {
     let text = text.trim();
     if text.is_empty() {
         return Err(AppError::InvalidArgument("没有可朗读的文本".into()));
@@ -264,16 +273,15 @@ pub async fn speak(text: &str, voice: &str, rate: f64) -> AppResult<EdgeClip> {
         )));
     }
     check_voice(voice)?;
-    let rate = rate.clamp(0.5, 2.0);
 
-    let run = tokio::time::timeout(SPEAK_TIMEOUT, attempt(text, voice, rate));
+    let run = tokio::time::timeout(SPEAK_TIMEOUT, attempt(text, voice));
     match run.await {
         Ok(Ok(clip)) => Ok(clip),
         // One correction, then give up: a second rejection is not a clock.
         Ok(Err(Attempt::Clock(server))) => {
             CLOCK_SKEW.store(server - local_seconds(), Ordering::Relaxed);
             tracing::info!(skew = server - local_seconds(), "corrected clock for Edge TTS");
-            match tokio::time::timeout(SPEAK_TIMEOUT, attempt(text, voice, rate)).await {
+            match tokio::time::timeout(SPEAK_TIMEOUT, attempt(text, voice)).await {
                 Ok(result) => result.map_err(|failure| match failure {
                     Attempt::Failed(err) => err,
                     Attempt::Clock(_) => refused_error(),
@@ -322,22 +330,19 @@ fn unescape(text: &str) -> String {
         .replace("&amp;", "&")
 }
 
-/// The UI's multiplier as the `rate` attribute. The reader's range (0.5–2×)
-/// maps exactly onto ±100%, and the service does the time-stretching itself, so
-/// the audio is never pitch-shifted the way `playbackRate` would shift it.
-pub fn prosody_rate(rate: f64) -> String {
-    let percent = ((rate.clamp(0.5, 2.0) - 1.0) * 100.0).round() as i32;
-    format!("{percent:+}%")
-}
-
 /// The SSML for one utterance, with the reader's own locale on the `voice`.
-fn ssml(text: &str, voice: &str, rate: f64) -> String {
+///
+/// No `rate` attribute. The service used to be asked to time-stretch, which was
+/// the right call while the only alternative was `playbackRate` and its pitch
+/// shift — but it tied every clip to the speed it was requested at. The renderer
+/// stretches now (see `timeStretch`), so what the service returns is the one
+/// canonical reading of the sentence, cacheable for any speed.
+fn ssml(text: &str, voice: &str) -> String {
     let locale = voice.split('-').take(2).collect::<Vec<_>>().join("-");
     format!(
         "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='{locale}'>\
-         <voice name='{voice}'><prosody pitch='+0Hz' rate='{}' volume='+0%'>{}</prosody></voice>\
+         <voice name='{voice}'><prosody pitch='+0Hz' volume='+0%'>{}</prosody></voice>\
          </speak>",
-        prosody_rate(rate),
         escape(text)
     )
 }
@@ -367,12 +372,12 @@ fn speech_config() -> String {
 
 /// The `ssml` frame. The trailing `Z` on `X-Timestamp` is on this request only;
 /// it is not a typo here, it is what the service's own client sends.
-fn ssml_frame(text: &str, voice: &str, rate: f64) -> String {
+fn ssml_frame(text: &str, voice: &str) -> String {
     format!(
         "X-RequestId:{}\r\nContent-Type:application/ssml+xml\r\nX-Timestamp:{}Z\r\nPath:ssml\r\n\r\n{}",
         uuid::Uuid::new_v4().simple(),
         timestamp(),
-        ssml(text, voice, rate)
+        ssml(text, voice)
     )
 }
 
@@ -533,7 +538,7 @@ fn handshake_request() -> Result<WsRequest, Attempt> {
 }
 
 /// One handshake, one request, one clip.
-async fn attempt(text: &str, voice: &str, rate: f64) -> Result<EdgeClip, Attempt> {
+async fn attempt(text: &str, voice: &str) -> Result<EdgeClip, Attempt> {
     let mut socket = connect().await?;
 
     socket
@@ -541,7 +546,7 @@ async fn attempt(text: &str, voice: &str, rate: f64) -> Result<EdgeClip, Attempt
         .await
         .map_err(|err| Attempt::Failed(socket_error(err)))?;
     socket
-        .send(Message::text(ssml_frame(text, voice, rate)))
+        .send(Message::text(ssml_frame(text, voice)))
         .await
         .map_err(|err| Attempt::Failed(socket_error(err)))?;
 
@@ -646,22 +651,14 @@ mod tests {
     }
 
     #[test]
-    fn the_rate_attribute_spans_the_readers_whole_range() {
-        assert_eq!(prosody_rate(0.5), "-50%");
-        assert_eq!(prosody_rate(1.0), "+0%");
-        assert_eq!(prosody_rate(1.5), "+50%");
-        assert_eq!(prosody_rate(2.0), "+100%");
-        // Out of range clamps rather than sending something the service rejects.
-        assert_eq!(prosody_rate(9.0), "+100%");
-        assert_eq!(prosody_rate(0.1), "-50%");
-    }
-
-    #[test]
     fn book_text_cannot_break_out_of_the_ssml() {
-        let markup = ssml("Tom & <Jerry>", "zh-CN-YunjianNeural", 1.0);
+        let markup = ssml("Tom & <Jerry>", "zh-CN-YunjianNeural");
         assert!(markup.contains("Tom &amp; &lt;Jerry&gt;"), "{markup}");
         assert_eq!(markup.matches("<voice").count(), 1);
         assert!(markup.starts_with("<speak version='1.0'"));
+        // The reader's speed is applied to the samples, so the markup must not
+        // carry one: a clip has to be the same clip at every speed.
+        assert!(!markup.contains("rate="), "{markup}");
     }
 
     #[test]
@@ -760,7 +757,6 @@ mod tests {
         let clip = tauri::async_runtime::block_on(speak(
             "你好，这是 ColorReader 的语音引擎测试。",
             "zh-CN-YunjianNeural",
-            1.0,
         ))
         .expect("clip");
         assert!(clip.audio.len() > 1_000, "音频太短：{}", clip.audio.len());
@@ -772,20 +768,5 @@ mod tests {
         );
         let first = &clip.words[0];
         assert!(first.at < 0.5, "第一个词不该在 {}s 之后", first.at);
-    }
-
-    #[test]
-    #[ignore = "hits the live Edge service"]
-    fn an_out_of_range_rate_is_still_accepted() {
-        let fast = tauri::async_runtime::block_on(speak("测试。", "zh-CN-YunjianNeural", 2.0))
-            .expect("2x clip");
-        let slow = tauri::async_runtime::block_on(speak("测试。", "zh-CN-YunjianNeural", 0.5))
-            .expect("0.5x clip");
-        assert!(
-            fast.audio.len() < slow.audio.len(),
-            "2× 的音频必须比 0.5× 短：{} vs {}",
-            fast.audio.len(),
-            slow.audio.len()
-        );
     }
 }

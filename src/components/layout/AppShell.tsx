@@ -12,11 +12,14 @@ import { GlassIconButton } from "@/components/glass/button";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { BookCoverFlight } from "@/components/motion/BookCoverFlight";
-import { fontFaceCss, readerGlassVars, resolveSurface } from "@/features/reader/theme";
+import { fontFaceCss, readerGlassVars } from "@/features/reader/theme";
+import { TtsHost } from "@/features/reader/TtsHost";
+import { TtsPlayer } from "@/features/reader/TtsPlayer";
 import { useCommandPalette } from "@/stores/command-palette";
 import { useSettings } from "@/stores/settings";
-import { pageIsNight, useReaderSettings } from "@/stores/reader";
+import { useReaderSettings } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
+import { useReadingSurface } from "@/hooks/useReadingSurface";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import { useDeepLink } from "@/hooks/useDeepLink";
 import { useFonts } from "@/hooks/useFonts";
@@ -139,19 +142,9 @@ export function AppShell() {
    */
   const outlet = useOutlet();
   const appTheme = useResolvedTheme();
-  const daySurface = useReaderSettings((s) => s.surface);
-  const customSurface = useReaderSettings((s) => s.customSurface);
-  const nightSurface = useReaderSettings((s) => s.nightSurface);
-  const pageTheme = useReaderSettings((s) => s.pageTheme);
-  const surface = resolveSurface(
-    // `follow` — and the `null` a first launch starts in, which resolves the
-    // same way for the frame before the snapshot lands — is the only state
-    // that ties the page to the app theme. A pinned page keeps its palette, so
-    // an app theme switch moves the chrome without re-paginating a foliate
-    // book.
-    pageIsNight(pageTheme, appTheme === "dark") ? nightSurface : daySurface,
-    customSurface,
-  );
+  // The paper the reader is painting, which the shell re-roots its own glass
+  // tokens from: one resolution for the whole app — see `useReadingSurface`.
+  const surface = useReadingSurface();
   const shellStyle = reading
     ? ({ ...readerGlassVars(surface), "--app-bg": surface.tint } as CSSProperties)
     : undefined;
@@ -201,85 +194,94 @@ export function AppShell() {
   }, [reading, pathname, setReaderReturnPath]);
 
   return (
-    <div
-      className="relative flex h-[100dvh] flex-col"
-      data-theme={reading ? surface.mode : undefined}
-      style={shellStyle}
-    >
-      <style>{fontFaces}</style>
-      <div className="app-backdrop" />
-      <div className="app-grain" />
-      {!readerFullscreen && <TitleBar />}
+    // The read-aloud engine is hosted here rather than in the reader, so a
+    // session outlives the page it started on — that is the whole of "keeps
+    // playing in the background". It wraps the shell without adding an element.
+    <TtsHost>
       <div
-        className={readerFullscreen ? "flex min-h-0 flex-1" : "flex min-h-0 flex-1 gap-3 px-3 pb-3"}
+        className="relative flex h-[100dvh] flex-col"
+        data-theme={reading ? surface.mode : undefined}
+        style={shellStyle}
       >
-        <GlassSidebar hidden={sidebarGone}>{sidebarBody(collapsed)}</GlassSidebar>
-        {readerFullscreen && !sidebarHidden && (
-          // Fullscreen: the sidebar docks off-canvas and slides in while the
-          // pointer rests on the top or bottom strip of the left edge — the
-          // middle band stays dead so the flip arrows keep working. It floats
-          // with the same rounded corners as the docked pane, in the opaque
-          // overlay material so it stays readable over bright pages on dark
-          // surfaces. Honours 隐藏侧边栏: hidden means hidden here too.
-          <div className="group/edge pointer-events-none absolute inset-y-0 left-0 z-50">
-            {/* Explicit width: an absolutely positioned container with only
+        <style>{fontFaces}</style>
+        <div className="app-backdrop" />
+        <div className="app-grain" />
+        {!readerFullscreen && <TitleBar />}
+        <div
+          className={
+            readerFullscreen ? "flex min-h-0 flex-1" : "flex min-h-0 flex-1 gap-3 px-3 pb-3"
+          }
+        >
+          <GlassSidebar hidden={sidebarGone}>{sidebarBody(collapsed)}</GlassSidebar>
+          {readerFullscreen && !sidebarHidden && (
+            // Fullscreen: the sidebar docks off-canvas and slides in while the
+            // pointer rests on the top or bottom strip of the left edge — the
+            // middle band stays dead so the flip arrows keep working. It floats
+            // with the same rounded corners as the docked pane, in the opaque
+            // overlay material so it stays readable over bright pages on dark
+            // surfaces. Honours 隐藏侧边栏: hidden means hidden here too.
+            <div className="group/edge pointer-events-none absolute inset-y-0 left-0 z-50">
+              {/* Explicit width: an absolutely positioned container with only
                 absolute children is zero-width, and inset-x-0 strips inside it
                 would be zero-width too — the regression that killed the
                 summon gesture. */}
-            <div className="pointer-events-auto absolute top-0 left-0 h-[30%] w-1.5" aria-hidden />
-            <div
-              className="pointer-events-auto absolute bottom-0 left-0 h-[30%] w-1.5"
-              aria-hidden
-            />
-            <div className="pointer-events-auto absolute inset-y-0 left-0 my-3 flex -translate-x-full opacity-0 transition-all duration-200 ease-out group-hover/edge:translate-x-0 group-hover/edge:opacity-100 motion-reduce:transition-none">
-              <GlassSidebar overlay hidden={false}>
-                {sidebarBody(collapsed)}
-              </GlassSidebar>
+              <div
+                className="pointer-events-auto absolute top-0 left-0 h-[30%] w-1.5"
+                aria-hidden
+              />
+              <div
+                className="pointer-events-auto absolute bottom-0 left-0 h-[30%] w-1.5"
+                aria-hidden
+              />
+              <div className="pointer-events-auto absolute inset-y-0 left-0 my-3 flex -translate-x-full opacity-0 transition-all duration-200 ease-out group-hover/edge:translate-x-0 group-hover/edge:opacity-100 motion-reduce:transition-none">
+                <GlassSidebar overlay hidden={false}>
+                  {sidebarBody(collapsed)}
+                </GlassSidebar>
+              </div>
             </div>
-          </div>
-        )}
-        {sidebarHidden && !readerFullscreen && (
-          <GlassIconButton
-            label="显示侧边栏"
-            size="sm"
-            onClick={() => showSidebar(false)}
-            className="self-center"
+          )}
+          {sidebarHidden && !readerFullscreen && (
+            <GlassIconButton
+              label="显示侧边栏"
+              size="sm"
+              onClick={() => showSidebar(false)}
+              className="self-center"
+            >
+              <CaretRight size={16} />
+            </GlassIconButton>
+          )}
+          {sidebarHidden && readerFullscreen && (
+            // Fullscreen re-summon: the docked caret would sit mid-edge where
+            // the flip arrow lives, so it docks into the quiet bottom-left
+            // corner instead, clear of the footer hud and the flip arrows.
+            <GlassIconButton
+              label="显示侧边栏"
+              size="sm"
+              onClick={() => showSidebar(false)}
+              className="glass-solid absolute bottom-10 left-3 z-30"
+            >
+              <CaretRight size={16} />
+            </GlassIconButton>
+          )}
+          <GlassPanel
+            // The pane everything is read in, and the reference a modal centres
+            // itself against. The sidebar pushes it ~130px right of the window's
+            // centre, so a window-centred dialog reads as off-centre. See
+            // `GlassDialog`.
+            data-content-pane
+            className={
+              readerFullscreen
+                ? "relative min-w-0 flex-1 overflow-hidden rounded-none"
+                : "relative min-w-0 flex-1 overflow-hidden"
+            }
           >
-            <CaretRight size={16} />
-          </GlassIconButton>
-        )}
-        {sidebarHidden && readerFullscreen && (
-          // Fullscreen re-summon: the docked caret would sit mid-edge where
-          // the flip arrow lives, so it docks into the quiet bottom-left
-          // corner instead, clear of the footer hud and the flip arrows.
-          <GlassIconButton
-            label="显示侧边栏"
-            size="sm"
-            onClick={() => showSidebar(false)}
-            className="glass-solid absolute bottom-10 left-3 z-30"
-          >
-            <CaretRight size={16} />
-          </GlassIconButton>
-        )}
-        <GlassPanel
-          // The pane everything is read in, and the reference a modal centres
-          // itself against. The sidebar pushes it ~130px right of the window's
-          // centre, so a window-centred dialog reads as off-centre. See
-          // `GlassDialog`.
-          data-content-pane
-          className={
-            readerFullscreen
-              ? "min-w-0 flex-1 overflow-hidden rounded-none"
-              : "min-w-0 flex-1 overflow-hidden"
-          }
-        >
-          {/* Per-route boundary: a crashing feature page keeps the sidebar and
+            {/* Per-route boundary: a crashing feature page keeps the sidebar and
               the command palette alive so the user can navigate away. */}
-          <ErrorBoundary scope="页面" bare>
-            {/* Lazy route chunks resolve on first navigation; local disk,
+            <ErrorBoundary scope="页面" bare>
+              {/* Lazy route chunks resolve on first navigation; local disk,
                 so a plain fallback is enough. */}
-            <Suspense fallback={null}>
-              {/* Swapping pages: the page the reader left carries on in the
+              <Suspense fallback={null}>
+                {/* Swapping pages: the page the reader left carries on in the
                   direction they moved down the sidebar, and the one they asked
                   for comes in from the other side, so the two read as one
                   surface stepping through the list. `popLayout` takes the
@@ -308,33 +310,45 @@ export function AppShell() {
                   normalises the offset away, so the wrapper is neither a filter
                   nor a transform and fixed overlays inside a page keep the
                   viewport as their containing block. */}
-              <AnimatePresence mode="popLayout" initial={false} custom={step}>
-                <motion.div
-                  key={SHELF_VIEWS.has(pathname) ? "shelf" : pathname}
-                  data-page-swap={pathname}
-                  custom={step}
-                  variants={swap}
-                  initial={reduce ? false : "enter"}
-                  animate="center"
-                  exit={reduce ? undefined : "exit"}
-                  // Leaving is quicker than arriving. Both pages are mounted for
-                  // as long as the exit runs, and the page being left is the
-                  // expensive one — the reader holds the whole book and its
-                  // section iframes while the shelf mounts underneath it. A
-                  // short exit cuts that overlap window roughly in half and
-                  // reads as the new page taking over rather than two pages
-                  // trading places; the arriving page keeps the house duration.
-                  transition={{ duration: reduce ? 0 : DURATION.base, ease: EASE_OUT }}
-                  className="h-full"
-                >
-                  {outlet}
-                </motion.div>
-              </AnimatePresence>
-            </Suspense>
-          </ErrorBoundary>
-        </GlassPanel>
-      </div>
-      {/* Where the reader's floating overlays are portalled: the selection
+                <AnimatePresence mode="popLayout" initial={false} custom={step}>
+                  <motion.div
+                    key={SHELF_VIEWS.has(pathname) ? "shelf" : pathname}
+                    data-page-swap={pathname}
+                    custom={step}
+                    variants={swap}
+                    initial={reduce ? false : "enter"}
+                    animate="center"
+                    exit={reduce ? undefined : "exit"}
+                    // Leaving is quicker than arriving. Both pages are mounted for
+                    // as long as the exit runs, and the page being left is the
+                    // expensive one — the reader holds the whole book and its
+                    // section iframes while the shelf mounts underneath it. A
+                    // short exit cuts that overlap window roughly in half and
+                    // reads as the new page taking over rather than two pages
+                    // trading places; the arriving page keeps the house duration.
+                    transition={{ duration: reduce ? 0 : DURATION.base, ease: EASE_OUT }}
+                    className="h-full"
+                  >
+                    {outlet}
+                  </motion.div>
+                </AnimatePresence>
+              </Suspense>
+            </ErrorBoundary>
+            {/* Read-aloud, anchored to the pane's own bottom edge: the pill
+              follows the reader from route to route, and the card opens over
+              whatever page is behind it. Inside the pane rather than in the
+              window so it lines up with the content the sidebar leaves behind —
+              the `relative` above is what gives it that origin.
+
+              Two things the reader owns that this has to be told, because it is
+              no longer inside the reader: whether to paint itself in the reading
+              surface's ink (`onReadingSurface` — the same material as the page
+              it is floating on), and whether the pane's bottom edge is already
+              taken by the reader's own footer. */}
+            <TtsPlayer onReadingSurface={reading} liftForFooter={reading && !readerFullscreen} />
+          </GlassPanel>
+        </div>
+        {/* Where the reader's floating overlays are portalled: the selection
           toolbar and the 词典/翻译 popup.
 
           A `backdrop-filter` makes its element the containing block for
@@ -348,13 +362,14 @@ export function AppShell() {
           This host sits inside the shell, so the reading surface's tokens and
           `data-theme` still reach the overlays; everything portalled into it
           is `position: fixed`, so it takes no room in the column. */}
-      <div data-overlay-host>
-        {/* The cover carried from the shelf into the reader lives here, not in
+        <div data-overlay-host>
+          {/* The cover carried from the shelf into the reader lives here, not in
             the reader: a route change blurs and scales the page it leaves, and
             an element inside that page would be dragged along with it. */}
-        <BookCoverFlight />
+          <BookCoverFlight />
+        </div>
+        <CommandPalette />
       </div>
-      <CommandPalette />
-    </div>
+    </TtsHost>
   );
 }
