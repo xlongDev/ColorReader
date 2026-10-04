@@ -39,10 +39,10 @@
 
 | 模块          | 职责                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `commands/`   | Tauri 命令，按域分文件，**共 21 个域 —— 目录本身就是这份清单**。这里以前手列过 11 个文件名，漏掉 10 个（`backup` / `bookmark` / `clippings` / `dictionary` / `font` / `lookup` / `stats` / `tag` / `tts` / `webview`），凡是手写的清单都会这样漂，所以不再抄一遍。在 `lib.rs` 统一注册                                                                                                                                                                                                                 |
+| `commands/`   | Tauri 命令，按域分文件，**共 22 个域 —— 目录本身就是这份清单**。这里以前手列过 11 个文件名，漏掉 10 个（`backup` / `bookmark` / `clippings` / `dictionary` / `font` / `lookup` / `stats` / `tag` / `tts` / `webview`），凡是手写的清单都会这样漂，所以不再抄一遍。在 `lib.rs` 统一注册                                                                                                                                                                                                                 |
 | `db/`         | SQLite 连接（WAL、单写者 `Arc<Mutex<Connection>>`）+ `user_version` 迁移运行器                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `ai/`         | AI 配置仓储（`settings` KV 表）+ OpenAI 兼容流式聊天客户端（SSE 解析为纯函数）+ embedding 客户端（批量、归一化、f32 序列化）+ rerank 客户端（Cohere 兼容）                                                                                                                                                                                                                                                                                                                                             |
-| `library/`    | 导入管线（去重、文件落盘、元数据提取）+ 书籍仓储（查询 / 统计）+ 章节仓储 + 标注仓储 + 全文检索 + 书档（导入 / 导出 / 加密）+ 笔记导出（Markdown / CSV）+ RAG（组块 / 索引 / 暴力检索）+ 知识图谱（LLM 抽取 / 存储 / 邻域查询）+ 书源（JSON 规则 / 搜索 / 下载）+ WebDAV 同步（进度 / LWW 合并）。**现在是一个 23 个文件的平铺桶**，里面至少五类互不相关的领域（词典解析 / 检索与 AI / 同步备份 / 导出 / 书源），按本文自己的模块标准已经该分层了 —— 见 `docs/improvement-plan-2026-09-28.md` 的 P2-15 |
+| `library/`    | 导入管线（去重、文件落盘、元数据提取）+ 书籍仓储（查询 / 统计）+ 章节仓储 + 标注仓储 + 全文检索 + 书档（导入 / 导出 / 加密）+ 笔记导出（Markdown / CSV）+ RAG（组块 / 索引 / 暴力检索）+ 知识图谱（LLM 抽取 / 存储 / 邻域查询）+ 书源（JSON 规则 / 搜索 / 下载）+ WebDAV 同步（进度 / LWW 合并）。**现在是一个 24 个文件的平铺桶**，里面至少五类互不相关的领域（词典解析 / 检索与 AI / 同步备份 / 导出 / 书源），按本文自己的模块标准已经该分层了 —— 见 `docs/improvement-plan-2026-09-28.md` 的 P2-15 |
 | `document/`   | 七种格式的元数据、封面与章节正文提取：`epub`（OPF / spine）、`pdf`（逐页文本）、`mobi`（PDB 容器 + PalmDOC / HUFF-CDIC + EXTH）、`fb2`（XML，含 `.fb2.zip`）、`cbz`（图片页）、`plain`（TXT / Markdown），`html.rs` 为前三者共用的 HTML → 段落解析器                                                                                                                                                                                                                                                   |
 | `resource.rs` | `colorreader://` 自定义协议：封面图片按 id 从 Rust 流式返回                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `error.rs`    | `AppError`：thiserror 定义，实现 `Serialize`，统一转成 `{ message }` 交给前端                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -187,7 +187,9 @@ DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CO
 
 **朗读是双引擎的**：系统 `speechSynthesis`（离线、不引依赖）与 **Edge TTS**（Rust 侧 WebSocket，`tts.rs`）。之所以要有第二个，是因为默认音色 **Yunjian 是服务语音**（`zh-CN-YunjianNeural`）——`AVSpeechSynthesisVoice` 与任何系统清单里都没有它，而它正是这个阅读器想给出的默认声音。Edge 那条**必须走 Rust**：握手要一个浏览器不允许脚本设置的 `Cookie` 与 `Origin`，`Sec-MS-GEC` 是按原始时钟签的，渲染层既拿不到它也不该被信任持有。两个引擎在 `voice.ts` 里按 `edge:` 前缀分派，Edge 不可达时回落到系统音色并在面板上给出错误与重试。
 
-播放本身仍是**一次一段**：段落边界就是天然的进度条，当前段落高亮、滚出视野才跟随滚动，本章读完自动翻章续读，generation 计数器防「cancel 后残留 end 事件重启朗读」的平台怪癖。语速属阅读设置，改动从**当前位置**重播（不是等下一句）。
+播放本身仍是**一次一段**：段落边界就是天然的进度条，当前段落高亮、滚出视野才跟随滚动，本章读完自动翻章续读，generation 计数器防「cancel 后残留 end 事件重启朗读」的平台怪癖。**倍速不参与合成。** Edge 一律按 **rate 1.0** 取音频，倍速在**排程那一刻**由 `features/reader/timeStretch.ts` 对解码后的 PCM 做 **WSOLA 时间拉伸**（40 ms 帧 / 8 ms 重叠 / ±15 ms 搜索，取 SoundTouch 的语音默认值）。两条理由叠在一起：① rate 不进合成也不进缓存，于是**改速不触发任何请求**，一句缓存的音频在任何倍速下都能重放；② Web Audio 没有 `preservesPitch`（那是媒体元素才有的），直接改 `playbackRate` 是重采样、**会把嗓音变调**，而 WSOLA 是把整段波形按新间距重排，周期不变。代价是**新倍速落到下一句才生效**（readest 同款）——让倍速立刻生效要重启当前句，而重启等于扔掉已解码的缓存，正是这条路最初要消掉的东西。系统语音那条路不变：`utterance.rate` 只在 `speak()` 那一刻有效，所以两条引擎在「何时生效」上并不一致，这是平台事实而非设计选择。
+
+**会话住在外壳，不住在阅读页。** 引擎与播放器挂在 `TtsHost`（`AppShell` 之下），`stores/speech.ts` 是接缝：阅读页只**借**一个 `SpeechTransport`，页面卸载时把它还回去，语音不停；`SpeechCard`（卡片）与 `ttsParts`（胶囊与卡片共用的零件）因此可以在第二个窗口里复用同一份。主窗口的关闭事件改成**隐藏**而不是退出，配合第二个 Tauri 窗口（`label=mini`，透明、置顶、贴着屏幕底边）与菜单栏图标，构成「窗口不在了以后仍能控制会话」的三条路：托盘、悬浮条、Dock 唤回。悬浮条那扇窗口**五档定高**（胶囊 / 主视图 / 语速 / 音色 / 定时），卡片每切一次视图就把自己的视图名报给后端、窗口随之改高。
 
 ### 知识图谱模型
 
@@ -257,13 +259,18 @@ Feature-oriented：`components/` 放可复用 UI，`features/` 放业务领域�
 
 ### 状态归属
 
-| 状态类型          | 归属               | 例子                                             |
-| ----------------- | ------------------ | ------------------------------------------------ |
-| UI / 交互 / 偏好  | **Zustand**        | 侧边栏折叠、主题、书架视图、命令注册表、面板开关 |
-| 服务端（IPC）数据 | **TanStack Query** | 系统信息、书库列表、搜索结果、AI 回答            |
-| 派生数据          | `useMemo`          | 命令面板的评分与分组                             |
+| 状态类型          | 归属               | 例子                                                    |
+| ----------------- | ------------------ | ------------------------------------------------------- |
+| UI / 交互 / 偏好  | **Zustand**        | 侧边栏折叠、主题、书架视图、命令注册表、面板开关        |
+| 服务端（IPC）数据 | **TanStack Query** | 系统信息、书库列表、搜索结果、AI 回答                   |
+| **会话**          | **Zustand**        | 朗读的队列 / 封面 / 章节 / 进度：读者发布它，外壳消费它 |
+| 派生数据          | `useMemo`          | 命令面板的评分与分组                                    |
 
 禁止把 IPC 返回值塞进 Zustand，也禁止把所有业务状态塞进 Zustand。
+
+**会话单列一档，因为它既不是偏好也不是 IPC 数据**：`useReaderSettings` 是可持久化的偏好，
+`stores/speech.ts` 不是——它是「此刻正在响着的声音」，退出就该消失。判断依据是**谁来写**：
+阅读页写、外壳读，中间没有第三个持有者。
 
 ### 阅读渲染：两条通路，一份语料
 
@@ -411,7 +418,7 @@ Tauri 命令名在 Rust 里是 snake_case，前端通过 `src/lib/ipc.ts` 的单
 
 ### 绑定由 Rust 生成（tauri-specta）
 
-76 个命令里 73 个由 `#[specta::specta]` 标注生成，3 个例外见下。生成产物 `src/lib/bindings.ts`
+80 个命令里 77 个由 `#[specta::specta]` 标注生成，3 个例外见下。生成产物 `src/lib/bindings.ts`
 **要提交**，改动 Rust 签名后重新生成：
 
 ```sh
@@ -601,9 +608,9 @@ capability 只放行实际用到的三条：`updater:allow-check`、`updater:all
 
 ### 生产化基线（Phase 14）
 
-- **CI**：`.github/workflows/ci.yml`（push/PR 跑 `verify` + Rust 三件套 + bundle size 摘要）、`release.yml`（`v*` tag → tauri-action 四平台 draft release，打包前先跑 Rust 门禁）。
+- **CI**：`.github/workflows/ci.yml`（push/PR 跑 `verify` + Rust 三件套 + bundle size 摘要；e2e 前装 `fonts-noto-cjk` —— 跑批机没有中文字体时，版面度量与任何真实读者都不同）、`release.yml`（`v*` tag → tauri-action 四平台 draft release，打包前先跑 Rust 门禁）。
 - **打包**：`pnpm tauri build` 本地实测产出 `ColorReader.app`（arm64，ad-hoc 签名，二进制 7.7 MB）；dmg 由 CI 产出。
-- **E2E**：`pnpm test:e2e`（Playwright，**chromium + webkit 两个 project** —— 前者是开发便利，后者才是 Tauri 真正用的引擎）对 `vite preview` 的生产构建做路由 smoke：书库 → 搜索 → 设置 → 书库各页渲染且 console/pageerror 为空，懒加载 chunk 加载失败会在此暴露。
+- **E2E**：`pnpm test:e2e`（Playwright，**chromium + webkit 两个 project** —— 前者是开发便利，后者才是 Tauri 真正用的引擎）对 `vite preview` 的生产构建跑 **96 条**：路由 smoke（书库 → 搜索 → 设置）之外，还覆盖阅读排版与页码、PDF、Kindle 容器、书库交互、朗读与悬浮条。**两个 project 都要跑**——同一串中文字符在 WebKit 里宽约 15%，只在一个引擎上断言过的布局等于没断言。
 - **Benchmark**：`cargo test --release bench -- --ignored --nocapture`（600 章 / 2.7 MB 参考书）：导入（切章 + FTS 索引）60 ms，检索均值 1.3 ms，目录加载 0.6 ms。Apple M 系列、release profile。
 
 > 文档同步备忘：本节的 PDF 段落已据代码实际状态订正（此前写「PDF 不可标注」已失效——文字版 PDF 标注 + 划词问 AI 均已落地）；「同步模型」一节已改写为「进度 + 标注 + 书签」，P0-① 标注/书签同步随之从待办移出。

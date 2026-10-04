@@ -32,18 +32,19 @@
 
 ### 阅读
 
-| 能力                                       | 说明                                                                                                                  |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| 七种格式导入（SHA-256 去重）               | EPUB / PDF / MOBI / AZW / AZW3 / PRC / FB2 / CBZ / Markdown / TXT，拖进窗口或走选择器；同一份文件重复导入只留一本     |
-| 阅读器（paged / scroll 双模式）            | 分页与滚动可切换，字号、行距、段距、缩进、页边距均可调；进度按字数定位，续读不加载整本书                              |
-| 自定义字体                                 | 导入 .ttf / .otf / .ttc / .woff / .woff2，经 `/font/{id}` 资源协议加载。**不内置字体**（体积与许可各自独立）          |
-| 主题（浅色 / 深色 / 跟随系统）             | 外加「减少透明度」；所有动效统一尊重 `prefers-reduced-motion`                                                         |
-| 划词标注 + 笔记                            | 高亮以 UTF-16 字符区间锚定在不可变的章节文本上（EPUB 走 CFI），可加笔记、侧栏按章列出、批量删除                       |
-| 书签                                       | 独立于标注的阅读位置标记                                                                                              |
-| 朗读（双引擎）                             | 系统 `speechSynthesis`（离线）与 **Edge TTS**（默认音色 Yunjian）；逐段高亮跟随、读完自动翻章，语速改动从当前位置重播 |
-| 划词查词                                   | 平台词典 → 导入的本地词典 → AI 兜底，前两级全离线免 Key；StarDict 的 `.syn` 变形词也查（划 `ran` 能落到 `run`）       |
-| 划词翻译 / 维基百科                        | DeepL 与 Wikipedia REST；没配 Key 时翻译与词典共用同一个 AI 流式回答                                                  |
-| 深链 `colorreader://book/<id>?annotation=` | 三种位置模型（CFI / 章+偏移 / 页码）通解；Windows / Linux 由 single-instance 把第二进程的 argv 交给先到实例           |
+| 能力                                       | 说明                                                                                                                                                                   |
+| ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 七种格式导入（SHA-256 去重）               | EPUB / PDF / MOBI / AZW / AZW3 / PRC / FB2 / CBZ / Markdown / TXT，拖进窗口或走选择器；同一份文件重复导入只留一本                                                      |
+| 阅读器（paged / scroll 双模式）            | 分页与滚动可切换，字号、行距、段距、缩进、页边距均可调；进度按字数定位，续读不加载整本书                                                                               |
+| 自定义字体                                 | 导入 .ttf / .otf / .ttc / .woff / .woff2，经 `/font/{id}` 资源协议加载。**不内置字体**（体积与许可各自独立）                                                           |
+| 主题（浅色 / 深色 / 跟随系统）             | 外加「减少透明度」；所有动效统一尊重 `prefers-reduced-motion`                                                                                                          |
+| 划词标注 + 笔记                            | 高亮以 UTF-16 字符区间锚定在不可变的章节文本上（EPUB 走 CFI），可加笔记、侧栏按章列出、批量删除                                                                        |
+| 书签                                       | 独立于标注的阅读位置标记                                                                                                                                               |
+| 朗读（双引擎）                             | 系统 `speechSynthesis`（离线）与 **Edge TTS**（默认音色 Yunjian）；逐段高亮跟随、读完自动翻章；**倍速在播放侧施加**（合成恒为 1.0×，改速不重新合成、不卡，下一句生效） |
+| 划词查词                                   | 平台词典 → 导入的本地词典 → AI 兜底，前两级全离线免 Key；StarDict 的 `.syn` 变形词也查（划 `ran` 能落到 `run`）                                                        |
+| 划词翻译 / 维基百科                        | DeepL 与 Wikipedia REST；没配 Key 时翻译与词典共用同一个 AI 流式回答                                                                                                   |
+| 朗读越过窗口之后                           | 第二个窗口上的**悬浮播放条** + 菜单栏图标。主窗口最小化或隐藏后会话继续，可从桌面控制播放 / 暂停 / 下一句 / 回到正在读的那一句；卡片里也有一个「最小化到悬浮条」       |
+| 深链 `colorreader://book/<id>?annotation=` | 三种位置模型（CFI / 章+偏移 / 页码）通解；Windows / Linux 由 single-instance 把第二进程的 argv 交给先到实例                                                            |
 
 ### 书库
 
@@ -172,10 +173,10 @@ Rust 侧另有 `pnpm rust:check` / `rust:fmt` / `rust:lint` / `rust:test`。
 | ------------ | ------------------------------------------------------------------------------- |
 | `tsc`        | 严格模式，0 错误                                                                |
 | `oxlint`     | 0 warning / 0 error（错误逐条修，不降级、不加白名单）                           |
-| Vitest       | **356** 用例 / 39 文件                                                          |
-| `cargo test` | **400** 用例（解析器、章节识别、文本引擎、搜索、标注、Book Pack、数据库、词典） |
-| Playwright   | **41** 用例 × 2 引擎 = 82 次运行                                                |
-| bundle       | 入口 chunk **254 kB**（gzip 75 kB），Vite 的 500 kB 告警线内                    |
+| Vitest       | **719** 用例 / 70 文件                                                          |
+| `cargo test` | **426** 用例（解析器、章节识别、文本引擎、搜索、标注、Book Pack、数据库、词典） |
+| Playwright   | **96** 用例 × 2 引擎 = 192 次运行                                               |
+| bundle       | 入口 chunk **351.6 kB**（gzip 102 kB），Vite 的 500 kB 告警线内                 |
 
 e2e 两个引擎是刻意的：**WebKit 正是 Tauri 实际渲染用的引擎**，只装 chromium 会让 webkit 那组起不来，等于没测。
 
@@ -185,11 +186,11 @@ Rust 侧硬约束：数据库是**单连接单写者**，所以解析、哈希�
 
 ## 发布与部署
 
-| 工作流                               | 触发           | 产物                                                                                                     |
-| ------------------------------------ | -------------- | -------------------------------------------------------------------------------------------------------- |
-| `.github/workflows/ci.yml`           | push main / PR | Frontend gates（`verify` + e2e 双引擎）与 Rust gates；失败时把 e2e 原文写成 annotation 并上传 trace 制品 |
-| `.github/workflows/deploy-pages.yml` | push main      | **纯前端预览站**部署到 GitHub Pages（无后端，`?demo=1` 提供样本书架）                                    |
-| `.github/workflows/release.yml`      | `v*` tag       | 四平台安装包（macOS arm64 / macOS x86_64 / Linux / Windows）+ `latest.json` 自动更新清单                 |
+| 工作流                               | 触发           | 产物                                                                                                                                                               |
+| ------------------------------------ | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `.github/workflows/ci.yml`           | push main / PR | Frontend gates（`verify` + e2e 双引擎）与 Rust gates；runner 上**装中文字体**（否则度量没有一个真实读者会遇到），e2e 失败时把原文写成 annotation 并上传 trace 制品 |
+| `.github/workflows/deploy-pages.yml` | push main      | **纯前端预览站**部署到 GitHub Pages（无后端，`?demo=1` 提供样本书架）                                                                                              |
+| `.github/workflows/release.yml`      | `v*` tag       | 四平台安装包（macOS arm64 / macOS x86_64 / Linux / Windows）+ `latest.json` 自动更新清单                                                                           |
 
 打包时 `releaseDraft` 必须是 `false`：更新端点指向 `releases/latest/download/latest.json`，而 GitHub 的 `latest` 明确跳过草稿，草稿发布会让已安装的客户端永远查不到更新。
 
@@ -214,14 +215,14 @@ Rust 侧硬约束：数据库是**单连接单写者**，所以解析、哈希�
 │   │   ├── brand/              # 品牌标识
 │   │   └── common/             # EmptyState 等通用件
 │   ├── features/               # 按业务领域组织：library / reader / search / notes / graph / settings / source / stats / command
-│   ├── hooks/                  # 29 个 hook：IPC 查询、热键、主题、朗读、手势……
+│   ├── hooks/                  # 36 个 hook：IPC 查询、热键、主题、朗读、手势……
 │   ├── lib/                    # cn / ipc（IPC 单一出口）/ bindings.ts（Rust 生成）/ demo.ts
-│   ├── stores/                 # Zustand：settings / commands / command-palette / reader / chrome / toasts / book-handoff
+│   ├── stores/                 # Zustand：settings / commands / command-palette / reader / chrome / speech（朗读会话）/ toasts / book-handoff / reset
 │   ├── styles/                 # globals.css = Design Token + 材质层
 │   └── types/ipc.ts            # Rust 返回值的转出与少量别名
 ├── src-tauri/
 │   ├── src/
-│   │   ├── commands/           # 71 个 Tauri 命令，按域分文件（book / reader / annotation / search / ai / rag / graph / source / sync / dictionary / font / tts …）
+│   │   ├── commands/           # 80 个 Tauri 命令，按域分 22 个文件（book / reader / annotation / search / ai / rag / graph / source / sync / dictionary / font / tts / mini_bar …）
 │   │   ├── db/                 # SQLite 连接与迁移（WAL、单写者）
 │   │   ├── document/           # 七格式的元数据 / 封面 / 章节提取（epub / pdf / mobi / fb2 / cbz / html / plain）
 │   │   ├── ai/                 # AI 配置仓储 + 流式聊天 / embedding / rerank 客户端
@@ -234,7 +235,7 @@ Rust 侧硬约束：数据库是**单连接单写者**，所以解析、哈希�
 │   │   └── lib.rs              # 应用装配与 tracing 初始化
 │   ├── capabilities/           # 最小权限集合
 │   └── tests/fixtures/         # 第三方写入器产出的 MDict 夹具（正确性不靠自我印证）
-└── e2e/                        # Playwright，19 个 spec
+└── e2e/                        # Playwright，36 个 spec
 ```
 
 ---
