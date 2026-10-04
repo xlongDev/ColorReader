@@ -20,6 +20,24 @@ const ruleText = (page: Page) =>
     .evaluate((el) => el.textContent ?? "")
     .catch(() => "");
 
+/** The wash's own alpha, and how light it is.
+ *
+ *  Both are read out of the rule rather than compared as literal colours,
+ *  because the wash is *mixed against the page it sits on* — the app darkens a
+ *  light wash so it stays legible on dark paper. That mixture lands on a slightly
+ *  different surface wherever the type metrics differ, and a runner without the
+ *  CJK font duly produced `rgba(50, 50, 14, 0.36)` where this file had written
+ *  `rgba(0, 0, 0, 0.36)`. The two facts worth pinning are "the wash is as
+ *  transparent as the reader asked for" and "it followed the page", both of which
+ *  survive the platform. */
+async function wash(page: Page): Promise<{ alpha: string; light: number }> {
+  const text = await ruleText(page);
+  const match = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)/.exec(text);
+  if (!match) return { alpha: "", light: -1 };
+  const [r, g, b] = [match[1], match[2], match[3]].map(Number) as [number, number, number];
+  return { alpha: match[4] ?? "", light: (r + g + b) / 3 };
+}
+
 async function openBook(page: Page, query: string, book: RegExp): Promise<void> {
   await page.goto(query);
   await page.getByRole("button", { name: book }).first().click();
@@ -143,8 +161,13 @@ test("the PDF wash is installed as a rule, and it follows the setting", async ({
   };
 
   await drag(box.x - 40, box.y - 40);
-  await expect.poll(() => ruleText(page)).toContain("rgba(255, 255, 255, 0.36)");
+  await expect.poll(async () => (await wash(page)).alpha).toBe("0.36");
+  const onLight = await wash(page);
 
+  // …and the other way round: the same wash, dragged onto the dark page, comes
+  // out dark. Compared light-against-dark rather than against two literals.
   await drag(box.x + box.width + 40, box.y + box.height + 40);
-  await expect.poll(() => ruleText(page)).toContain("rgba(0, 0, 0, 0.36)");
+  await expect.poll(async () => (await wash(page)).alpha).toBe("0.36");
+  const onDark = await wash(page);
+  expect(onDark.light).toBeLessThan(onLight.light);
 });

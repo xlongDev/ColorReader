@@ -25,6 +25,18 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # CI has no proxy injecting NODE_OPTIONS, so plain verify works here.
       - run: pnpm verify
+      # A CJK font, because the runner has none: `playwright install --with-deps`
+      # brings Latin faces and nothing else, so every Chinese string here is laid
+      # out in whatever fallback the image happens to carry. That is not only a
+      # tidier screenshot — the metrics are nothing a reader will ever see. The
+      # reader's own footer measures 57px on a Mac and 78px here, which is the
+      # whole of one red CI run; and a face that arrives late reflows the page
+      # after first paint, which is a thing a reader's machine never does to them
+      # either. Test against an environment that resembles the product's.
+      - name: Install a CJK font
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends fonts-noto-cjk
       # `verify` builds dist, which is what the preview server serves. Without
       # this step nothing ever ran the e2e suite and it rotted unnoticed.
       # Both engines: `playwright.config.ts` runs every test twice on purpose,
