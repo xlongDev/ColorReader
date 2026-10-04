@@ -1,7 +1,7 @@
 //! IPC command handlers, grouped by domain: `system.*`, `book.*`, `reader.*`,
 //! `annotation.*`, `search.*`, `pack.*`, `notes.*`, `ai.*`, `rag.*`, `graph.*`,
 //! `source.*`, `sync.*`, `tts.*`, `tag.*`, `clippings.*`, `dictionary.*`,
-//! `backup.*`, `webview.*`.
+//! `backup.*`, `webview.*`, `mini_bar.*`.
 
 pub mod ai;
 pub mod annotation;
@@ -14,6 +14,7 @@ pub mod export;
 pub mod font;
 pub mod graph;
 pub mod lookup;
+pub mod mini_bar;
 pub mod rag;
 pub mod reader;
 pub mod search;

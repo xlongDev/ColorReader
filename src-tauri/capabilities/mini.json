@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "mini-bar",
+  "description": "The floating read-aloud bar's own window. It is deliberately the shortest list in here: the bar draws what the main window tells it over an event, forwards its buttons as event names the main window already understands, and its three app commands (watch / dismiss / reveal) need no permission of their own.",
+  "windows": ["mini"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "core:event:allow-emit",
+    "core:window:allow-start-dragging"
+  ]
+}

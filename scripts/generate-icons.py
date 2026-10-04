@@ -9,6 +9,11 @@ browser just to regenerate branding assets.
 Writes into src-tauri/icons/ :
     32x32.png  128x128.png  128x128@2x.png  icon.png(1024)
     icon.icns  icon.ico
+    trayTemplate.png (44px, menu bar)
+
+The tray image is the same five reading lines reduced to a mask: macOS paints a
+template image in its own menu-bar colour, so only the shape and the alpha
+survive and the palette above is deliberately unused.
 """
 
 from __future__ import annotations
@@ -118,23 +123,23 @@ def render() -> bytearray:
     return buf
 
 
-def downsample(buf: bytearray) -> bytes:
+def downsample(buf: bytearray, size: int = SIZE, ss: int = SS) -> bytes:
     """Average SSxSS blocks and premultiply-free alpha back into RGBA."""
-    out = bytearray(SIZE * SIZE * 4)
-    area = SS * SS
-    for y in range(SIZE):
-        for x in range(SIZE):
+    out = bytearray(size * size * 4)
+    area = ss * ss
+    for y in range(size):
+        for x in range(size):
             r = g = b = a = 0
-            for sy in range(SS):
-                base = ((y * SS + sy) * N + x * SS) * 4
-                for sx in range(SS):
+            for sy in range(ss):
+                base = ((y * ss + sy) * size * ss + x * ss) * 4
+                for sx in range(ss):
                     i = base + sx * 4
                     alpha = buf[i + 3]
                     r += buf[i] * alpha
                     g += buf[i + 1] * alpha
                     b += buf[i + 2] * alpha
                     a += alpha
-            o = (y * SIZE + x) * 4
+            o = (y * size + x) * 4
             if a == 0:
                 continue
             out[o] = r // a
@@ -214,6 +219,66 @@ def build_ico(master: str, dst: str) -> None:
         fh.write(header + directory + blob)
 
 
+TRAY = 44  # menu-bar template, square: macOS scales it to 18pt by height
+TRAY_SS = 8
+TRAY_BAR_H = 4.5
+TRAY_GAP = 2.5
+TRAY_W = 34.0
+TRAY_SHORT = 19.0
+
+
+def render_tray() -> bytearray:
+    """The five reading lines as an alpha mask: black on nothing.
+
+    macOS paints a template image in its own menu-bar colour, so the spectrum
+    above is gone by the time this is on screen — the shape is the whole icon,
+    and the alpha is what carries it.
+    """
+    n = TRAY * TRAY_SS
+    s = float(TRAY_SS)
+    count = len(BARS)
+    bar_h = TRAY_BAR_H * s
+    gap = TRAY_GAP * s
+    glyph_h = count * bar_h + (count - 1) * gap
+    top = (n - glyph_h) / 2.0
+    full_w = TRAY_W * s
+    left = (n - full_w) / 2.0
+    radius = bar_h / 2.0
+
+    pills = []
+    for idx in range(count):
+        y0 = top + idx * (bar_h + gap)
+        width = TRAY_SHORT * s if idx == count - 1 else full_w
+        pills.append((y0, y0 + bar_h, left, left + width))
+
+    buf = bytearray(n * n * 4)
+    for y in range(n):
+        py = y + 0.5
+        active = next((pill for pill in pills if pill[0] <= py <= pill[1]), None)
+        if active is None:
+            continue
+        y0, y1, x0, x1 = active
+        row = y * n * 4
+        for x in range(n):
+            px = x + 0.5
+            if not x0 <= px <= x1:
+                continue
+            # Pill: clamp the sampling point to the core segment.
+            cx = min(max(px, x0 + radius), x1 - radius)
+            cy = min(max(py, y0 + radius), y1 - radius)
+            if (px - cx) ** 2 + (py - cy) ** 2 > radius * radius:
+                continue
+            buf[row + x * 4 + 3] = 255
+    return buf
+
+
+def build_tray() -> None:
+    """Writes the menu-bar template the tray icon is loaded from."""
+    path = os.path.join(ICONS, "trayTemplate.png")
+    write_png(path, TRAY, downsample(render_tray(), TRAY, TRAY_SS))
+    print(f"  trayTemplate.png ({TRAY}px)")
+
+
 def main() -> None:
     os.makedirs(ICONS, exist_ok=True)
     os.makedirs(WORK, exist_ok=True)
@@ -241,7 +306,10 @@ def main() -> None:
     build_ico(master, os.path.join(ICONS, "icon.ico"))
     print("  icon.ico")
 
+    build_tray()
+
     assert os.path.getsize(os.path.join(ICONS, "icon.icns")) > 0
+    assert os.path.getsize(os.path.join(ICONS, "trayTemplate.png")) > 0
     print("done ->", os.path.relpath(ICONS, ROOT))
 
 

@@ -15,7 +15,21 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `tray-icon` is the menu-bar icon. It is what keeps a read-aloud session
+# reachable once the window is closed: the window hides rather than quits (see
+# `run`), so without this the only way back would be the Dock, and the only way
+# to pause would be to bring the whole app forward.
+#
+# `image-png` is what decodes `icons/trayTemplate.png` at runtime — Tauri's own
+# `image` dependency stays optional, and the bundled window icon is decoded at
+# build time by `tauri-codegen` instead, so it does not cover this.
+#
+# `macos-private-api` is what makes the floating bar's window transparent, which
+# is the whole shape of it: the bar is a capsule lying on the desktop, and an
+# opaque window would put it in a rectangle. It is only read on macOS, and it
+# costs nothing outside the App Store — this app ships DMGs from GitHub
+# Releases, which the flag does not affect.
+tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"

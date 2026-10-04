@@ -14,7 +14,9 @@ mod tts;
 use std::fs;
 use std::time::Instant;
 
-use tauri::Manager;
+use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::error::AppError;
 use crate::state::AppState;
@@ -54,11 +56,10 @@ pub fn run() -> tauri::Result<()> {
         // The link itself was dealt with above us. What is left is surfacing
         // the window: the reader clicked the link in a browser that is now in
         // front of us, and a reader that has to hunt for the window will not
-        // believe the link worked.
-        if let Some(window) = app.get_webview_window("main") {
-            let _ = window.unminimize();
-            let _ = window.set_focus();
-        }
+        // believe the link worked. That means *showing* it, not just focusing
+        // it — a window closed with the red button is hidden, not minimized,
+        // and focusing a hidden window shows nobody anything.
+        reveal_window(app);
     }));
     let builder = builder
         .plugin(tauri_plugin_dialog::init())
@@ -157,6 +158,10 @@ pub fn run() -> tauri::Result<()> {
             commands::tag::book_set_tags,
             commands::tts::tts_edge_voices,
             commands::tts::tts_edge_speak,
+            commands::mini_bar::mini_bar_watch,
+            commands::mini_bar::mini_bar_dismiss,
+            commands::mini_bar::mini_bar_reveal,
+            commands::mini_bar::mini_bar_expand,
         ])
         .setup({
             let registry = registry.clone();
@@ -180,15 +185,114 @@ pub fn run() -> tauri::Result<()> {
 
                 tracing::info!(path = %layout.data_dir.display(), "application data directory ready");
                 app.manage(AppState { started_at: Instant::now(), layout, library });
+
+                // Last, because it is the one piece of the shell that can be
+                // built without the library: a tray that fails to appear should
+                // not take the data directory down with it.
+                install_tray(app)?;
+
+                // The floating bar's state, and nothing else: its window is
+                // built on demand, the first time a read-aloud session goes
+                // looking for it (see `commands::mini_bar`).
+                commands::mini_bar::install(app);
                 Ok(())
             }
         });
 
     let app = resource::install(builder, registry).build(tauri::generate_context!())?;
 
-    // `App::run` consumes `self` and blocks until the last window closes; it does
-    // not return a `Result` in Tauri 2.x, so the only failure path is during build.
-    app.run(|_handle, _event| {});
+    // The window's close button hides the app rather than quitting it.
+    // Read-aloud is a session, not a page: a reader who closes the window to
+    // get it out of the way has not asked for the voice to stop, and on every
+    // platform this ships on, the app going away is what silences it. ⌘Q, the
+    // tray's 退出 and the Dock's own quit are the ways out that do quit.
+    //
+    // `App::run` consumes `self` and blocks until the last window closes; it
+    // does not return a `Result` in Tauri 2.x, so the only failure path is
+    // during build.
+    app.run(|handle, event| match event {
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: tauri::WindowEvent::CloseRequested { api, .. },
+            ..
+        } if label == "main" => {
+            api.prevent_close();
+            if let Some(window) = handle.get_webview_window("main") {
+                let _ = window.hide();
+            }
+        }
+        // macOS: the Dock icon of an app with no visible window. Hiding a
+        // window is not closing it, so nothing else brings it back and without
+        // this arm the app is open but unreachable.
+        #[cfg(target_os = "macos")]
+        tauri::RunEvent::Reopen { .. } => reveal_window(handle),
+        _ => {}
+    });
+    Ok(())
+}
+
+/// The tray menu's own event: the controls that belong to the *session* rather
+/// than to the window.
+const TRAY_CONTROL_EVENT: &str = "tts://control";
+
+/// Shows and focuses the main window, from wherever it is: hidden behind a
+/// close, minimized, or buried under another app.
+///
+/// `pub(crate)` because the floating bar's own window is one of the ways back —
+/// see `commands::mini_bar::mini_bar_reveal`.
+pub(crate) fn reveal_window(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
+}
+
+/// Builds the menu-bar icon.
+///
+/// It carries two kinds of item, and the split is the whole reason it exists in
+/// this shape. The ones that need the *window* — show it, quit — are done here.
+/// The ones that need the *session* cannot be: the queue, the position and the
+/// voice are frontend state, and the frontend is exactly what is invisible when
+/// this menu is being used. Those are forwarded over `TRAY_CONTROL_EVENT` and
+/// carried out by the player that owns the transport (`TtsPlayer`), which is
+/// sitting in the shell whether or not a reader is on screen.
+///
+/// The menu opens on left click as well as right: on a menu-bar icon the left
+/// click is the one people reach for, and everything this app can usefully do
+/// with a closed window is on it.
+fn install_tray(app: &tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle", "播放 / 暂停", true, None::<&str>)?;
+    let prev = MenuItem::with_id(app, "prev", "上一句", true, None::<&str>)?;
+    let next = MenuItem::with_id(app, "next", "下一句", true, None::<&str>)?;
+    let stop = MenuItem::with_id(app, "stop", "停止朗读", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 ColorReader", true, None::<&str>)?;
+    let menu = Menu::with_items(
+        app,
+        &[&show, &toggle, &prev, &next, &stop, &PredefinedMenuItem::separator(app)?, &quit],
+    )?;
+
+    // Shape and alpha only: macOS paints a template image in its own menu-bar
+    // colour, so the glyph carries no colour of its own — it is the app icon's
+    // five reading lines as a mask (`pnpm icons`).
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;
+
+    TrayIconBuilder::with_id("colorreader")
+        .icon(icon)
+        .icon_as_template(true)
+        .tooltip("ColorReader")
+        .menu(&menu)
+        .show_menu_on_left_click(true)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "show" => reveal_window(app),
+            "quit" => app.exit(0),
+            // Everything else is a transport name the frontend switches on.
+            action => {
+                let _ = app.emit(TRAY_CONTROL_EVENT, action.to_string());
+            }
+        })
+        .build(app)?;
     Ok(())
 }
 
@@ -287,6 +391,10 @@ mod specta_bindings {
                 commands::tag::book_set_tags,
                 commands::tts::tts_edge_voices,
                 commands::tts::tts_edge_speak,
+                commands::mini_bar::mini_bar_watch,
+                commands::mini_bar::mini_bar_dismiss,
+                commands::mini_bar::mini_bar_reveal,
+                commands::mini_bar::mini_bar_expand,
             ])
             // Event payloads. They never appear in a command signature, so they
             // are not reachable from `collect_commands!` and have to be named
