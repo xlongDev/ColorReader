@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  RULER_OVERLAP_PX,
+  RULER_PAD_FACTOR,
   bandOver,
   blockAt,
   clampAnchor,
@@ -9,6 +9,7 @@ import {
   fallbackBand,
   nextBlock,
   nextColumnBlock,
+  onPage,
   toColumns,
   toLines,
   toSpans,
@@ -173,19 +174,31 @@ describe("toColumns", () => {
     ]);
   });
 
-  it("counts a fragment only when it is inside the window by more than a hair", () => {
-    // A paginated book keeps the page it is not showing flush against the
-    // window: its fragments begin a fraction of a pixel past the edge, and
-    // counted, they drag the band tens of pixels clear of the text — into the
-    // margin, where the band reads as if it had faded out.
-    const neighbour = text(799.8, 1000, 100, 126);
-    const columns = toColumns([...spread, neighbour], 2, 0, 800);
-    expect(columns).toHaveLength(2);
-    expect(columns[1]!.right).toBe(660);
-    // A line the reader can see half of is a line of the page.
-    const halfShown = text(760, 1000, 100, 126);
-    expect(toColumns([...spread, halfShown], 2, 0, 800)).toHaveLength(2);
-    expect(RULER_OVERLAP_PX).toBeGreaterThan(0);
+  it("counts a fragment only when it is on the page being read", () => {
+    // A paginated book keeps the pages either side of this one in the document.
+    // The neighbour is flush against the area's edge (a fraction of a pixel in)
+    // or — after the pane's width changed under it — a whole column of it pokes
+    // in; either way its words are not this page's, and counted they drag the
+    // band out of the text and into the margin, where it reads as if it had
+    // faded out.
+    const flush = text(799.8, 1000, 100, 126);
+    const stale = text(-600, 60, 100, 126);
+    for (const neighbour of [flush, stale]) {
+      expect(onPage(neighbour, false, 0, 800)).toBe(false);
+      const columns = toColumns([...spread, neighbour], 2, 0, 800);
+      expect(columns).toHaveLength(2);
+      expect(columns[0]!.left).toBe(40);
+    }
+  });
+
+  it("keeps a line of this page, even one hanging out of the area", () => {
+    // The band covers every line it is drawn over: a line that starts left of
+    // the area's own edge is still a line of the page the reader is reading.
+    expect(onPage(text(-20, 200, 100, 126), false, 0, 800)).toBe(true);
+    expect(onPage(text(650, 900, 100, 126), false, 0, 800)).toBe(true);
+    // …and vertical type is measured across the page's own height.
+    expect(onPage(text(40, 240, -20, 100), true, 0, 600)).toBe(true);
+    expect(onPage(text(40, 240, 620, 700), true, 0, 600)).toBe(false);
   });
 
   it("gives up when the page shows one column", () => {
@@ -401,12 +414,22 @@ describe("bandOver", () => {
     expect((band.start + band.end) / 2).toBeCloseTo(126);
   });
 
-  it("caps a block taller than the lines it claims", () => {
+  it("caps a block taller than the lines it claims, from its front edge", () => {
     // A full-page image inside the block measures taller than any block of
     // lines; uncapped, the band would cover the page it is meant to clarify.
     const band = bandOver({ start: 100, end: 900 }, 26, 2);
     expect(band.end - band.start).toBeCloseTo(26 * 3);
-    expect((band.start + band.end) / 2).toBeCloseTo(500);
+    // From the front, not around the middle: a block spanning a gap taller than
+    // its leading has its centre *between* lines, and a band centred there
+    // washes empty paper instead of the words. Measured on a real book, the band
+    // landed 400px below the title it was marking.
+    expect(band.start).toBe(100 - Math.round(26 * RULER_PAD_FACTOR));
+  });
+
+  it("stays inside a block that is shorter than the lines it claims", () => {
+    // One line, two requested: the band cannot be taller than what it covers.
+    const band = bandOver({ start: 100, end: 126 }, 26, 2);
+    expect(band.end).toBeLessThanOrEqual(126 + Math.round(26 * RULER_PAD_FACTOR));
   });
 });
 

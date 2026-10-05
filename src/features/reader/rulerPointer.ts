@@ -111,16 +111,35 @@ export function relayRulerTurn(target: Element | null, dir: 1 | -1) {
 }
 
 /**
- * How much of a fragment has to be inside the window before it counts.
+ * Whether a fragment is *on the page the reader is reading*, across the page.
  *
- * A paginated book keeps the page it is not showing *flush against* the window —
- * the next section's frame starts a fraction of a pixel past the edge — and a
- * fragment of that page overlaps the window by exactly that fraction. Counted,
- * it drags the band's edges tens of pixels clear of the text, into the margin;
- * a line the reader can actually see half of overlaps by half a line. A pixel
- * separates the two.
+ * The reading area shows one page, and the pages around it are in the document
+ * too — mounted, laid out, and out of sight because they are clipped by the box
+ * they sit in:
+ *
+ * - a paginated book keeps the page it is not showing flush against the area's
+ *   edge, a fraction of a pixel in;
+ * - a column strip that has not caught up with the pane's new width puts a whole
+ *   column of itself inside the area — what showing, hiding or collapsing the
+ *   sidebar (and fullscreen, which moves the pane's own edges) does, since each
+ *   of them re-lays the page out under the ruler, the spring pinning the old
+ *   width until it lets go.
+ *
+ * Neither is part of what the reader is looking at, and counting one drags the
+ * band's edges clear of the text — the band ends up as wide as the *page*
+ * instead of as wide as the words, so it reads as if it had faded out into the
+ * margin, and it goes on reading that way until something else moves the ruler.
+ *
+ * The test is how much of the fragment is inside: more than half of it. A line
+ * of the page being read is inside by construction (a hanging one included); a
+ * fragment flush against the edge has essentially none of itself in the area,
+ * and a stale page or column shows only a fraction of itself there.
  */
-export const RULER_OVERLAP_PX = 1;
+export function onPage(rect: RulerRect, vertical: boolean, from: number, to: number): boolean {
+  const lo = vertical ? rect.top : rect.left;
+  const hi = vertical ? rect.bottom : rect.right;
+  return Math.min(hi, to) - Math.max(lo, from) > (hi - lo) / 2;
+}
 
 /**
  * Where the text sits across the page: its outermost edges, or `null` when
@@ -129,8 +148,9 @@ export const RULER_OVERLAP_PX = 1;
  * The outermost, not the typical: the band has to cover every line it is drawn
  * over, and a band sized to the middle of the edges would leave the wash cutting
  * into whichever lines reach further — a dialogue line that hangs left, the last
- * line of a paragraph. What keeps the band honest against a page next door is
- * the overlap rule above, not a narrower extent here.
+ * line of a paragraph. What keeps the band honest against a page next door, and
+ * against a page nobody can see, is `onPage` above and `lineRects` below: the
+ * first is a fragment's own coordinates, the second whether it is painted at all.
  */
 export function crossExtentOf(
   rects: readonly RulerRect[],
@@ -229,10 +249,9 @@ export function toColumns(
   const pitch = (to - from) / columns;
   const buckets: RulerRect[][] = Array.from({ length: columns }, () => []);
   for (const rect of rects) {
-    // A fragment counts when it is *inside* the window by more than a hair: the
-    // page next door sits flush against the edge, and its fragments overlap by
-    // less than a pixel (see `RULER_OVERLAP_PX`).
-    if (rect.right - from <= RULER_OVERLAP_PX || to - rect.left <= RULER_OVERLAP_PX) continue;
+    // A fragment counts when it is on this page: the page next door sits flush
+    // against the edge and a stale column straddles it (see `onPage`).
+    if (!onPage(rect, false, from, to)) continue;
     const centre = (rect.left + rect.right) / 2;
     const index = Math.min(columns - 1, Math.max(0, Math.floor((centre - from) / pitch)));
     buckets[index]!.push(rect);
@@ -387,9 +406,16 @@ export function nextColumnBlock(
 export function bandOver(block: RulerInterval, pitch: number, count: number): RulerInterval {
   const pad = Math.round(pitch * RULER_PAD_FACTOR);
   const cap = pitch * (Math.max(1, Math.floor(count)) + 1);
-  const extent = Math.min(block.end - block.start + 2 * pad, cap);
-  const centre = (block.start + block.end) / 2;
-  return { start: centre - extent / 2, end: centre + extent / 2 };
+  // From the block's own leading edge, not centred on it. A block is a run of
+  // lines, and on a page whose lines are sparse — a chapter title centred in
+  // three-quarters of a blank page, a section opening, a figure with a caption
+  // far below — the block spans gaps far taller than its own leading, so its
+  // centre is usually *between* two lines: centring there drew the band on
+  // empty paper, hundreds of pixels below the words it was supposed to mark, and
+  // as wide as the whole block besides. Anchored at the front edge, the band
+  // covers the lines the block is made of, which is what it is for.
+  const start = block.start - pad;
+  return { start, end: Math.min(start + cap, block.end + pad) };
 }
 
 /**
@@ -458,15 +484,60 @@ function medianAdvance(lines: readonly RulerInterval[]): number {
 const MAX_RECTS = 4000;
 
 /**
+ * Whether an element is out of sight — `display: none`, `visibility: hidden`,
+ * `opacity: 0` — in which case its text has a box and nothing to show.
+ *
+ * `checkVisibility` is the platform's own answer and knows every way an element
+ * can be hidden; where it is missing, a box is taken at face value.
+ */
+function outOfSight(el: Element | null): boolean {
+  return el?.checkVisibility?.({ checkOpacity: true, checkVisibilityCSS: true }) === false;
+}
+
+/**
  * Every line of type in `doc`, in that document's own client coordinates,
  * shifted by `dx`/`dy` when it has to be (a section is an iframe, and a rect
- * inside it says nothing about where the section sits on the reader's screen).
+ * inside it says nothing about where the section sits on the reader's screen),
+ * and cut down to `clip` — the box the renderer actually paints it inside.
+ *
+ * Only what the reader can actually see is measured, and that is the whole point
+ * of the door: a book that carries text nobody sees — a print-only running head,
+ * a sprite's alt line, a helper span with no line height — has boxes for it all
+ * the same, as wide as the page's content and as high as nothing, and a rect is
+ * all the ruler knows how to read. Measured on a real book, one of those was the
+ * widest thing in the section, and the band came out 13–29% of the window wider
+ * than the words in every state that resizes the pane. Neither the reading area's
+ * own coordinates nor the page's own frame can tell such a fragment from text:
+ * it is inside both.
+ *
+ * `clip` is the other half of "can be seen", and it is the half that has to be
+ * asked of the renderer. A paginated section is one long strip of pages inside a
+ * single iframe, and the paginator clips it to the page the reader is on — a box
+ * *narrower than the reading pane*, because the pane keeps an outer margin on
+ * each side. So the page next door is not flush against the pane's edge with
+ * none of itself inside (which is what `onPage` refuses); it starts inside the
+ * pane's margin, and its first line of text is a fragment a couple of hundred
+ * pixels long that clears the "more than half inside" test. Nothing paints it —
+ * the page box is `overflow: hidden` — and the band's cross extent is the union
+ * of the lines it washes, so that one phantom line dragged the band's right edge
+ * out to the pane's own edge. Measured: the band 929px wide on 672px of words,
+ * and the phantom was a `P` 162px wide sitting 79px outside the page box.
+ *
+ * So each rect is cut to the clip and dropped when nothing is left — the
+ * platform's own notion of what reaches the reader, and the only one that
+ * survives the page being re-laid out at a new width.
  *
  * `root` narrows the walk to the book's own text. On the prose path the reading
  * area holds chrome as well — the ruler would otherwise measure the header and
  * the page indicator and park the band on them.
  */
-export function lineRects(doc: Document, root: Element | null, dx = 0, dy = 0): RulerRect[] {
+export function lineRects(
+  doc: Document,
+  root: Element | null,
+  dx = 0,
+  dy = 0,
+  clip?: RulerRect | null,
+): RulerRect[] {
   const scope = root ?? doc.body;
   if (!scope) return [];
   const walker = doc.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
@@ -474,13 +545,24 @@ export function lineRects(doc: Document, root: Element | null, dx = 0, dy = 0): 
   const rects: RulerRect[] = [];
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!node.textContent?.trim()) continue;
+    if (outOfSight(node.parentElement)) continue;
     range.selectNodeContents(node);
     for (const rect of range.getClientRects()) {
+      // A box with no extent is no line: it cannot be read, stepped over, or
+      // landed on, and `toSpans` drops it for the axis — but its width across
+      // the page would still count towards where the text is.
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      // The clip is in the *host's* coordinates and a rect inside an iframe is
+      // not, so the cut happens after the shift — the one place where both
+      // frames are the same.
+      const left = Math.max(rect.left + dx, clip ? clip.left : -Infinity);
+      const right = Math.min(rect.right + dx, clip ? clip.right : Infinity);
+      if (right <= left) continue;
       rects.push({
         top: rect.top + dy,
         bottom: rect.bottom + dy,
-        left: rect.left + dx,
-        right: rect.right + dx,
+        left,
+        right,
       });
       if (rects.length >= MAX_RECTS) return rects;
     }
