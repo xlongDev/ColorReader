@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
 /**
  * The reading ruler: a band over a block of real lines, with everything outside
@@ -131,14 +132,22 @@ const LINES = `(() => {
         const bottom = rect.bottom + dy;
         const left = rect.left + dx;
         const right = rect.right + dx;
-        // Off the reading area on either axis, and by more than a hair: the page
-        // next door in a paged book sits flush against the window, a fraction of
-        // a pixel inside it, at heights and widths no line of this page has.
+        // On the page being read, by the ruler's own rule: *across* the page a
+        // fragment counts when more than half of it is inside the area — the
+        // page next door sits flush against the edge, and a page laid out again
+        // under the band can leave a column of itself straddling it, and neither
+        // is this page's text. *Along* the axis, what the window reaches.
+        const across = vertical
+          ? [top, bottom, hostBox.top, hostBox.bottom]
+          : [left, right, hostBox.left, hostBox.right];
         if (
-          right - hostBox.left <= 1 ||
-          hostBox.right - left <= 1 ||
-          bottom - hostBox.top <= 1 ||
-          hostBox.bottom - top <= 1
+          Math.min(across[1], across[3]) - Math.max(across[0], across[2]) <=
+          (across[1] - across[0]) / 2
+        ) {
+          continue;
+        }
+        if (
+          (vertical ? right - hostBox.left <= 1 || hostBox.right - left <= 1 : bottom - hostBox.top <= 1 || hostBox.bottom - top <= 1)
         ) {
           continue;
         }
@@ -281,15 +290,18 @@ const across = (box: Box, vertical: boolean) =>
  * is drawn a fixed distance *outside* the first and last line it covers, and
  * that distance is under half a line of leading, so a covered line's centre is
  * inside the band and its neighbour's is not. A band that fell back to
- * arithmetic has edges at arbitrary offsets instead — which is what the two
- * offsets being equal is here to catch, since an arithmetic band has no reason
- * for them to agree.
+ * arithmetic has edges at arbitrary offsets instead — which is what a stand-off
+ * beyond one line's leading is here to catch, since an arithmetic band is drawn
+ * at the settings' leading and the page's own lines are the renderer's.
  *
- * Only for a band that is not against the page's own edge: the band is clamped
- * inside the reading area, and a clamped band is legitimately off centre on its
- * block.
+ * Not "centred on the lines it covers": the band runs *from* the leading edge of
+ * its block downwards, and a block on a sparse page — a chapter title centred in
+ * three-quarters of a blank page, a section opening — is far taller than the
+ * lines the band is asked to cover. Centring on the block's middle put the band
+ * in the gap between two lines, on blank paper, hundreds of pixels from the words
+ * it was marking. What has to hold is the stand-off at each end.
  */
-function coveredLines(drawn: Drawn, lines: readonly Span[], label = "") {
+function coveredLines<T extends Span>(drawn: Drawn, lines: readonly T[], label = "") {
   const vertical = drawn.vertical;
   const low = vertical ? drawn.band.left : drawn.band.top;
   const high = vertical ? drawn.band.right : drawn.band.bottom;
@@ -304,21 +316,36 @@ function coveredLines(drawn: Drawn, lines: readonly Span[], label = "") {
   const tail = high - covered.at(-1)!.end;
   expect(head, `${label}带的上边离第一行太远`).toBeLessThan(lead);
   expect(tail, `${label}带的下边离最后一行太远`).toBeLessThan(lead);
-  expect(Math.abs(head - tail), `${label}带没有居中在它盖住的行上`).toBeLessThan(3);
+  // …and it hugs them: the band's own thickness is the lines it covers plus a
+  // stand-off at each end, so a band drawn well past them — on a figure, on the
+  // gap between two paragraphs, on the page's own width — is caught here too.
+  const thickness = covered.at(-1)!.end - covered[0]!.start;
+  expect(
+    high - low - thickness,
+    `${label}带比它盖住的那些行厚出一截（它罩住了行与行之间的空白）`,
+  ).toBeLessThan(lead * 2);
 
-  return { count: covered.length, first: covered[0]!.start };
+  return { count: covered.length, first: covered[0]!.start, covered };
 }
 
 /**
- * The band hugs the text it covers, across the page.
+ * The band hugs the lines it covers, across the page.
  *
- * The extent the ruler draws to is the text's own outermost edges, a pad outside
- * them; what it must never be is a strip across the whole window, nor one that
- * stops short of the lines it covers — the first reads as a band fading out into
- * the margin, the second as a wash cutting into the text.
+ * The extent the ruler draws to is those lines' own outermost edges, a pad
+ * outside them; what it must never be is a strip across the whole window, nor
+ * one that stops short of them — the first reads as a band fading out into the
+ * margin, the second as a wash cutting into the words.
+ *
+ * Handed the lines the band *covers*, not every line on the page: the band is a
+ * window on the block it is drawn on, so a longer line elsewhere on the page is
+ * washed like the rest of the page and says nothing about the band's width. (It
+ * used to be handed the whole page, and the width came from every fragment the
+ * section holds — including boxes for text nobody can see, which on a real book
+ * put the band 13–29% of the window wider than the words.)
  */
 function hugsText(drawn: Drawn, lines: readonly Interval[], label = "") {
   const vertical = drawn.vertical;
+  if (lines.length === 0) return;
   // `left`/`right` are the line's cross-axis extent in window coords in both
   // writing modes; `start`/`end` are the *reading* axis, which for vertical type
   // runs leftward and would compare apples to oranges here. The band's cross
@@ -482,7 +509,7 @@ test("the band and its washes tile the reading area, at the parked fraction", as
   // lines it marks.
   const lines = (await page.evaluate(LINES)) as Interval[];
   expect(lines.length, "一个行盒都没量到").toBeGreaterThan(3);
-  hugsText(drawn, lines);
+  hugsText(drawn, coveredLines(drawn, lines).covered);
 });
 
 test("the band's thickness follows the reader's line count", async ({ page }) => {
@@ -507,6 +534,461 @@ test("the band's thickness follows the reader's line count", async ({ page }) =>
   // the settings' leading while these lines are the renderer's.
   expect(coveredLines(two, lines).count, "设置两行时带覆盖的行数不对").toBe(2);
   expect(coveredLines(four, lines).count, "设置四行时带覆盖的行数不对").toBe(4);
+});
+
+test("a page with no words on it gets no band", async ({ page }) => {
+  // A plate, a cover, a full-page diagram: there is nothing on the page for the
+  // ruler to point at, and a band drawn anyway is a large empty rounded
+  // rectangle floating on blank paper. That is not a cosmetic difference — the
+  // reader sees a shape where there is no text and reads it as "it selected an
+  // empty thing".
+  //
+  // Distinct from *a line near where the band wants to be* (a paragraph gap, a
+  // figure, the lines just off the top of the window), which still gets an
+  // arithmetic band: that one marks a real place on a page that has text.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  // `enableRuler` waits for the band, which a wordless page never grows — so the
+  // switch is thrown here and the assertions below read the page as it is.
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.waitForTimeout(700);
+  await rulerGroup(page).getByRole("button", { name: "开启", exact: true }).click();
+  await page.waitForTimeout(400);
+  await closeSettings(page);
+  await page.waitForTimeout(1200);
+
+  // The fixture opens on its plate: no text at all.
+  const lines = (await page.evaluate(LINES)) as Interval[];
+  expect(lines.filter((l) => l.start >= 0).length, "插图页上竟然量到了行").toBe(0);
+  await expect(
+    page.locator("[data-ruler-band]"),
+    "无字页上画了带子（一个挂在空白上的空框）",
+  ).toHaveCount(0);
+
+  // And the washes go with it: there is no block of text for them to be outside.
+  await expect(page.locator('[data-ruler-wash="after"]')).toHaveCount(0);
+
+  // Turn on, and the band comes back with the words.
+  await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+  await page.waitForTimeout(2600);
+  const drawn = await rulerDrawn(page);
+  const prose = (await page.evaluate(LINES)) as Interval[];
+  const covered = prose.filter((line) => {
+    const centre = (line.start + line.end) / 2;
+    return centre > drawn.band.top && centre < drawn.band.bottom;
+  });
+  expect(covered.length, "翻到有字的页后带子仍然没落在任何一行上").toBe(1);
+  hugsText(drawn, covered);
+});
+
+test("the band lands on the words, not the gap above them, on a chapter opener", async ({
+  page,
+}) => {
+  // Every fixture in this suite is dense, evenly leaded prose, where a block of
+  // lines is barely taller than the band drawn over it — so a band centred on
+  // the block and a band running from its leading edge look the same, and the
+  // difference went unnoticed for three rounds of "fixed".
+  //
+  // A chapter opener is not like that. Its title is centred in three-quarters of
+  // a blank page, and the first paragraph sits hundreds of pixels below it, so
+  // the block that holds both is far taller than the band. Centred on the
+  // block, the band lands in the gap between the two lines: on blank paper,
+  // below the title it was marking, and — taking its width from the whole block
+  // rather than the lines it washes — as wide as the page. Measured on a real
+  // book: a 576px band with nothing at all under it.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await enableRuler(page);
+  // The fixture opens on its plate (a page with no text at all — see the case
+  // above). The opener is the next one.
+  await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+  await page.waitForTimeout(2600);
+
+  /** The lines the band is on, and the width it drew itself to match them. */
+  const on = async (label = "") => {
+    const band = await rulerDrawn(page);
+    const lines = (await page.evaluate(LINES)) as Interval[];
+    expect(lines.length, `${label}标题页一个字的行盒都没量到`).toBeGreaterThan(0);
+    const covered = lines.filter((line) => {
+      const centre = (line.start + line.end) / 2;
+      return centre > band.band.top && centre < band.band.bottom;
+    });
+    // On a line at all, which is the half that was broken: the band covered a
+    // stretch of page with no text anywhere in it.
+    expect(covered.length, `${label}带子底下没有一行字（它落在标题与正文之间的空白上了）`).toBe(1);
+    // And as wide as the words it is on — the title, not the paragraphs far
+    // below it that share the block.
+    hugsText(band, covered, `${label}：`);
+  };
+
+  await on();
+  // And it stays on it when the pane changes width: the block is re-derived,
+  // and a band centred on a block that tall lands in the gap again.
+  for (const label of ["折叠侧边栏", "全屏阅读"]) {
+    await page.getByRole("button", { name: label, exact: true }).first().click();
+    await page.waitForTimeout(2600);
+    await on(`${label}：`);
+  }
+});
+
+test("no screen in the book leaves the band floating where there is no line", async ({ page }) => {
+  // The one assertion that covers the report as a whole rather than one state:
+  // walk the book, and at every screen the band is either on a line and as wide
+  // as it, or not drawn at all. There is no third answer.
+  //
+  // A paged book hands this more states than a reader visits on purpose: every
+  // section boundary is a screen whose window reaches no line at all, and the
+  // section that arrives is mounted *outside* it (measured: the frame sitting
+  // 9,000–116,000px above the window). A band sized from a fragment like that
+  // is a wide empty rectangle on blank paper — the "it selected an empty thing"
+  // report — and a per-state check never sees it, because each state is
+  // checked on a page that happens to have words on it.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.waitForTimeout(700);
+  await rulerGroup(page).getByRole("button", { name: "开启", exact: true }).click();
+  await page.waitForTimeout(400);
+  await closeSettings(page);
+  await page.waitForTimeout(1200);
+
+  /** `on a line` | `not drawn` — and which of the two, with the numbers. */
+  const verdict = async () =>
+    (await page.evaluate(() => {
+      const host = document.querySelector("[data-reading-viewport]")!.getBoundingClientRect();
+      const bandEl = document.querySelector("[data-ruler-band]");
+      const spans: { c: number; l: number; r: number }[] = [];
+      for (const frame of document
+        .querySelector("foliate-view")
+        ?.shadowRoot?.querySelector("foliate-paginator")
+        ?.shadowRoot?.querySelectorAll("iframe") ?? []) {
+        const doc = frame.contentDocument;
+        const fb = frame.getBoundingClientRect();
+        if (!doc?.body || fb.width <= 0) continue;
+        const walker = doc.createTreeWalker(doc.body, NodeFilter.SHOW_TEXT);
+        const range = doc.createRange();
+        for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+          if (!n.textContent?.trim()) continue;
+          range.selectNodeContents(n);
+          for (const r of range.getClientRects()) {
+            if (r.width <= 0 || r.height <= 0) continue;
+            const l = r.left + fb.left - host.left;
+            const right = r.right + fb.left - host.left;
+            if (Math.min(right, host.width) - Math.max(l, 0) <= (right - l) / 2) continue;
+            spans.push({ c: (r.top + r.bottom) / 2 + fb.top - host.top, l, r: right });
+          }
+        }
+      }
+      if (!bandEl)
+        return { state: "none", nWin: spans.filter((s) => s.c >= 0 && s.c < host.height).length };
+      const b = bandEl.getBoundingClientRect();
+      const covered = spans.filter(
+        (s) => s.c > b.top - host.top + 1 && s.c < b.bottom - host.top - 1,
+      );
+      if (covered.length === 0) {
+        return { state: "adrift", nWin: spans.filter((s) => s.c >= 0 && s.c < host.height).length };
+      }
+      const lo = Math.min(...covered.map((s) => s.l));
+      const hi = Math.max(...covered.map((s) => s.r));
+      return {
+        state: "on a line",
+        nWin: spans.filter((s) => s.c >= 0 && s.c < host.height).length,
+        slack: Math.min(Math.abs(b.left - host.left - lo), Math.abs(hi - (b.right - host.left))),
+      };
+    })) as { state: string; nWin: number; slack?: number };
+
+  const tally = { onALine: 0, none: 0 };
+  for (let screen = 0; screen < 12; screen += 1) {
+    const v = await verdict();
+    expect(v.state, `第 ${screen} 屏：带子浮在没有一行字的地方`).not.toBe("adrift");
+    if (v.state === "none") {
+      tally.none += 1;
+      // Nothing on the page to mark: a wordless screen draws no band at all.
+      expect(v.nWin, `第 ${screen} 屏：屏内有 ${v.nWin} 行字，却没画带子`).toBe(0);
+    } else {
+      tally.onALine += 1;
+      expect(v.slack, `第 ${screen} 屏：带子与它罩住的那些行差 ${v.slack}px`).toBeLessThan(16);
+    }
+    await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+    await page.waitForTimeout(1400);
+  }
+  // Both answers must actually occur, or this walked one kind of screen twice.
+  expect(tally.onALine, "全程没有一屏带子落在字上，扫的不是正文").toBeGreaterThan(0);
+  expect(tally.none, "全程没有一屏无字，扫的不是标题页/插图页").toBeGreaterThan(0);
+});
+
+test("the band still hugs the text when the sidebar leaves the pane", async ({ page }) => {
+  // Collapsing, hiding and showing the sidebar (and going fullscreen) each resize
+  // the reading pane, and the pane's own resize is only half the story: the page
+  // is pinned through the spring and laid out *again* once the pin lets go, at a
+  // moment no element resizes.
+  //
+  // So the band has to follow the words to the *second* layout, and the trap is
+  // that the second layout arrives inside a reading area of the size it already
+  // has. A placement keyed on the area alone therefore decides, on the pinned
+  // layout, that the band is already where this pane wants it — and the words
+  // then re-wrap under a band that kept the measure of the page it was drawn on.
+  // Measured here: 117px out on a 1208px pane, on the one state whose width is
+  // set in two steps (hiding the sidebar swaps the rail for a caret that mounts
+  // afterwards). The key carries the measure the words were set in, so the
+  // re-wrap is a different page as far as the band is concerned.
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await enableRuler(page);
+
+  for (const label of ["折叠侧边栏", "隐藏侧边栏", "全屏阅读"]) {
+    await page.getByRole("button", { name: label, exact: true }).first().click();
+    // Wait for the band to come to rest, *then* read the page: the pane re-wraps
+    // and the band re-derives a frame or two after the transition starts, and a
+    // line list read in between belongs to a layout neither number came from.
+    await page.waitForTimeout(1600);
+    const drawn = await rulerDrawn(page);
+    await page.waitForTimeout(200);
+    const lines = (await page.evaluate(LINES)) as Interval[];
+    expect(lines.length, `${label}：一个字的行盒都没量到`).toBeGreaterThan(3);
+    // On whole lines, and as wide as the ones it is on.
+    const covered = coveredLines(drawn, lines, `${label}：`);
+    hugsText(drawn, covered.covered, `${label}：`);
+  }
+});
+
+test("the page next door does not widen the band, in either page layout", async ({ page }) => {
+  // A paginated section is one long strip of pages inside a single iframe, and
+  // the page on screen is a *window* onto it: the strip is a chapter wide, the
+  // paginator clips it to a page box narrower than the reading pane, and the
+  // pages either side are simply not painted.
+  //
+  // The pane's own coordinates cannot tell that from text. The page next door
+  // starts *inside* the pane's outer margin, so its first line — a short one, a
+  // heading or a paragraph's first line — is a fragment a couple of hundred
+  // pixels long sitting well inside the pane, and it clears every "is it in the
+  // reading area" test there is. The band's width is the union of the lines it
+  // washes, so that one phantom line dragged the band's edge out to the pane's
+  // own edge and the reader saw a band running a third of a page past the words.
+  //
+  // It is the *painted page* that has to decide, and only the renderer knows
+  // where that is. Measured on a real book, 折叠侧边栏: the band 929px wide on
+  // 672px of words, the phantom a `P` 162px wide starting 79px past the page box.
+  //
+  // Both page layouts are walked, because the two differ in exactly the way that
+  // matters — a single page puts the next page one column away, a spread puts a
+  // whole second column of the *same* page on the other side of the gutter, and
+  // a band that is only too wide on one of them is a band that is only too wide
+  // when the reader happens to be reading there.
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await enableRuler(page);
+
+  // Puts a line where the page next door would put one: inside the reading
+  // pane, outside the page the paginator paints, at the height the band is on.
+  // It is a real box with real text and every platform reports it visible —
+  // nothing about the fragment can refuse it, only the page box can.
+  const phantom = (on: boolean) =>
+    page.evaluate((show: boolean) => {
+      const frame = document
+        .querySelector("foliate-view")
+        ?.shadowRoot?.querySelector("foliate-paginator")
+        ?.shadowRoot?.querySelector("iframe");
+      const doc = frame?.contentDocument;
+      if (!frame || !doc?.body) return false;
+      const existing = doc.querySelector("[data-phantom]");
+      if (!show) {
+        existing?.remove();
+        return true;
+      }
+      if (existing) return true;
+      const frameBox = frame.getBoundingClientRect();
+      // The page box: the first ancestor of the frame narrower than the strip.
+      let painted = null;
+      for (let el = frame.parentElement; el; el = el.parentElement) {
+        const box = el.getBoundingClientRect();
+        if (box.width > 0 && box.width < frameBox.width) {
+          painted = box;
+          break;
+        }
+      }
+      if (!painted) return false;
+      const band = document.querySelector("[data-ruler-band]")?.getBoundingClientRect();
+      if (!band) return false;
+      const line = doc.createElement("p");
+      line.setAttribute("data-phantom", "");
+      line.textContent = "下一页的第一行，在页面之外，谁也看不见。".repeat(4);
+      // Positioned in the *frame's* coordinates, past the page's right edge and
+      // level with the band: inside the reading pane, outside the painted page.
+      line.style.cssText = [
+        "position:absolute",
+        "margin:0",
+        "white-space:nowrap",
+        `left:${painted.right - frameBox.left + 40}px`,
+        `top:${band.top - frameBox.top + 4}px`,
+      ].join(";");
+      doc.body.append(line);
+      return true;
+    }, on);
+
+  // Both states are exercised from a fresh sidebar each time: collapsing it is
+  // what puts the phantom inside the pane's margin in the first place, and the
+  // toggles are only on screen while the sidebar is showing.
+  for (const [mode, collapse] of [
+    ["单页", "折叠侧边栏"],
+    ["双页", "隐藏侧边栏"],
+  ] as const) {
+    await choose(page, mode);
+    await page.getByRole("button", { name: collapse, exact: true }).first().click();
+    await page.waitForTimeout(2000);
+
+    expect(await phantom(false), "没有找到 section 的文档，注入没做").toBe(true);
+    const before = await rulerDrawn(page);
+    expect(await phantom(true), "没有找到 section 的文档，注入没做").toBe(true);
+    // The pane's own resize is the ruler's re-measure, and it is the one thing
+    // here that is not the subject under test: the same width, the same page,
+    // the same lines, measured again with and without the phantom in it.
+    await page.setViewportSize({ width: 1282, height: 820 });
+    await page.waitForTimeout(300);
+    await page.setViewportSize({ width: 1280, height: 820 });
+    await page.waitForTimeout(1200);
+    const withPhantom = await rulerDrawn(page);
+    expect(await phantom(false), "没有找到 section 的文档，注入没做").toBe(true);
+    await page.waitForTimeout(1200);
+    const after = await rulerDrawn(page);
+
+    const area = before.host.right - before.host.left;
+    // Same width, same page, same lines: the only difference is a fragment on a
+    // page the reader cannot see, so neither edge of the band may have moved.
+    expect(
+      Math.abs(withPhantom.band.left - before.band.left),
+      `${mode}：看不见的下一页把带的左缘拖走了`,
+    ).toBeLessThan(1.5);
+    expect(
+      Math.abs(withPhantom.band.right - before.band.right),
+      `${mode}：看不见的下一页把带的右缘拖走了`,
+    ).toBeLessThan(1.5);
+    // …and nowhere near the pane's own edge, which is the shape of the report:
+    // the phantom reaches into the pane's margin, so a band that counted it
+    // runs to within a hair of the edge.
+    expect(
+      withPhantom.band.right - before.host.left,
+      `${mode}：带子顶到了阅读区的右缘（它量到了看不见的下一页）`,
+    ).toBeLessThan(area - 40);
+    // …and taking it away puts the band back, which is what says the two
+    // readings above are of the same page.
+    expect(
+      Math.abs(after.band.right - before.band.right),
+      `${mode}：带子没有回到原位`,
+    ).toBeLessThan(1.5);
+    // Back to a showing sidebar for the next layout. Both toggles live in
+    // different places — the collapsed rail's own chevron and the docked caret
+    // the hidden state leaves behind — so whichever is on screen answers.
+    const restore = page.getByRole("button", { name: /展开侧边栏|显示侧边栏/ }).first();
+    await restore.click();
+    await page.waitForTimeout(1800);
+  }
+});
+
+test("text nobody can see does not move the band's edges", async ({ page }) => {
+  // A book that carries text the reader never sees — a print-only running head, a
+  // clipped helper, a line with no font but a leading — has a *box* for it all
+  // the same, and a box is all a ruler can read. Measured on a real book, one of
+  // those was the widest thing in the section: the band came out 13–29% of the
+  // window wider than the words, in every state that re-lays the pane out (the
+  // sidebar collapsing, hiding or coming back; fullscreen).
+  //
+  // Nothing can filter that fragment out by looking at it: it is inside the
+  // reading area, inside the page, and the platform reports it visible. The band
+  // is a window on the block it is drawn on, so the width comes from those lines
+  // and this box is simply not one of them.
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await enableRuler(page);
+
+  /** Puts a line into the section that the reader cannot see, over the part of
+   *  the page the column's own text stops at — the only place a fragment like
+   *  this can hide from a filter. `null` takes it away again. */
+  const ghost = (on: boolean) =>
+    page.evaluate((show: boolean) => {
+      const frame = document
+        .querySelector("foliate-view")
+        ?.shadowRoot?.querySelector("foliate-paginator")
+        ?.shadowRoot?.querySelector("iframe");
+      const doc = frame?.contentDocument;
+      if (!doc?.body) return false;
+      const existing = doc.querySelector("[data-ghost]");
+      if (!show) {
+        existing?.remove();
+        return true;
+      }
+      if (existing) return true;
+      // A real box — real height, real width, the full content width of the
+      // page — that simply paints nothing: `color: transparent` is how a book
+      // carries a print-only running head or a helper line, and every platform
+      // reports it visible, because it is. Nothing that looks at the fragment
+      // can refuse it; only the band's own width, taken from the lines it is
+      // drawn on, can.
+      const line = doc.createElement("p");
+      line.setAttribute("data-ghost", "");
+      line.textContent = "没有人看得见的一行字，但它照样有一个盒子。".repeat(8);
+      // Wider than the column on purpose, and out to the right of where the
+      // column's own text stops — the shape the report had: a box as wide as the
+      // page's content where the words are a narrower measure inside it. The demo
+      // prose fills its column, so a ghost the same width as the text would prove
+      // nothing.
+      line.style.cssText = "color:transparent;margin:0;width:180%;white-space:nowrap";
+      doc.body.append(line);
+      return true;
+    }, on);
+
+  // The pane's own resize is the ruler's re-measure, and it is the one thing here
+  // that is not the subject under test: the same width, the same page, the same
+  // lines, measured again with and without the ghost in it. (Out and back, so the
+  // two readings are of the same layout and not of two widths.)
+  const remeasure = async (width: number) => {
+    await page.setViewportSize({ width: width + 2, height: 820 });
+    await page.waitForTimeout(200);
+    await page.setViewportSize({ width, height: 820 });
+    await page.waitForTimeout(900);
+    return rulerDrawn(page);
+  };
+  const width = 1264;
+
+  expect(await ghost(false), "没有找到 section 的文档，注入没做").toBe(true);
+  const without = await remeasure(width);
+  expect(await ghost(true), "没有找到 section 的文档，注入没做").toBe(true);
+  const withGhost = await remeasure(width);
+  expect(await ghost(false), "没有找到 section 的文档，注入没做").toBe(true);
+  const back = await remeasure(width);
+
+  // Same width, same page, same lines: the only difference is a fragment the
+  // reader cannot see, so neither edge of the band may have moved. (A pixel of
+  // slack for the engine rounding a column width at the width under test.)
+  expect(
+    Math.abs(withGhost.band.left - without.band.left),
+    "看不见的文字把带的左缘拖走了",
+  ).toBeLessThan(1.5);
+  expect(
+    Math.abs(withGhost.band.right - without.band.right),
+    "看不见的文字把带的右缘拖走了",
+  ).toBeLessThan(1.5);
+  // …and nowhere near the pane's own edge, which is what a fragment this wide
+  // does to it — the shape of the report, in one number.
+  const area = without.host.right - without.host.left;
+  expect(withGhost.band.right - without.host.left, "带子顶到了阅读区的右缘").toBeLessThan(
+    area - 40,
+  );
+  // …and taking it away puts the band back where it was, which is what says the
+  // two readings above are of the same page.
+  expect(Math.abs(back.band.right - without.band.right), "带子没有回到原位").toBeLessThan(1.5);
 });
 
 test("the band lands on whole lines, on a real EPUB, and again after a page turn", async ({
@@ -653,8 +1135,9 @@ test("on a spread the band covers one column, and the other one is washed", asyn
   const side: -1 | 1 = drawn.band.right <= middle ? -1 : 1;
   const inColumn = await columnLines(page, side);
   expect(inColumn.length, "双页下带所在的一栏一行都没量到").toBeGreaterThan(3);
-  expect(coveredLines(drawn, inColumn).count, "双页下带没有盖住整行").toBe(2);
-  hugsText(drawn, inColumn);
+  const covered = coveredLines(drawn, inColumn);
+  expect(covered.count, "双页下带没有盖住整行").toBe(2);
+  hugsText(drawn, covered.covered);
 });
 
 test("an arrow steps the band a whole block at a time, and the step is a move", async ({
