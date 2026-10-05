@@ -5,7 +5,6 @@ import { useReducedMotion } from "motion/react";
 import { cn } from "@/lib/cn";
 import {
   RULER_LAYOUT_EVENT,
-  RULER_OVERLAP_PX,
   RULER_PAD_FACTOR,
   bandOver,
   blockAt,
@@ -15,6 +14,7 @@ import {
   lineRects,
   nextBlock,
   nextColumnBlock,
+  onPage,
   toColumns,
   toLines,
   toSpans,
@@ -29,6 +29,22 @@ import { MAX_RULER_OPACITY, rulerHex, useReaderSettings } from "@/stores/reader"
  * rounds, and a rounded rectangle that touches the frame reads as a clipped one.
  */
 const RULER_INSET = 8;
+
+/**
+ * The band as drawn: its place along the reading axis, the extent of the lines it
+ * covers across the page (`null` when there was nothing to measure), and whether
+ * the page it is on has no lines in the reading area at all.
+ *
+ * That last one is not a detail. A page the window reaches no line of — a cover,
+ * a plate, the top three-quarters of a chapter opener — is a page with nothing
+ * to mark, and a band drawn there is a large empty rounded rectangle floating on
+ * blank paper, which is what a reader sees and reports as "it selected an empty
+ * thing". The two cases are different questions: *no line near where the band
+ * wants to be* still gets an arithmetic band (a figure, a paragraph gap, the
+ * lines just off the top of the window), while *no line on the page* gets
+ * nothing at all.
+ */
+type Band = RulerInterval & { from: number | null; to: number | null; blank: boolean };
 
 /** One step's worth of motion. The band arrives at a line block, so it travels
  *  on the landing curve rather than an expo-out, which would front-load the
@@ -148,18 +164,12 @@ export function ReadingRuler({
   const update = useReaderSettings((state) => state.update);
   const reduce = useReducedMotion();
 
-  /** The band as drawn, along the reading axis in the host's own coordinates. */
-  const [band, setBand] = useState<RulerInterval | null>(null);
+  /** The band as drawn: where it sits along the reading axis, and — `from`/`to` —
+   *  the extent of the lines it was drawn on, across the page. `null` extent when
+   *  there was nothing to measure, which falls back to the band's own inset. */
+  const [band, setBand] = useState<Band | null>(null);
   /** The reading area itself, so the wash can be sized in the render. */
   const [area, setArea] = useState<{ axis: number; cross: number }>({ axis: 0, cross: 0 });
-  /**
-   * Where the text being read sits *across* the page, so the band can be as wide
-   * as the words it covers instead of a strip across the whole window — a band
-   * that runs past the text into the margins reads as if it had faded out before
-   * and after the lines it marks. `null` when nothing is measured yet, which
-   * falls back to the band's own inset.
-   */
-  const [edges, setEdges] = useState<{ from: number; to: number } | null>(null);
   const [dragging, setDragging] = useState(false);
   /** A step is in flight: the band travels to its block rather than jumping. */
   const [stepping, setStepping] = useState(false);
@@ -173,7 +183,28 @@ export function ReadingRuler({
   const columnsRef = useRef<RulerColumn[]>([]);
   const activeColumnRef = useRef(0);
   const areaRef = useRef({ axis: 0, cross: 0 });
-  const bandRef = useRef<RulerInterval | null>(null);
+  /** The fragments the lines were measured from, which is also what says how wide
+   *  the band is — see `applyBlock`. */
+  const rectsRef = useRef<RulerRect[]>([]);
+  /** Where those fragments ran across the page, as a short signature. Part of the
+   *  placement key, because a page can re-wrap without the reading area changing
+   *  shape — see `place`. */
+  const measureSigRef = useRef("");
+  /**
+   * Where the band sat, as a fraction of the reading axis, re-derived at every
+   * measure from the lines themselves rather than from the stored setting.
+   *
+   * The stored `rulerPosition` is a percentage, and a percentage is only stable
+   * while the page keeps its shape. A reading area that changes width re-wraps
+   * the text, the block under that percentage becomes a different block, and on
+   * a page whose lines are few and far between — a chapter title centred in
+   * three-quarters of a blank page — it becomes a block somewhere else
+   * entirely: measured on a real book, entering fullscreen dropped the band onto
+   * a figure caption, and it then drew itself as wide as that caption. The
+   * fraction of the *line the band was on* is the thing that survives.
+   */
+  const anchorFracRef = useRef<number | null>(null);
+  const bandRef = useRef<Band | null>(null);
   const gripRef = useRef<{ centre: number; extent: number; at: number } | null>(null);
   const stepTimerRef = useRef<number | null>(null);
   /** The frame on which a landing band fades in. */
@@ -187,10 +218,19 @@ export function ReadingRuler({
   const movedRef = useRef(false);
   /** The way the page last turned, consumed by the placement that meets it. */
   const dirRef = useRef<1 | -1 | 0>(0);
-  /** What the last placement was made for: the reading area's axis and the
+  /** What the last placement was made for: the reading area's own size and the
    *  leading the band was sized against. A page that moved *under* a band made
-   *  for the same ones leaves it exactly where it is; a new axis or a new
-   *  leading is a new band, and it is placed. */
+   *  for the same ones leaves it exactly where it is; a differently shaped
+   *  reading area or a new leading is a new band, and it is placed.
+   *
+   *  Both extents, and the width is the one that earns its place: the band's
+   *  width is the extent of the lines it covers, so a pane that changed width
+   *  re-wrapped them and they are a different length. Leaving the width out is
+   *  what made the band keep the measure of the page it was drawn on when the
+   *  sidebar collapsed, was hidden, or the reader went fullscreen — the pane got
+   *  wider, the words re-wrapped, and the band stayed the width of the words it
+   *  had before, running out past them (or stopping short) by however much the
+   *  measure changed. */
   const placedKeyRef = useRef("");
 
   const pad = Math.round(pitch * RULER_PAD_FACTOR);
@@ -199,38 +239,123 @@ export function ReadingRuler({
    *  page it landed on — travels on the landing curve; a re-measure (a resize, a
    *  repagination under a still band) must not, or the band would chase every
    *  frame of it. */
-  const draw = useCallback((next: RulerInterval, animate: boolean) => {
-    bandRef.current = next;
-    setBand(next);
-    setStepping(animate);
-    if (stepTimerRef.current !== null) window.clearTimeout(stepTimerRef.current);
-    stepTimerRef.current = window.setTimeout(() => {
-      stepTimerRef.current = null;
-      setStepping(false);
-    }, RULER_STEP_MS);
-  }, []);
-
-  /** Draws the band around a block. */
-  const applyBlock = useCallback(
-    (block: RulerInterval, animate: boolean) => {
-      const { axis } = areaRef.current;
-      if (axis <= 0) return;
-      const wanted = bandOver(block, pitch, rulerLines);
-      const extent = wanted.end - wanted.start;
-      const centre = clampAnchor((wanted.start + wanted.end) / 2, extent, 0, axis);
-      draw({ start: centre - extent / 2, end: centre + extent / 2 }, animate);
+  const draw = useCallback(
+    (
+      next: RulerInterval,
+      animate: boolean,
+      from: number | null,
+      to: number | null,
+      blank = false,
+    ) => {
+      const drawnBand: Band = { ...next, from, to, blank };
+      bandRef.current = drawnBand;
+      setBand(drawnBand);
+      setStepping(animate);
+      if (stepTimerRef.current !== null) window.clearTimeout(stepTimerRef.current);
+      stepTimerRef.current = window.setTimeout(() => {
+        stepTimerRef.current = null;
+        setStepping(false);
+      }, RULER_STEP_MS);
     },
-    [draw, pitch, rulerLines],
+    [],
   );
 
-  /** No line to sit on: the reader's own leading still marks the place. */
+  /**
+   * How wide the band is, across the page: the extent of the lines it is drawn
+   * on, and of nothing else.
+   *
+   * It used to be the extent of every fragment in the section, and that is a
+   * different thing. A book carries text the reader never sees — a print-only
+   * running head, a helper laid off the column, a `font-size: 0` line that still
+   * has leading — and it has a *box* for it all the same, as wide as the page's
+   * content and as invisible as it is unpainted. `checkVisibility` cannot see
+   * those (clipping and a zero font are not visibility), and no rule on the
+   * fragment's own coordinates can either: such a box is inside the reading area
+   * and inside the page. All of them land in one union, and the band comes out
+   * as wide as the page instead of as wide as the words — measured on real books,
+   * 13–29% of the window wider, in every state that re-lays the pane out.
+   *
+   * So the width is taken from the lines the band is *drawn on* — not from the
+   * block it was handed. A block is a run of `rulerLines` lines, but the block
+   * the reader lands on can be far taller than the band that covers it: a
+   * chapter title centred in three-quarters of a blank page puts its only line at
+   * the top and the paragraphs below in the same block, and the union of that
+   * whole block is the page's own width. Measured on a real book, entering
+   * fullscreen put the band on a 456px block holding a 124px title and the
+   * paragraphs under it, and drew the band 576px wide — wider than anything the
+   * reader could see on it. The band is a window on the lines it washes, so the
+   * lines it washes are what it is as wide as.
+   *
+   * The two paths where a block is not a run of lines keep their own extent: a
+   * spread's block is one column of a two-column grid (its lines share heights,
+   * so the block alone would not say which column it is on), and a vertical line
+   * runs the page's full height by construction — the text not filling it is
+   * justification, not geometry.
+   */
+  const crossOf = useCallback(
+    (washed: RulerInterval, column?: RulerColumn) => {
+      const { cross } = areaRef.current;
+      return crossExtentOf(
+        rectsRef.current.filter((rect) => {
+          const lo = vertical ? cross - rect.right : rect.top;
+          const hi = vertical ? cross - rect.left : rect.bottom;
+          if (hi <= washed.start || lo >= washed.end) return false;
+          if (!column) return true;
+          const near = vertical ? rect.top : rect.left;
+          const far = vertical ? rect.bottom : rect.right;
+          return far > column.left && near < column.right;
+        }),
+        vertical,
+      );
+    },
+    [vertical],
+  );
+
+  /** Draws the band around a block, as wide as the lines in it. */
+  const applyBlock = useCallback(
+    (target: RulerInterval, animate: boolean, column?: RulerColumn) => {
+      const { axis } = areaRef.current;
+      if (axis <= 0) return;
+      const wanted = bandOver(target, pitch, rulerLines);
+      const extent = wanted.end - wanted.start;
+      const centre = clampAnchor((wanted.start + wanted.end) / 2, extent, 0, axis);
+      // A vertical line is a column that runs the page's full height by
+      // construction — the text not filling it is justification, not geometry —
+      // so that band stands the page's own height and the wash only its insets.
+      // A spread hands the block back from one column, and its lines share
+      // heights with the other column's, so the block alone cannot say which one
+      // it is on: that path takes the width of the column it is stepping in.
+      //
+      // The band, not the block: `wanted` is the stretch of lines it actually
+      // covers, and that is the window whose words it has to be as wide as.
+      const edges = vertical ? null : crossOf(wanted, column);
+      draw(
+        { start: centre - extent / 2, end: centre + extent / 2 },
+        animate,
+        edges?.from ?? null,
+        edges?.to ?? null,
+      );
+    },
+    [crossOf, draw, pitch, rulerLines, vertical],
+  );
+
+  /**
+   * No line to sit on where the band wants to be: the reader's own leading still
+   * marks the place, and with no lines there is nothing to be as wide as — the
+   * band's own inset it is.
+   *
+   * A page with *no lines in the window at all* is marked `blank` instead, and
+   * the render drops it. That is a different thing from a paragraph gap: there
+   * is nothing on this page for the ruler to point at, so it points at nothing.
+   */
   const applyFallback = useCallback(
     (centre: number, animate = false) => {
       const { axis } = areaRef.current;
       if (axis <= 0) return;
+      const blank = linesRef.current.length === 0 && columnsRef.current.length === 0;
       const extent = pitch * Math.max(1, Math.floor(rulerLines));
       const at = clampAnchor(centre, extent, 0, axis);
-      draw(fallbackBand(at, pitch, rulerLines), animate);
+      draw(fallbackBand(at, pitch, rulerLines), animate, null, null, blank);
     },
     [draw, pitch, rulerLines],
   );
@@ -286,16 +411,21 @@ export function ReadingRuler({
     areaRef.current = next;
     setArea((was) => (was.axis === next.axis && was.cross === next.cross ? was : next));
 
-    // Only what the reader can see takes part, on *both* axes — and "on" means
-    // inside by more than a hair (`RULER_OVERLAP_PX`): a paginated book keeps
-    // the page it is not showing flush against the window, and that page's
-    // fragments overlap by a fraction of a pixel while sitting tens of pixels
-    // clear of this page's text.
-    const rects = raw.filter((rect) =>
-      vertical
-        ? rect.top < next.cross - RULER_OVERLAP_PX && rect.bottom > RULER_OVERLAP_PX
-        : rect.left < next.cross - RULER_OVERLAP_PX && rect.right > RULER_OVERLAP_PX,
-    );
+    // Only what the reader can see takes part, on *both* axes. Across the page
+    // that means fragments that are *on this page*: a paginated book keeps the
+    // pages either side of this one in the document, flush against the reading
+    // area and — after the pane's own width changes — straddling it, and a
+    // fragment off either edge drags the band out into the margin. Along the
+    // axis it means the lines the window reaches, below. (A page that is laid
+    // out *inside* the area and painted nowhere is the other half of that
+    // problem, and only the renderer can see it — see `FoliateBookView`.)
+    const rects = raw.filter((rect) => onPage(rect, vertical, 0, next.cross));
+    rectsRef.current = rects;
+    // The outermost edges of what is on the page, not the typical ones: this is a
+    // fingerprint of the measure the words were set in, and the band's own width
+    // is those words' width.
+    const extent = crossExtentOf(rects, vertical);
+    measureSigRef.current = extent ? `${Math.round(extent.from)}:${Math.round(extent.to)}` : "-";
 
     if (columns > 1 && !vertical) {
       // A spread: two flows whose line grids do not agree, so they are measured
@@ -314,25 +444,25 @@ export function ReadingRuler({
       if (dirRef.current === -1) activeColumnRef.current = Number.MAX_SAFE_INTEGER;
       const active = Math.min(activeColumnRef.current, Math.max(0, measured.length - 1));
       activeColumnRef.current = active;
-      const column = measured[active] ?? null;
-      const nextEdges = column ? { from: column.left, to: column.right } : null;
-      setEdges((was) =>
-        was?.from === nextEdges?.from && was?.to === nextEdges?.to ? was : nextEdges,
-      );
       return measured.reduce((total, entry) => total + entry.lines.length, 0);
     }
 
     linesRef.current = visibleLines(toLines(toSpans(rects, vertical, next.cross)), 0, next.axis);
     columnsRef.current = [];
-    // Hugging the text is a *horizontal* reading: a line there is a row whose
-    // width is the column's own measure, and the band covering it should be that
-    // wide. A vertical line is a column that runs the page's full height by
-    // construction — the text not filling it is justification, not geometry — so
-    // the band keeps the page's own extent and the wash only the insets.
-    const nextEdges = vertical ? null : crossExtentOf(rects, false);
-    setEdges((was) =>
-      was?.from === nextEdges?.from && was?.to === nextEdges?.to ? was : nextEdges,
-    );
+    // The lines moved under a band that has not moved: the fraction it now sits
+    // at is the one to keep, and it is the only reading of "where it was" that
+    // survives the next re-wrap.
+    const drawn = bandRef.current;
+    if (drawn && next.axis > 0) {
+      const centre = (drawn.start + drawn.end) / 2;
+      if (centre >= 0 && centre <= next.axis) {
+        const at = centre / next.axis;
+        // Only a band that is on the page says anything about where on it.
+        if (anchorFracRef.current === null || Math.abs(at - anchorFracRef.current) < 0.2) {
+          anchorFracRef.current = at;
+        }
+      }
+    }
     return linesRef.current.length;
   }, [columns, hostRef, lines, vertical]);
 
@@ -365,24 +495,35 @@ export function ReadingRuler({
     // it. Re-snapping there is a movement they never asked for — the band
     // shifting again half a second after the scroll — and a band drawn on the
     // page is right wherever it stands. Only the first measure, a turn, or a band
-    // that is a different shape than the last one (a new leading, a resized
-    // reading area) set the place.
-    const key = `${axis}|${rulerLines}|${pitch}`;
+    // that this page would not draw itself sets the place.
+    //
+    // "This page" is the reading area's size *and* where its words ran, and the
+    // second half is not optional. The sidebar spring pins the page for half a
+    // second, and the ruler measures it there: it stamps the key with the width
+    // the pane is *about* to have. The pin lets go, the page re-wraps into the
+    // width the pane already had, the key is unchanged — so the re-measure agreed
+    // that nothing had changed, `place` declined, and the band kept the measure
+    // of the page it was drawn on, sitting a pane's width off the words until
+    // something else moved it.
+    const key = `${areaRef.current.cross}|${axis}|${measureSigRef.current}|${rulerLines}|${pitch}`;
     if (dir === 0 && drawn && placedKeyRef.current === key) return;
     placedKeyRef.current = key;
     const held = dir === 0 && movedRef.current ? drawn : null;
-    const centre = held ? (held.start + held.end) / 2 : ((seedRef.current ?? 0) / 100) * axis;
+    // A page the reader has not touched is placed where the last measure found
+    // the band on *this* page, which a re-wrap moves with the text; the stored
+    // percentage is the fallback for a page measured for the first time.
+    const fraction = anchorFracRef.current ?? (seedRef.current ?? 0) / 100;
+    const centre = held ? (held.start + held.end) / 2 : fraction * axis;
     const half = held ? Math.max(0, (held.end - held.start) / 2 - pad) : (pitch * rulerLines) / 2;
     const anchor = dir === 1 ? 0 : dir === -1 ? axis : centre - half;
 
     const page = columnsRef.current.length > 0 ? null : linesRef.current;
-    const block = page
-      ? blockNear(page, anchor)
-      : blockNear(columnsRef.current[activeColumnRef.current]?.lines ?? [], anchor);
+    const column = columnsRef.current[activeColumnRef.current] ?? null;
+    const block = page ? blockNear(page, anchor) : blockNear(column?.lines ?? [], anchor);
     const landing = dir !== 0 || !drawn;
     // On the page that arrived, in place: the handover is the fade, not a slide
     // from wherever the band was standing when the page left.
-    if (block) applyBlock(block, false);
+    if (block) applyBlock(block, false, column ?? undefined);
     else applyFallback(dir === 1 ? half : dir === -1 ? axis - half : centre, false);
     // Switched on, or handed to a page that arrived: the band appears on the
     // page rather than travelling to it. A turn's band rides the old page for
@@ -413,9 +554,7 @@ export function ReadingRuler({
         if (!next) return false;
         activeColumnRef.current = next.index;
         movedRef.current = true;
-        const target = columnsRef.current[next.index];
-        if (target) setEdges({ from: target.left, to: target.right });
-        applyBlock(next.block, true);
+        applyBlock(next.block, true, columnsRef.current[next.index]);
         remember();
         return true;
       }
@@ -456,11 +595,20 @@ export function ReadingRuler({
   const onDragMove = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       const grip = gripRef.current;
+      const drawn = bandRef.current;
       const { axis } = areaRef.current;
-      if (!grip || axis <= 0) return;
+      if (!grip || !drawn || axis <= 0) return;
       const moved = (vertical ? event.clientX : event.clientY) - grip.at;
       const centre = clampAnchor(grip.centre + moved, grip.extent, 0, axis);
-      const next = { start: centre - grip.extent / 2, end: centre + grip.extent / 2 };
+      // A drag moves the band down the page and not across it: the lines it was
+      // measured on are the reader's own now, and they keep their own width.
+      const next: Band = {
+        start: centre - grip.extent / 2,
+        end: centre + grip.extent / 2,
+        from: drawn.from,
+        to: drawn.to,
+        blank: drawn.blank,
+      };
       bandRef.current = next;
       setBand(next);
       event.preventDefault();
@@ -493,6 +641,12 @@ export function ReadingRuler({
     // The lines a measure last counted, so the loop can tell a page still
     // arriving from a page that is there.
     let counted = -1;
+    // …and where those lines *are*: a page that re-wraps has the same number of
+    // lines in a different measure, and a pane whose width changed under a
+    // settled band has the same count again after the caret that replaced the
+    // sidebar has mounted. Two measures agreeing on the count is not the page
+    // agreeing it is the same page.
+    let countedShape = "";
     // The words are not always there yet: a chapter is fetched, a section has to
     // lay out, and neither resizes anything this effect observes. One ask per
     // frame covers the words that arrive within a couple of seconds; past that
@@ -506,16 +660,37 @@ export function ReadingRuler({
     // measures in a row to agree: measured against a page still growing, the band
     // snaps to whatever fragment is on screen — a stray line at the top of an
     // empty column — and then sits on it until something else moves the page.
+    //
+    // Agreement is the line count *and* the shape of the reading area it was
+    // measured in, because a page that re-wraps has the same lines in a different
+    // measure — and that is exactly what the sidebar and fullscreen do. Counting
+    // lines alone settled the loop on the first frame of the spring, against a
+    // pane still pinned at the old width; the pin let go half a second later,
+    // nothing asked again, and the band kept the measure of the page it had been
+    // drawn on, sitting a pane's width off the words.
+    //
+    // **Zero lines is an answer too**, and this is where it used to hang. A page
+    // whose window reaches no line — a chapter opener whose title sits inside the
+    // top three-quarters of the page, a plate, a section whose next screen holds
+    // the words — measures zero, so `measured > 0` was false, so `place` was
+    // never called, so the band kept the position it had on the *previous* page
+    // and the loop asked again forever. Measured on a real book: 184 measures in
+    // 6 seconds, the band parked 400px above the words, and the reader saw a
+    // band floating on blank paper. Zero lines means the band is placed
+    // arithmetically, which is the honest answer for a page with no lines to sit
+    // on; what it must never mean is *not placed*.
     const ask = () => {
       if (pending) return;
       pending = true;
       frame = requestAnimationFrame(() => {
         pending = false;
         const measured = measure();
-        if (measured > 0 && measured === counted) {
+        const shape = `${areaRef.current.cross}x${areaRef.current.axis}`;
+        if (measured === counted && shape === countedShape) {
           place();
           return;
         }
+        countedShape = shape;
         counted = measured;
         tries += 1;
         if (tries >= SETTLE_TRIES && skipped++ < SETTLE_WALK) {
@@ -543,6 +718,7 @@ export function ReadingRuler({
         // A re-measure after a page turn meets a page of the same shape, so the
         // count it last saw cannot be trusted to say the new one has arrived.
         counted = -1;
+        countedShape = "";
         ask();
       });
     };
@@ -593,7 +769,10 @@ export function ReadingRuler({
     return () => atExit();
   }, [remember]);
 
-  if (!enabled || !band) return null;
+  // Nothing to mark on this page: no band at all, rather than a large empty
+  // rounded rectangle on blank paper. The washes go with it — there is no block
+  // of text for them to be "outside" of.
+  if (!enabled || !band || band.blank) return null;
 
   const tint = rulerHex(rulerColor);
   const fade = Math.min(Math.max(rulerOpacity, 0.05), MAX_RULER_OPACITY);
@@ -602,12 +781,13 @@ export function ReadingRuler({
   // order, so the *other* one is the only one that has to be flipped back:
   // vertical-rl reads leftward, and a band standing `start` away from the right
   // edge is drawn from that edge. Across the page the band is as wide as the
-  // words it covers — a strip that runs on past the text into the margins reads
-  // as if the band had faded out before and after the lines it marks — and the
+  // words it covers — a strip that runs on past them into the margins reads as if
+  // it had faded out before and after the lines it marks (`crossOf`) — and the
   // band's own inset is what a page with nothing measured yet gets.
-  const cross = edges
-    ? { from: Math.max(0, edges.from - pad), to: Math.min(area.cross, edges.to + pad) }
-    : { from: RULER_INSET, to: Math.max(RULER_INSET, area.cross - RULER_INSET) };
+  const cross =
+    band.from !== null && band.to !== null
+      ? { from: Math.max(0, band.from - pad), to: Math.min(area.cross, band.to + pad) }
+      : { from: RULER_INSET, to: Math.max(RULER_INSET, area.cross - RULER_INSET) };
 
   // The properties that actually move: on a step, the band and the four washes
   // travel together, on the landing curve. Nothing glides while the reader is
