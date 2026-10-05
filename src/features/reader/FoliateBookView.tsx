@@ -168,6 +168,9 @@ export type FoliateHandle = {
    * paginated section is one long strip shown through a moving window: the
    * off-screen columns come back as rects far outside the reading area, where
    * the ruler's "nearest line" rule can never pick them.
+   *
+   * Each section's rects are also cut to the page the paginator is actually
+   * painting — see `pageBox`.
    */
   rulerLines: () => readonly RulerRect[];
 };
@@ -449,6 +452,40 @@ const applyLayout = (
   ] as const) {
     renderer.setAttribute(name, `${px}px`);
   }
+};
+
+/**
+ * The page a section is painted on, in host window coordinates — the box
+ * foliate's paginator actually clips that section to, or `null` when it has not
+ * been laid out yet.
+ *
+ * A paginated section is one long strip of pages inside a single iframe, and
+ * the page on screen is a *window onto it*: the iframe is as wide as the whole
+ * chapter, and the paginator clips it to a page box narrower than the reading
+ * pane (the pane keeps an outer margin on each side, and the page sits centred
+ * in it). Nothing of the pages either side is painted, and the reading area's
+ * own coordinates cannot tell that from text: the next page starts inside the
+ * pane's margin, so its first line — a fragment a couple of hundred pixels long
+ * — passes any "is it inside the pane" test the ruler could write.
+ *
+ * The box is read rather than derived. The paginator's own view element is the
+ * one that clips (an `overflow: hidden` box whose width is the page, not the
+ * strip), and asking the DOM for it survives every re-layout: the sidebar
+ * collapsing, fullscreen, a change of column count. Reconstructing it from the
+ * column pitch and the pane's centre is arithmetic that has to be redone
+ * whenever foliate changes how it spaces pages.
+ */
+const pageBox = (frame: HTMLElement, strip: DOMRect): RulerRect | null => {
+  // `frame` → the view element that clips it → the container that clips that.
+  // The first ancestor narrower than the strip is the page.
+  for (let el = frame.parentElement; el; el = el.parentElement) {
+    const box = el.getBoundingClientRect();
+    if (box.width <= 0 || box.height <= 0) continue;
+    if (box.width < strip.width) {
+      return { top: box.top, bottom: box.bottom, left: box.left, right: box.right };
+    }
+  }
+  return null;
 };
 
 /** One text node of a block, with its offset inside the block's raw text. */
@@ -1034,6 +1071,15 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       relayRulerLayout(viewRef.current, dir);
     };
 
+    /**
+     * The page has been laid out again from scratch — a pane that changed
+     * width, a repagination — and the new geometry is final: the ruler
+     * measures once more, so its band is sized to the lines that are actually
+     * on the page. `dir` is zero on purpose: a re-layout moves the page *under*
+     * the band, which is not the same event as arriving on a new page.
+     */
+    const onStabilized = () => relayRulerLayout(viewRef.current);
+
     void (async () => {
       try {
         // Kick off the foliate chunk load immediately so it parses in parallel
@@ -1121,6 +1167,16 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         const renderer = view.renderer;
         if (renderer) {
           renderer.addEventListener("load", attachSection);
+          // The page is re-columnised whenever the reading area's width
+          // changes, and the paginator says when the new geometry is final.
+          // That notice is the ruler's only one for a re-layout nobody else
+          // hears: collapsing, hiding or showing the sidebar leaves the article
+          // pinned through the spring and lets go of it half a second later, so
+          // the pane's own `ResizeObserver` has long since stopped firing while
+          // the page is still being laid out again underneath the band — and a
+          // band measured against the layout that is going away stays parked on
+          // lines that are no longer where it put them.
+          renderer.addEventListener("stabilized", onStabilized);
           for (const { doc } of renderer.getContents()) {
             if (!doc) continue;
             // Through the same door as a later section: the paginator does not
@@ -1245,6 +1301,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       ttsRef.current = null;
       if (view) {
         view.renderer?.removeEventListener("load", attachSection);
+        view.renderer?.removeEventListener("stabilized", onStabilized);
         view.removeEventListener("relocate", onRelocate);
         view.removeEventListener("draw-annotation", onDrawAnnotation);
         view.removeEventListener("show-annotation", onShowAnnotation);
@@ -1465,9 +1522,14 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       rulerLines: () => {
         const rects: RulerRect[] = [];
         for (const entry of viewRef.current?.renderer?.getContents() ?? []) {
-          const frame = entry.doc.defaultView?.frameElement?.getBoundingClientRect();
-          if (!frame || frame.width <= 0 || frame.height <= 0) continue;
-          rects.push(...lineRects(entry.doc, null, frame.left, frame.top));
+          const frame = entry.doc.defaultView?.frameElement as HTMLElement | null;
+          if (!frame) continue;
+          const box = frame.getBoundingClientRect();
+          if (box.width <= 0 || box.height <= 0) continue;
+          // Cut to the page the paginator paints: the strip is a chapter wide,
+          // and the page next door starts inside the pane's own margin — so its
+          // first line has a box there, and nothing on the screen.
+          rects.push(...lineRects(entry.doc, null, box.left, box.top, pageBox(frame, box)));
         }
         return rects;
       },
