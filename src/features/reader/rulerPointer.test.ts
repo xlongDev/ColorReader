@@ -431,6 +431,54 @@ describe("bandOver", () => {
     const band = bandOver({ start: 100, end: 126 }, 26, 2);
     expect(band.end).toBeLessThanOrEqual(126 + Math.round(26 * RULER_PAD_FACTOR));
   });
+
+  it("takes only the whitespace there is when the lines have no air", () => {
+    // A book whose leading is tighter than its own type is high: the line boxes
+    // overlap, so two consecutive lines share 3.4px of box and there is no
+    // whitespace between them at all. Three tenths of that advance is 6px, and
+    // padding by it put each edge inside the neighbouring line — which is what
+    // 「上下均超出了一些」 is. Measured on a real book (《认识世界》, 18px,
+    // 跟随书籍): the band overran by 9.4px at the top and 6.0px at the bottom.
+    const tight = toLines(toSpans([box(0, 25), box(21.6, 46.6), box(43.2, 68.2)], false, 800));
+    expect(tight).toHaveLength(3);
+    const band = bandOver({ start: 21.6, end: 46.6 }, 21.6, 1, tight);
+    // No padding at all: the band is exactly the lines it marks. Note what the
+    // relation can and cannot be here — the neighbour's box already reaches 3.4px
+    // into the block, so "clear of the line above" is not available as a
+    // comparison at all. What the band must not do is *add* to the overlap.
+    expect(band).toEqual({ start: 21.6, end: 46.6 });
+    expect(band.start).toBeGreaterThanOrEqual(21.6);
+    expect(band.end).toBeLessThanOrEqual(46.6);
+  });
+
+  it("still takes three tenths of a line where the page has the room", () => {
+    // The same page with the reader owning the leading: 32.4px a line against a
+    // 25px line box leaves 7.4px of real whitespace, and the padding the design
+    // asks for is 10px — more than the gap, so the cap applies and the band
+    // fills the gap without crossing it. What must not regress is the band's
+    // reach *into* the neighbouring line: that is zero either way.
+    const roomy = toLines(toSpans([box(0, 25), box(32.4, 57.4), box(64.8, 89.8)], false, 800));
+    const band = bandOver({ start: 32.4, end: 57.4 }, 32.4, 1, roomy);
+    expect(band.start).toBeGreaterThanOrEqual(roomy[0]!.end);
+    expect(band.end).toBeLessThanOrEqual(roomy[2]!.start);
+    // …and it is still padded, not welded to the text: the band is thicker than
+    // the lines it marks.
+    expect(band.end - band.start).toBeGreaterThan(25);
+  });
+
+  it("measures the air off the block, not off the page's leading", () => {
+    // A block that ends a paragraph has a paragraph gap below it, not another
+    // step: a padding sized from the leading alone would claim 8px where there
+    // are 40. And one that starts a paragraph has the same above it.
+    const lines = toLines(
+      toSpans([box(0, 25), box(26, 51), box(92, 117), box(118, 143)], false, 200),
+    );
+    const band = bandOver({ start: 92, end: 117 }, 26, 1, lines);
+    // Above: 92 - 51 = 41px of air. Below: 118 - 117 = 1px. The nearer side
+    // decides — pad by the 1px, not by the 8 the fraction would have asked for.
+    expect(band.start).toBe(92 - 1);
+    expect(band.end).toBe(117 + 1);
+  });
 });
 
 describe("fallbackBand", () => {
