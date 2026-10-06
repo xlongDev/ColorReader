@@ -4,7 +4,7 @@ import { persist } from "zustand/middleware";
 import type { PaceSample } from "@/features/reader/pace";
 import { pushPace } from "@/features/reader/pace";
 import { DEFAULT_WPM } from "@/features/reader/rsvp";
-import type { LayoutMode, PageTransition } from "@/features/reader/theme";
+import type { LayoutMode, PageTransition, WritingMode } from "@/features/reader/theme";
 import type { SpeechGranularity, SpeechPlayerStyle } from "@/features/reader/speech";
 import type { TtsWashStyle } from "@/features/reader/ttsWash";
 import type { AnnotationStyle } from "@/types/ipc";
@@ -49,10 +49,30 @@ interface ReaderState {
   marginY: number;
   /** Two-em text-indent at the start of every paragraph. */
   indent: boolean;
-  /** Vertical CJK: columns run top-to-bottom and stack right-to-left. The
-   *  books that are typeset that way — 古籍, 日漫 — are what it is for, and
-   *  the paginator has its own two-phase page turn for it. */
-  vertical: boolean;
+  /**
+   * The writing direction the reader asks for. `auto` — the default — keeps
+   * the book's own: a 古籍 or 日漫 that typesets itself vertical-rl reads
+   * exactly as its author set it, with nothing injected. `horizontal` and
+   * `vertical` force the direction onto every text element the way the old
+   * boolean did.
+   */
+  writingMode: WritingMode;
+  /**
+   * 使用书籍排版: leave the book's own paragraph styles — line height, paragraph
+   * gap, first-line indent, and the typeface, unless 原书字体 is unset — alone
+   * instead of winning them with `!important`. On by default: the reader is
+   * the guest here, and a book that was designed is designed.
+   */
+  bookTypography: boolean;
+  /**
+   * 替换引号: rewrite the book's western curly quotes (“ ” ‘ ’) into the
+   * corner brackets vertical CJK is set with (﹁ ﹂ ﹃ ﹄). A vertical column
+   * rotates a western quote with the line, which reads as punctuation lying on
+   * its side; the corner brackets stand upright. Offered in the panel only
+   * while the layout is vertical, and applied at section load — the view is
+   * re-opened when the flag flips.
+   */
+  quoteReplace: boolean;
   /**
    * Reading ruler: a band parked at the reader's place on the page, with
    * everything outside it washed toward the paper. Worth most on a dense CJK
@@ -347,13 +367,15 @@ export const DEFAULT_READER_SETTINGS = {
   speechRate: 1,
   speechVoiceURI: null,
   speechGranularity: "sentence",
-  fontFamily: "system",
+  fontFamily: "book",
   lineHeightIdx: 1,
   paraGapIdx: 1,
   marginX: DEFAULT_MARGIN_X,
   marginY: DEFAULT_MARGIN_Y,
   indent: false,
-  vertical: false,
+  writingMode: "auto",
+  bookTypography: true,
+  quoteReplace: false,
   readingRuler: false,
   rulerLines: 2,
   rulerColor: "clear",
@@ -412,7 +434,7 @@ export const useReaderSettings = create<ReaderState>()(
       // Bump only when a stored value changes meaning; a newly added key needs
       // no bump — the default merge layers the persisted state over the
       // initial one.
-      version: 9,
+      version: 10,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are
       // continuous px now and the scale was rebased (old 特宽 = new 标准).
@@ -473,6 +495,19 @@ export const useReaderSettings = create<ReaderState>()(
         }
         if (next.pageTheme !== "day" && next.pageTheme !== "night") {
           next.pageTheme = null;
+        }
+        // v10: 原书 became the default typeface and the paragraph styles got a
+        // 使用书籍排版 switch (on by default, no stored key needed). A stored
+        // "system" font was the *old* default rather than a choice — anyone who
+        // wanted the system face picks it again from one chip over. The
+        // vertical boolean became the three-way writing mode: a stored `true`
+        // is the explicit 竖排, `false` was the old forced-horizontal default
+        // and maps to 跟随书籍.
+        if (next.fontFamily === "system") next.fontFamily = "book";
+        const legacyVertical = (state as { vertical?: unknown }).vertical;
+        if (typeof legacyVertical === "boolean") {
+          next.writingMode = legacyVertical ? "vertical" : "auto";
+          delete (next as { vertical?: unknown }).vertical;
         }
         return next;
       },

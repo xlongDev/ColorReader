@@ -9,12 +9,20 @@ import { speechUnits, unitsFromOffset } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
 import { foliateWash } from "./ttsWash";
 import type { TtsWashStyle } from "./ttsWash";
-import { buildStyleSheet } from "./foliateStyle";
+import { applyVerticalQuotes, buildStyleSheet } from "./foliateStyle";
 import { lineRects, relayRulerLayout } from "./rulerPointer";
 import type { RulerRect } from "./rulerPointer";
 import { CapturedPageTurn } from "./capturedTurn";
 import { markLoneFigures } from "./loneFigure";
 import type { FoliateStyle } from "./foliateStyle";
+
+/**
+ * Whether this sheet forces the vertical axis. 跟随书籍 (`auto`) injects no
+ * writing-mode, so the injected axis is horizontal from our side even when the
+ * book's own sections turn out vertical — the paginator handles those on its
+ * own; what this component acts on is a change *we* caused.
+ */
+const injectedVertical = (style: FoliateStyle): boolean => style.writingMode === "vertical";
 import { inkWash, selectionBottom } from "./selection";
 import { bookPageFromLocation } from "./progress";
 import { findInSections, findRange, indexText } from "./textAnchor";
@@ -1011,7 +1019,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
    * swaps the sheet, so a change from horizontal to vertical is something this
    * component has to notice and act on itself.
    */
-  const verticalRef = useRef(style.vertical);
+  const verticalRef = useRef(injectedVertical(style));
+  // Whether sections are being rewritten on load (替换引号). A flip re-opens
+  // the view below: the quotes live in the section text, and sections already
+  // mounted have to be rebuilt from the book's source to get the originals
+  // back.
+  const quoteRef = useRef(style.quoteReplace);
   const attachSection = useCallback(
     (event: Event) => {
       // foliate announces which section a document belongs to; the lightbox's
@@ -1020,6 +1033,10 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       const doc = detail?.doc;
       if (!doc || hookedRef.current.has(doc)) return;
       hookedRef.current.add(doc);
+      // 替换引号: western curly quotes become the corner brackets vertical CJK
+      // is set with. Applied at load so every section — this one and the ones
+      // still to mount — reads the same flag; a flip re-opens the view.
+      if (styleRef.current.quoteReplace) applyVerticalQuotes(doc);
       if (typeof detail.index === "number") sectionOfDoc.set(doc, detail.index);
       // A book can pin its own colour scheme with a meta tag, and that form
       // outranks the `color-scheme: normal` our stylesheet sets: WebKit then
@@ -1251,7 +1268,9 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         });
         captured = controller;
         capturedRef.current = controller;
-        controller.setEnabled(transitionRef.current === "paper" && !styleRef.current.vertical);
+        controller.setEnabled(
+          transitionRef.current === "paper" && !injectedVertical(styleRef.current),
+        );
         // Snapshot the page the book opened on, so the first tap is as quick as
         // the ones after it (`capturedTurn.ts` also re-arms this once a turn
         // has settled). Desktop only: a browser has no capture command, and
@@ -1328,7 +1347,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     layoutRef.current = layout;
     transitionRef.current = transition;
     marginsRef.current = { x: marginX, y: marginY };
-    capturedRef.current?.setEnabled(transition === "paper" && !styleRef.current.vertical);
+    capturedRef.current?.setEnabled(transition === "paper" && !injectedVertical(styleRef.current));
     const view = viewRef.current;
     if (view) applyLayout(view, layout, transition, { x: marginX, y: marginY });
   }, [layout, transition, marginX, marginY]);
@@ -1341,7 +1360,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     // own for the vertical axis, so the captured curl stands down when the
     // columns run top-to-bottom. `setEnabled(false)` makes `turn()` decline and
     // the caller falls through to the renderer's own animation.
-    capturedRef.current?.setEnabled(transitionRef.current === "paper" && !style.vertical);
+    capturedRef.current?.setEnabled(transitionRef.current === "paper" && !injectedVertical(style));
     const view = viewRef.current;
     if (!view) return;
     view.renderer?.setStyles?.(buildStyleSheet(style));
@@ -1350,8 +1369,15 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     // section's axis once, at load, and caches it. Handing it the page it is
     // already on is what makes it re-read the axis — `goTo` sees the
     // difference, throws every view away and rebuilds them on the new one.
-    if (verticalRef.current !== style.vertical) {
-      verticalRef.current = style.vertical;
+    if (verticalRef.current !== injectedVertical(style)) {
+      verticalRef.current = injectedVertical(style);
+      if (locatedRef.current) void view.goTo(locatedRef.current);
+    }
+    // 替换引号 lives in the section text, not the sheet: flipping it re-opens
+    // the view so every section rebuilds from the book's source — off gives
+    // the quotes back, on rewrites them at the fresh sections' load.
+    if (quoteRef.current !== style.quoteReplace) {
+      quoteRef.current = style.quoteReplace;
       if (locatedRef.current) void view.goTo(locatedRef.current);
     }
   }, [style]);

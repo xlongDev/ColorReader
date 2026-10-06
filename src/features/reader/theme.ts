@@ -28,6 +28,12 @@ export interface ReadingSurface {
 
 export type PageTransition = "none" | "pan" | "slide" | "fade" | "flip" | "paper";
 export type LayoutMode = "scroll" | "single" | "double";
+/**
+ * The writing direction the reader asks for. `auto` follows the book's own
+ * `writing-mode` (nothing injected); the other two force it. Foliate books
+ * only — prose and PDF have no writing-mode to follow or force.
+ */
+export type WritingMode = "auto" | "horizontal" | "vertical";
 
 export const READING_SURFACES: ReadingSurface[] = [
   {
@@ -186,6 +192,13 @@ export interface FontOption {
 }
 
 export const FONT_STACKS: FontOption[] = [
+  /**
+   * 原书字体 — the default, and the odd one out: on a foliate book the
+   * stylesheet simply does not inject a `font-family` (the book's own faces
+   * win), so the stack here is only what the prose and PDF paths — which have
+   * no book fonts to keep — resolve it to. That fallback is the system stack.
+   */
+  { key: "book", label: "原书", stack: "var(--font-sans)" },
   { key: "system", label: "系统", stack: "var(--font-sans)" },
   { key: "song", label: "宋体", stack: '"Songti SC", "STSong", "SimSun", Georgia, serif' },
   { key: "kai", label: "楷体", stack: '"Kaiti SC", "STKaiti", "KaiTi", "DFKai-SB", serif' },
@@ -356,4 +369,10 @@ export const LAYOUT_MODES: { key: LayoutMode; label: string }[] = [
   { key: "scroll", label: "滚动" },
   { key: "single", label: "单页" },
   { key: "double", label: "双页" },
+];
+
+export const WRITING_MODES: { key: WritingMode; label: string }[] = [
+  { key: "auto", label: "跟随书籍" },
+  { key: "horizontal", label: "横排" },
+  { key: "vertical", label: "竖排" },
 ];

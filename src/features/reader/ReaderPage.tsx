@@ -428,7 +428,7 @@ function ReaderView({
    * at all. A right-to-left horizontal book belongs here too; that would need
    * the book's own `dir` plumbed out of the renderer.
    */
-  const readsLeftward = useFoliate && settings.vertical;
+  const readsLeftward = useFoliate && settings.writingMode === "vertical";
   const scrollRef = useRef<HTMLDivElement>(null);
   // The reading viewport: the box the reading ruler is positioned against,
   // which is the pane below the header rather than the window.
@@ -1677,7 +1677,9 @@ function ReaderView({
     surface,
     invertImages: invertBookImages,
     fonts,
-    vertical: settings.vertical,
+    writingMode: settings.writingMode,
+    bookTypography: settings.bookTypography,
+    quoteReplace: settings.quoteReplace,
   });
 
   /** Column width for the paged layouts; `undefined` keeps flow layout. */

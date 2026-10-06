@@ -7,16 +7,28 @@
  */
 
 import { LONE_FIGURE_ATTR } from "./loneFigure";
+import type { WritingMode } from "./theme";
 
 /** Typography and palette pushed into the book's own document. */
 export type FoliateStyle = {
   fontSize: number;
-  fontFamily: string;
+  /**
+   * The typeface forced over the book's own, or `null` for 原书字体 — the
+   * book's faces win and no `font-family` is injected at all.
+   */
+  fontFamily: string | null;
   lineHeight: number;
   /** Paragraph gap in em, mirroring the prose path's per-`p` margin. */
   paraGap: number;
   /** Two-em first-line indent on every paragraph. */
   indent: boolean;
+  /**
+   * 使用书籍排版: the book keeps its own paragraph styles — line height,
+   * paragraph gap, first-line indent — and the reader's three settings stand
+   * down. Font size is not part of the deal: the reader always owns the
+   * body size the book's em-based sizes scale from.
+   */
+  bookTypography: boolean;
   fg: string;
   bg: string;
   dark: boolean;
@@ -29,16 +41,68 @@ export type FoliateStyle = {
    *  declarations do not reach inside it — the sheet has to carry them. */
   fontFaces: string;
   /**
-   * Vertical CJK: columns run top-to-bottom and stack right-to-left.
-   *
-   * A 古籍 or a 日漫 is typeset this way, and the paginator knows it — it reads
-   * `writing-mode` off the section, lays the columns out along the other axis
-   * and turns pages with the two-phase slide it keeps for exactly this case.
-   * What it cannot know is that the reader *wants* it, which is the only thing
-   * this flag adds.
+   * The writing direction the reader asks for. `auto` injects nothing and
+   * lets the book's own `writing-mode` stand — a 古籍 that typesets itself
+   * vertical-rl paginates vertically because the paginator reads the
+   * direction back off the section, not because we forced it.
    */
-  vertical: boolean;
+  writingMode: WritingMode;
+  /**
+   * 替换引号: rewrite western curly quotes into the vertical corner
+   * brackets at section load. Not a stylesheet concern — no CSS maps one
+   * character to another — but it travels with the style bundle because it
+   * changes with the same settings and reloads the same sections.
+   */
+  quoteReplace: boolean;
 };
+
+/**
+ * Western curly quotes and the corner brackets vertical CJK is set with:
+ * `“ ”` pair with ﹁ ﹂, `‘ ’` with ﹃ ﹄ (the Unicode vertical presentation
+ * forms of 「」『』). A vertical column rotates a western quote with the
+ * line, so it reads lying on its side; these stand upright.
+ */
+export const VERTICAL_QUOTES: Record<string, string> = {
+  "\u201C": "\uFE41",
+  "\u201D": "\uFE42",
+  "\u2018": "\uFE43",
+  "\u2019": "\uFE44",
+};
+
+/** The same mapping as a string rewrite — the testable half. */
+export function verticalQuotes(text: string): string {
+  return text.replace(/[\u201C\u201D\u2018\u2019]/g, (c) => VERTICAL_QUOTES[c] ?? c);
+}
+
+/** Elements whose text is code or sheet content, not prose: rewriting the
+ *  quotes inside a `<style>` rule or a `<code>` sample would corrupt it. */
+const QUOTE_SKIP = new Set(["SCRIPT", "STYLE", "CODE", "PRE", "KBD", "SAMP", "TEXTAREA"]);
+
+/**
+ * Rewrites the quotes in every text node of a section document. Runs at
+ * section load, on the mounted document itself — the book's source is never
+ * touched, and a reload (the setting flip re-opens the view) rebuilds the
+ * text from it. Returns how many nodes changed.
+ */
+export function applyVerticalQuotes(doc: Document): number {
+  const walker = doc.createTreeWalker(doc.body ?? doc, NodeFilter.SHOW_TEXT, {
+    acceptNode: (node) =>
+      QUOTE_SKIP.has(node.parentElement?.tagName ?? "")
+        ? NodeFilter.FILTER_REJECT
+        : NodeFilter.FILTER_ACCEPT,
+  });
+  let changed = 0;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node.nodeValue;
+    if (!text) continue;
+    const replaced = verticalQuotes(text);
+    if (replaced !== text) {
+      node.nodeValue = replaced;
+      changed += 1;
+    }
+  }
+  return changed;
+}
 
 /**
  * Typography always. Colour follows the readest scheme and is dark-only:
@@ -71,13 +135,29 @@ export const buildStyleSheet = ({
   lineHeight,
   paraGap,
   indent,
+  bookTypography,
   fg,
   bg,
   dark,
   invertImages,
   fontFaces,
-  vertical,
+  writingMode,
 }: FoliateStyle) => {
+  /* What the reader forces over the book, and what 使用书籍排版 stands down:
+   * with it on, the book's own line height, paragraph gap and first-line
+   * indent stand — measured on a KF8 file, the book restates them on every
+   * paragraph class, so half-measures read as broken settings. 原书字体
+   * (`fontFamily: null`) likewise leaves the book's faces alone. Font SIZE is
+   * not part of either deal: it stays on html/body unconditionally, because
+   * the book's em-based sizes scale with it, which keeps its headings and
+   * title pages at the proportions its designer chose. */
+  const textSelectors = "html, body, p, li, blockquote, dd, dt, td, th, div";
+  const forced = [
+    fontFamily ? `font-family: ${fontFamily} !important;` : "",
+    bookTypography ? "" : `line-height: ${lineHeight} !important;`,
+  ]
+    .filter(Boolean)
+    .join("\n  ");
   const typography = `${fontFaces}
 :root {
   /* The system stack resolves to var(--font-sans) from the app shell,
@@ -87,38 +167,41 @@ export const buildStyleSheet = ({
 }
 html, body {
   /* !important: KF8 books ship their own body typography for print paper;
-     the reader settings win over the book. */
+     the reader always owns the body size. */
   font-size: ${fontSize}px !important;
-}
-/* The book may declare its own colour scheme and this one does:
-   :root { color-scheme: light dark }. On a dark-appearance OS WebKit then
-   resolves the section's scheme to dark and paints the transparent-root
-   canvas opaque — a black page with white margins on a read that is not in
-   night mode. Forcing normal restores the transparent canvas (measured on a
-   WebKit fixture carrying this exact declaration). Applied in both palettes:
-   the symptom shows up precisely when night mode is off. A book that declares
-   the scheme through a meta name="color-scheme" tag instead is handled where a
-   section attaches — CSS one can't override that tag. */
+}${
+    forced
+      ? `
+${textSelectors} {
+  ${forced}
+}`
+      : ""
+  }${
+    /* The book may declare its own colour scheme and this one does:
+       :root { color-scheme: light dark }. On a dark-appearance OS WebKit then
+       resolves the section's scheme to dark and paints the transparent-root
+       canvas opaque — a black page with white margins on a read that is not in
+       night mode. Forcing normal restores the transparent canvas (measured on a
+       WebKit fixture carrying this exact declaration). Applied in both palettes:
+       the symptom shows up precisely when night mode is off. A book that declares
+       the scheme through a meta name="color-scheme" tag instead is handled where a
+       section attaches — CSS one can't override that tag. */
+    `
 html {
   color-scheme: normal !important;
-}
+}`
+  }${
+    bookTypography
+      ? ""
+      : `
 /* A Kindle book restates line-height, font-family, margins and text-indent on
    every paragraph class it ships, so html/body alone never reaches the
    text — measured on a KF8 file: body computed line-height followed the
    setting while every p kept the book's own 1.8. Repeat the settings on the
-   text elements themselves. Font SIZE deliberately stays on html/body only:
-   the book's em-based sizes scale with it, which keeps its headings and
-   title pages at the proportions its designer chose.
+   text elements themselves.
    div is included because Calibre/KF8 mobi often wrap body paragraphs in
    div.calibre_2 instead of p — without it the three typography
    settings silently do nothing on those books (see probe on b3.mobi). */
-html, body, p, li, blockquote, dd, dt, td, th, div {
-  font-family: ${fontFamily} !important;
-  line-height: ${lineHeight} !important;
-}
-/* Both sides of the gap, not just the bottom: these books set a large
-   margin-top on their paragraph classes (27–63px measured), which swamped
-   a bottom-only override and made 紧凑 and 标准 look identical. */
 p, li, blockquote, dd {
   margin-top: ${paraGap}em !important;
   margin-bottom: ${paraGap}em !important;
@@ -141,7 +224,8 @@ p {
 }
 div:not(:empty):not([class*="pagebreak"]):not(:has(> p, > div, > section, > table, > ul, > ol, > blockquote, > h1, > h2, > h3, > h4, > h5, > h6, > img, > svg, > picture, > figure, > video, > canvas)) {
   text-indent: ${indent ? "2em" : "0"} !important;
-}
+}`
+  }
 /* Replaced elements are the one thing a book cannot be trusted to size: a
    cover or a plate authored for print paper is routinely wider than the
    column, and the paginator only caps a replaced element against its own
@@ -186,10 +270,12 @@ svg[viewBox][width*="%"][height*="%"] {
 *[width]:not([width=""]):not([width*="%"]) {
   max-width: 100% !important;
 }${
-    vertical
-      ? `
-/* Vertical CJK. Forced on the text elements rather than only on html/body
-   for the same reason line-height is: a converted book restates
+    writingMode === "auto"
+      ? ""
+      : `
+/* Forced writing direction — 跟随书籍 (auto) injects nothing and the book's
+   own writing-mode stands. Forced on the text elements rather than only on
+   html/body for the same reason line-height is: a converted book restates
    writing-mode on its own paragraph classes, and a declaration there
    beats an inherited one. text-orientation is left at "mixed", so a Latin
    run inside a vertical column lies on its side the way a printed book
@@ -197,10 +283,9 @@ svg[viewBox][width*="%"][height*="%"] {
    The paginator reads writing-mode back off the section, so it gets the
    column axis, the page margins and the two-phase vertical page-turn
    slide out of this one declaration. */
-html, body, p, li, blockquote, dd, dt, td, th, div {
-  writing-mode: vertical-rl !important;
+${textSelectors} {
+  writing-mode: ${writingMode === "vertical" ? "vertical-rl" : "horizontal-tb"} !important;
 }`
-      : ""
   }`;
   if (!dark) return typography;
   return `${typography}

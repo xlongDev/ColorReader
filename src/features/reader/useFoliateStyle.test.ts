@@ -13,14 +13,16 @@ const surface = (over: Partial<ReadingSurface> = {}): ReadingSurface =>
 function setup(overrides: Partial<FoliateStyleOptions> = {}) {
   const options: FoliateStyleOptions = {
     fontSize: 18,
-    font: "songti",
+    font: "song",
     lineHeightIdx: 1,
     paraGapIdx: 1,
     indent: true,
+    bookTypography: false,
     surface: surface(),
     invertImages: false,
     fonts: [],
-    vertical: false,
+    writingMode: "auto",
+    quoteReplace: false,
     ...overrides,
   };
   return renderHook((props: FoliateStyleOptions) => useFoliateStyle(props), {
@@ -58,11 +60,21 @@ describe("useFoliateStyle", () => {
     expect(result.current.paraGap).toBe(0.9);
   });
 
-  it("carries the type and the CJK flag through", () => {
-    const { result } = setup({ fontSize: 22, indent: false, vertical: true });
+  it("carries the type and the direction flags through", () => {
+    const { result } = setup({ fontSize: 22, indent: false, writingMode: "vertical" });
     expect(result.current.fontSize).toBe(22);
     expect(result.current.indent).toBe(false);
-    expect(result.current.vertical).toBe(true);
+    expect(result.current.writingMode).toBe("vertical");
+  });
+
+  /**
+   * 原书字体: the book's own faces win, so the sheet gets no `font-family`
+   * to force — `null`, not an empty stack that would still be injected.
+   * Any other key resolves through `resolveFont` as before.
+   */
+  it("resolves 原书字体 to no forced family at all", () => {
+    expect(setup({ font: "book" }).result.current.fontFamily).toBeNull();
+    expect(setup({ font: "song" }).result.current.fontFamily).toContain("Songti");
   });
 
   /**

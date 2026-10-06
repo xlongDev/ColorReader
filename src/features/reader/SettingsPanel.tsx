@@ -35,6 +35,7 @@ import {
   customFontKey,
   FONT_STACKS,
   LAYOUT_MODES,
+  WRITING_MODES,
   PAGE_TRANSITIONS,
   READING_SURFACES,
   resolveSurface,
@@ -130,23 +131,46 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
             </Stepper>
           </div>
         </Group>
-        <Group label="行间距">
+        {/* 使用书籍排版: the book's own paragraph styles stand, so the three
+            settings below it have nothing to win — they only appear when the
+            reader takes the layout back, the way readest hides them. */}
+        <Group label="书籍排版">
           <Chips
-            options={LINE_HEIGHTS.map((_, index) => ({
-              key: index,
-              label: LINE_HEIGHT_LABELS[index]!,
-            }))}
-            value={settings.lineHeightIdx}
-            onChange={(index) => update({ lineHeightIdx: index })}
+            options={[
+              { key: true, label: "跟随书籍" },
+              { key: false, label: "自定义" },
+            ]}
+            value={settings.bookTypography}
+            onChange={(value) => update({ bookTypography: value })}
           />
+          <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
+            跟随书籍：行距、段距与缩进用书里排好的，字体用原书字体。
+          </p>
         </Group>
-        <Group label="段间距">
-          <Chips
-            options={PARA_GAPS.map((_, index) => ({ key: index, label: PARA_GAP_LABELS[index]! }))}
-            value={settings.paraGapIdx}
-            onChange={(index) => update({ paraGapIdx: index })}
-          />
-        </Group>
+        {!settings.bookTypography && (
+          <>
+            <Group label="行间距">
+              <Chips
+                options={LINE_HEIGHTS.map((_, index) => ({
+                  key: index,
+                  label: LINE_HEIGHT_LABELS[index]!,
+                }))}
+                value={settings.lineHeightIdx}
+                onChange={(index) => update({ lineHeightIdx: index })}
+              />
+            </Group>
+            <Group label="段间距">
+              <Chips
+                options={PARA_GAPS.map((_, index) => ({
+                  key: index,
+                  label: PARA_GAP_LABELS[index]!,
+                }))}
+                value={settings.paraGapIdx}
+                onChange={(index) => update({ paraGapIdx: index })}
+              />
+            </Group>
+          </>
+        )}
         <Group label="页边距">
           <div className="w-full min-w-0">
             <div className="flex flex-wrap gap-1.5">
@@ -195,31 +219,49 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
             />
           </div>
         </Group>
-        <Group label="段首缩进">
-          <Chips
-            options={[
-              { key: false, label: "关闭" },
-              { key: true, label: "缩进两字" },
-            ]}
-            value={settings.indent}
-            onChange={(value) => update({ indent: value })}
-          />
-        </Group>
+        {!settings.bookTypography && (
+          <Group label="段首缩进">
+            <Chips
+              options={[
+                { key: false, label: "关闭" },
+                { key: true, label: "缩进两字" },
+              ]}
+              value={settings.indent}
+              onChange={(value) => update({ indent: value })}
+            />
+          </Group>
+        )}
         {/* Offered on a book with a paginator only: prose and PDF are laid out
             here instead, and a setting that does nothing where it is shown is
             worse than one that is not shown. */}
         {verticalAvailable && (
-          <Group label="竖排">
+          <Group label="排版方向">
             <Chips
-              options={[
-                { key: false, label: "横排" },
-                { key: true, label: "竖排" },
-              ]}
-              value={settings.vertical}
-              onChange={(value) => update({ vertical: value })}
+              options={WRITING_MODES}
+              value={settings.writingMode}
+              onChange={(value) => update({ writingMode: value })}
             />
             <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
-              古籍与日漫的排法：字自上而下，行自右向左。
+              跟随书籍：书是竖排就竖排。竖排是古籍与日漫的排法——字自上而下，行自右向左。
+            </p>
+          </Group>
+        )}
+        {/* 标点符号 → 替换引号, the readest layout: it only means something while
+            the layout is vertical (a western quote rotated with the line is the
+            thing being fixed), and a setting that does nothing where it is shown
+            is worse than one that is not shown. */}
+        {verticalAvailable && settings.writingMode === "vertical" && (
+          <Group label="替换引号">
+            <Chips
+              options={[
+                { key: false, label: "关闭" },
+                { key: true, label: "替换" },
+              ]}
+              value={settings.quoteReplace}
+              onChange={(value) => update({ quoteReplace: value })}
+            />
+            <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
+              把西文引号 “ ” ‘ ’ 换成竖排角引号 ﹁ ﹂ ﹃ ﹄，只改显示不改书源。
             </p>
           </Group>
         )}
