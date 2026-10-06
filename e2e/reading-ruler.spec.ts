@@ -737,6 +737,274 @@ test("no screen in the book leaves the band floating where there is no line", as
   expect(tally.none, "全程没有一屏无字，扫的不是标题页/插图页").toBeGreaterThan(0);
 });
 
+test("the band's padding comes off the page's own leading, not the setting's", async ({ page }) => {
+  // 使用书籍排版 hands the book back its own paragraph styles, so the page's line
+  // height is whatever the book set and the reader's line-height setting says
+  // nothing about it. The ruler padded the band by a fraction of the *configured*
+  // leading anyway, so on a book set tighter than the setting the padding was a
+  // larger fraction of a real line than the intended three tenths — and the band
+  // reached past the words it was marking into the line above and the line below.
+  //
+  // Measured on a real book (《认识世界》, 18px type, 跟随书籍): the page advanced
+  // 21.6px a line, the ruler padded by 10px — 46% of a line — and the band came
+  // out 66.6px over 46.6px of words, three lines under a two-line setting. That
+  // is the whole of 「没有适配」: the ruler was padding against a number that was
+  // not on the screen. 🔴 The four guards already in `bandOver`'s path (outOfSight,
+  // onPage, the placement key, crossOf) all passed here — they are about *which*
+  // lines, and this was about how thick the band around them is.
+  //
+  // The fixture is the sparse-title book, and both of its shapes are load-bearing
+  // here — 🔴 each was found by asking "can this slot tell the two paths apart?"
+  // and getting the wrong answer first:
+  //
+  // - Its stylesheet sets `line-height: 1.2`, nowhere near a reader preset
+  //   (1.6 / 1.8 / 2.0 / 2.2 → 28.8 / 32.4 / 36 / 39.6px at 18px), so the page's
+  //   21.6px leading cannot be confused with the setting. It was **1.75** at
+  //   first — 0.9px from the 1.8 preset — and the slot stayed green with the
+  //   guard removed.
+  // - Its paragraphs run to three or more lines, so a `rulerLines`-long block
+  //   sits *inside* one and the padding is measurable beside it. At two lines the
+  //   block was the whole paragraph, its extent already carried the 0.78em gap,
+  //   and the padding was a rounding error — green again, for a different reason.
+  //
+  // The demo prose book was tried here too and cannot be used: it ships no
+  // stylesheet, so 跟随书籍 leaves it on the browser's `normal` leading, which on
+  // WebKit is an 18px advance against a 25.2px glyph box — the line boxes
+  // *overlap*, which no real book sets and which makes "how many lines did the
+  // band cover" meaningless.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await choose(page, "单页");
+  await enableRuler(page);
+  // Off the plate, onto the opener, and one page on to the prose: a leading is a
+  // leading there, where it is not a chapter title's own (this book sets its h1
+  // to 1.38).
+  await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+  await page.waitForTimeout(2600);
+  await page.keyboard.press("PageDown");
+  await page.waitForTimeout(1800);
+
+  /**
+   * The band's padding in the page's own units: how far it stands off the first
+   * and last line it covers, over the distance from one line to the next. Three
+   * tenths of a line is the design; what is caught here is a pad taken from a
+   * leading that is not this page's.
+   */
+  const padding = async (label: string) => {
+    const drawn = await rulerDrawn(page);
+    const lines = (await page.evaluate(LINES)) as Interval[];
+    expect(lines.length, `${label}：一个字的行盒都没量到`).toBeGreaterThan(3);
+    const covered = lines.filter((line) => {
+      const centre = (line.start + line.end) / 2;
+      return centre > drawn.band.top && centre < drawn.band.bottom;
+    });
+    expect(covered.length, `${label}：带子底下没有一行字`).toBeGreaterThan(0);
+    const lead = advanceOf(lines);
+    return {
+      lead,
+      count: covered.length,
+      head: (covered[0]!.start - drawn.band.top) / lead,
+      tail: (drawn.band.bottom - covered.at(-1)!.end) / lead,
+    };
+  };
+
+  /** 书籍排版 group, not 字体 — both carry a 跟随书籍 chip. */
+  const typography = async (label: string) => {
+    await openSettings(page);
+    await page
+      .locator("aside div")
+      .filter({ has: page.getByText("书籍排版", { exact: true }) })
+      .last()
+      .getByRole("button", { name: label, exact: true })
+      .click();
+    await page.waitForTimeout(500);
+    await closeSettings(page);
+    // The setting re-opens the view, so the band is derived from scratch again.
+    await page.waitForTimeout(1800);
+  };
+
+  await typography("跟随书籍");
+  const follow = await padding("跟随书籍");
+  // The page's own leading, and the band's own ends: three tenths of a line each,
+  // give or take the rounding. A pad off the 1.8 preset on a page advancing 25px
+  // is 0.4 of a line and lands here red.
+  expect(follow.head, "跟随书籍：带的上边留白不是一个行距的三成").toBeLessThan(0.38);
+  expect(follow.tail, "跟随书籍：带的下边留白不是一个行距的三成").toBeLessThan(0.38);
+  // The over-padded band's other half: its extra reach swallows a third line.
+  // (Under 自定义 the block can legitimately span a paragraph gap, which is its
+  // own rule — so the count is only pinned where the block is intra-paragraph.)
+  expect(follow.count, "跟随书籍：带子多罩了一行（padding 是按设置的行距算的）").toBe(2);
+
+  // The same page with the reader owning the leading again: same words, same
+  // settings, a different line height on the page. The band has to follow the
+  // page, and the page's leading is now the larger of the two.
+  await typography("自定义");
+  const custom = await padding("自定义");
+  expect(custom.lead, "自定义：页面的行距没有跟着设置走").toBeGreaterThan(follow.lead);
+  expect(custom.head, "自定义：带的上边留白不是一个行距的三成").toBeLessThan(0.45);
+  expect(custom.tail, "自定义：带的下边留白不是一个行距的三成").toBeLessThan(0.45);
+});
+
+test("the band's padding never outgrows the air between the lines", async ({ page }) => {
+  // Three tenths of a line is a padding, not a distance. It only reads as
+  // breathing room where there *is* room, and a page can have none: a book whose
+  // leading is tighter than its own type is high has line boxes that overlap, so
+  // two consecutive lines share a few pixels of box and there is no whitespace
+  // between them at all. 使用书籍排版 hands exactly such a book back its own
+  // paragraph styles.
+  //
+  // Measured on the book that reported it (《认识世界》, 18px type): under
+  // 跟随书籍 the page advanced 21.6px a line while each line's box was 25px tall
+  // — 3.4px of overlap — and the ruler padded 6px at each end regardless. The
+  // band was 46.6px over 46.6px of words and its edges sat 6px *inside* the
+  // neighbouring lines, which is the whole of 「上下均超出了一些」. The same page
+  // under 自定义 advances 32.4px, leaves 7.4px of air, and the same arithmetic
+  // reached 2.6px in — close enough to look right, which is why only the tight
+  // book was reported and why this was read as 「跟随书籍坏了」 rather than as an
+  // arithmetic that ignores its own inputs.
+  //
+  // The rule asserted is that the band never reaches further from the lines it
+  // marks than the gap to the line it is *not* marking: reach <= air on each
+  // side, and where the air is negative the only reach that satisfies it is none.
+  // Stated as "clear of the neighbour" instead it would be unsatisfiable — the
+  // neighbour's box already overlaps the marked line, so no edge position clears
+  // it. What is both satisfiable and visible is not reaching *any further* in.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await choose(page, "单页");
+  await enableRuler(page);
+  // Onto the prose: the fixture's leading is 1.2, and its chapter opener sets
+  // its own title's leading besides, so this is the page where a leading is a
+  // leading.
+  await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+  await page.waitForTimeout(2600);
+  await page.keyboard.press("PageDown");
+  await page.waitForTimeout(1800);
+
+  /** 书籍排版 group, not 字体 — both carry a 跟随书籍 chip. */
+  const typography = async (label: string) => {
+    await openSettings(page);
+    await page
+      .locator("aside div")
+      .filter({ has: page.getByText("书籍排版", { exact: true }) })
+      .last()
+      .getByRole("button", { name: label, exact: true })
+      .click();
+    await page.waitForTimeout(500);
+    await closeSettings(page);
+    // The setting re-opens the view, so the band is derived from scratch again.
+    await page.waitForTimeout(1800);
+  };
+
+  /**
+   * How far the band's edges stand off the lines it marks, minus the air each
+   * side actually has. Both must be <= 0.
+   *
+   * The band is walked down the page with the arrow keys rather than scrolled or
+   * turned: a page turn hands the band to the arriving page's first block, and
+   * the band is placed at the top of the area to begin with, so both leave it on
+   * the page's first line — where there is no line above to overrun into and only
+   * the tail side is ever scored.
+   */
+  const overreach = async (label: string) => {
+    let worstHead = -Infinity;
+    let worstTail = -Infinity;
+    let headSides = 0;
+    let tailSides = 0;
+    // Four steps down and four back up — the band's interior positions and no
+    // further. The walk is kept off both ends of the page deliberately: the first
+    // and last blocks are the ones `clampAnchor` pulls against the reading area,
+    // and a clamped edge sits wherever the area's edge is rather than where the
+    // padding put it, so a score taken there measures the clamp. The padding is
+    // the same at every position, and these are the positions where it is the
+    // padding being measured.
+    for (const key of [...Array(4).fill("ArrowDown"), ...Array(4).fill("ArrowUp")]) {
+      await page.keyboard.press(key);
+      await page.waitForTimeout(450);
+      // Read the band without insisting it is there: stepping off the end of a
+      // page lands on a stretch with no lines in the window, and the band is then
+      // deliberately not drawn (a page with no words gets no band). Such a step has
+      // nothing to score, which is not a failure.
+      const drawn = (await page.evaluate(DRAWN)) as Drawn | null;
+      if (!drawn) continue;
+      const lines = (await page.evaluate(LINES)) as Interval[];
+      const { vertical, band, host } = drawn;
+      const low = vertical ? band.left : band.top;
+      const high = vertical ? band.right : band.bottom;
+      const marked: number[] = [];
+      lines.forEach((line, i) => {
+        const centre = (line.start + line.end) / 2;
+        if (centre > low && centre < high) marked.push(i);
+      });
+      if (marked.length === 0) continue;
+      const first = marked[0]!;
+      const last = marked[marked.length - 1]!;
+
+      // A side is only scored when it has a neighbour to overrun into and the band
+      // is not sitting against the reading area on it.
+      //
+      // No neighbour means the page's own edge — nothing to reach into, and
+      // counting it would fold an infinity into the worst case and hide every
+      // other screen. Against the area is `clampAnchor`'s doing and not the
+      // padding's: a band that would hang off the area is pulled back inside it
+      // whole, so that edge is wherever the area's edge is rather than where the
+      // padding put it. Scored there, this measures the clamp and reports it as a
+      // padding bug — and the walk reaches both ends of a page, so it would do so
+      // on every run.
+      const pinnedLow = vertical ? band.left <= host.left + 1 : band.top <= host.top + 1;
+      const pinnedHigh = vertical ? band.right >= host.right - 1 : band.bottom >= host.bottom - 1;
+      if (first > 0 && !pinnedLow) {
+        headSides += 1;
+        worstHead = Math.max(
+          worstHead,
+          lines[first]!.start - low - Math.max(0, lines[first]!.start - lines[first - 1]!.end),
+        );
+      }
+      if (last < lines.length - 1 && !pinnedHigh) {
+        tailSides += 1;
+        worstTail = Math.max(
+          worstTail,
+          high - lines[last]!.end - Math.max(0, lines[last + 1]!.start - lines[last]!.end),
+        );
+      }
+    }
+    expect(headSides, `${label}：没有一屏的上缘旁边有行，扫不到上缘`).toBeGreaterThan(2);
+    expect(tailSides, `${label}：没有一屏的下缘旁边有行，扫不到下缘`).toBeGreaterThan(2);
+    console.log(
+      `${label}: head ${headSides}x worst=${worstHead.toFixed(1)}; ` +
+        `tail ${tailSides}x worst=${worstTail.toFixed(1)}`,
+    );
+    return { worstHead, worstTail };
+  };
+
+  // A hair of slack for the arithmetic: the band's edges land on fractional
+  // coordinates and the line boxes are measured to a tenth, so a band that is
+  // exactly as padded as the air allows can read a hundredth over. The overrun
+  // being caught is 5–6px on this book, so nothing here hides it.
+  const SLACK = 0.5;
+  await typography("跟随书籍");
+  const follow = await overreach("跟随书籍");
+  expect(follow.worstHead, "跟随书籍：带子上缘伸得比两行之间的空隙还远").toBeLessThanOrEqual(SLACK);
+  expect(follow.worstTail, "跟随书籍：带子下缘伸得比两行之间的空隙还远").toBeLessThanOrEqual(SLACK);
+
+  // And the roomier page, where the design's three tenths has real air to sit in:
+  // the same rule holds, and the band is still padded rather than welded on.
+  await typography("自定义");
+  const custom = await overreach("自定义");
+  expect(custom.worstHead, "自定义：带子上缘伸得比两行之间的空隙还远").toBeLessThanOrEqual(SLACK);
+  expect(custom.worstTail, "自定义：带子下缘伸得比两行之间的空隙还远").toBeLessThanOrEqual(SLACK);
+});
+
 test("the band still hugs the text when the sidebar leaves the pane", async ({ page }) => {
   // Collapsing, hiding and showing the sidebar (and going fullscreen) each resize
   // the reading pane, and the pane's own resize is only half the story: the page
