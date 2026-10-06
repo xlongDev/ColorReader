@@ -6,7 +6,7 @@
 
 use tauri::State;
 
-use crate::ai::lookup::{self, Translation, WikiSummary};
+use crate::ai::lookup::{self, Translation, WebDefinition, WikiSummary};
 use crate::error::AppResult;
 use crate::state::AppState;
 
@@ -29,4 +29,21 @@ pub async fn lookup_translate(state: State<'_, AppState>, text: String) -> AppRe
 pub async fn lookup_wikipedia(term: String) -> AppResult<WikiSummary> {
     let client = super::ai::client()?;
     lookup::wikipedia_summary(&client, &term).await
+}
+
+/// `lookup.wiktionary` — 维基词典 sense blocks (reader's language first,
+/// English fallback), key-free and open.
+#[tauri::command]
+#[specta::specta]
+pub async fn lookup_wiktionary(term: String) -> AppResult<Vec<WebDefinition>> {
+    let client = super::ai::client()?;
+    lookup::wiktionary_definitions(&client, &term).await
+}
+
+/// `lookup.urban` — Urban Dictionary's top slang definitions, key-free.
+#[tauri::command]
+#[specta::specta]
+pub async fn lookup_urban(term: String) -> AppResult<Vec<WebDefinition>> {
+    let client = super::ai::client()?;
+    lookup::urban_definitions(&client, &term).await
 }

@@ -20,8 +20,10 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 import { useAiChat, useAiConfig } from "@/hooks/useAi";
-import { ipc } from "@/lib/ipc";
+import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
+import { useSettings } from "@/stores/settings";
+import type { WebDefinition } from "@/lib/bindings";
 import { OverlayPortal } from "@/components/glass/overlay";
 import type { Annotation, AnnotationStyle } from "@/types/ipc";
 import { HIGHLIGHT_COLORS } from "@/stores/reader";
@@ -691,15 +693,15 @@ function AiLookup({
 }
 
 /**
- * 词典: the platform's own dictionary and the imported ones, in that order —
- * offline, key-free, instant. Only when neither has an entry (or the platform
- * ships no dictionary and nothing is imported) does the AI answer take over,
- * which is also where a selection longer than a headword always lands. The
- * entry is rendered verbatim; it arrives as plain text.
+ * 词典: one term, every source at once — the platform dictionary and the
+ * imported bundles in one offline chain, then 维基词典, 维基百科 and Urban
+ * Dictionary from the network, each in its own block with its name on it (the
+ * readest layout). The AI answer only takes over when every enabled source came
+ * back empty, which is also where a selection longer than a headword always
+ * lands.
  *
- * The browser answers the same command: it has no platform dictionary to ask,
- * but it has the imported ones, and `unavailable` is the answer it gives when
- * it has neither.
+ * The browser answers the dictionary command from its imported bundles and
+ * has no Rust-side network, so the web sources are desktop-only there.
  */
 function DictLookup({
   text,
@@ -712,42 +714,196 @@ function DictLookup({
   y: number;
   onClose: () => void;
 }) {
+  const sources = useSettings((state) => state.lookupSources);
+  const dictFontSize = useSettings((state) => state.dictFontSize);
+
   const entry = useQuery({
     queryKey: ["dictionary", text],
     queryFn: () => ipc.lookupDictionary(text),
     // An entry is a pure function of the term, so it never goes stale.
+    enabled: sources.local,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+  const wiktionary = useQuery({
+    queryKey: ["wiktionary", text],
+    queryFn: () => ipc.lookupWiktionary(text),
+    // Desktop only: the browser has no backend to make the request from, and
+    // Urban Dictionary's API sends no CORS headers to do it client-side.
+    enabled: sources.wiktionary && isDesktopRuntime,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+  const wikipedia = useQuery({
+    queryKey: ["wikipedia", text],
+    queryFn: () => ipc.lookupWikipedia(text),
+    enabled: sources.wikipedia && isDesktopRuntime,
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+  const urban = useQuery({
+    queryKey: ["urban", text],
+    queryFn: () => ipc.lookupUrban(text),
+    enabled: sources.urban && isDesktopRuntime,
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
   });
 
-  if (entry.isPending) {
+  // Pronounce the term once when the panel opens, if the reader asked for
+  // that. The system voice is the right instrument: it is instant, offline,
+  // and the panel is already gone by the time a full TTS session would start.
+  const autoSpeak = useSettings((state) => state.dictAutoSpeak);
+  useEffect(() => {
+    if (!autoSpeak || typeof speechSynthesis === "undefined") return;
+    const utterance = new SpeechSynthesisUtterance(text.trim());
+    utterance.lang = /[\u4E00-\u9FFF]/.test(text) ? "zh-CN" : "en-US";
+    utterance.rate = 0.9;
+    speechSynthesis.cancel();
+    speechSynthesis.speak(utterance);
+    return () => speechSynthesis.cancel();
+  }, [autoSpeak, text]);
+
+  const localFound = sources.local && entry.data?.status === "found";
+  const wikiBlocks = sources.wiktionary ? (wiktionary.data ?? null) : null;
+  const wikiPage = sources.wikipedia ? (wikipedia.data ?? null) : null;
+  const urbanBlocks = sources.urban ? (urban.data ?? null) : null;
+  const anyHit =
+    Boolean(localFound) || wikiBlocks !== null || wikiPage !== null || urbanBlocks !== null;
+  const settled =
+    (!sources.local || !entry.isPending) &&
+    (!sources.wiktionary || !isDesktopRuntime || !wiktionary.isPending) &&
+    (!sources.wikipedia || !isDesktopRuntime || !wikipedia.isPending) &&
+    (!sources.urban || !isDesktopRuntime || !urban.isPending);
+
+  // Everything enabled came back empty: the AI explains the term instead,
+  // with a hint only for the genuine "no dictionary has this word" case.
+  if (settled && !anyHit) {
+    if (!sources.ai) {
+      return (
+        <LookupPanel title="词典" x={x} y={y} onClose={onClose}>
+          <span className="text-text-3">所有启用的来源都没有收录这个词。</span>
+        </LookupPanel>
+      );
+    }
     return (
-      <LookupPanel title="词典" x={x} y={y} onClose={onClose}>
-        <span className="text-text-3">正在查询…</span>
-      </LookupPanel>
+      <AiLookup
+        title="词典"
+        prompt={DICT_PROMPT(text)}
+        hint={entry.data?.status === "missing" ? "词典未收录，用 AI 解释：" : undefined}
+        x={x}
+        y={y}
+        onClose={onClose}
+      />
     );
   }
-  if (entry.data?.status === "found") {
-    return (
-      <LookupPanel title="词典" x={x} y={y} onClose={onClose}>
-        {entry.data.text}
-        {entry.data.source && (
-          <p className="text-text-3 mt-2 text-xs leading-relaxed">来自：{entry.data.source}</p>
-        )}
-      </LookupPanel>
-    );
-  }
+
   return (
-    <AiLookup
-      title="词典"
-      prompt={DICT_PROMPT(text)}
-      // Only the "no entry" case is worth explaining: with no system dictionary
-      // at all, AI is simply how 词典 works on this platform.
-      hint={entry.data?.status === "missing" ? "词典未收录，用 AI 解释：" : undefined}
-      x={x}
-      y={y}
-      onClose={onClose}
-    />
+    <LookupPanel title="词典" x={x} y={y} onClose={onClose}>
+      <div style={{ fontSize: dictFontSize }}>
+        {sources.local && (
+          <LookupSource label="本地词典">
+            {entry.isPending ? (
+              <span className="text-text-3">正在查询…</span>
+            ) : entry.data?.status === "found" ? (
+              <>
+                {entry.data.text}
+                {entry.data.source && (
+                  <p className="text-text-3 mt-2 text-[0.85em] leading-relaxed">
+                    来自：{entry.data.source}
+                  </p>
+                )}
+              </>
+            ) : (
+              <span className="text-text-3">未收录</span>
+            )}
+          </LookupSource>
+        )}
+        {sources.wiktionary && (
+          <LookupSource label="维基词典">
+            {wiktionary.isPending ? (
+              <span className="text-text-3">正在查询…</span>
+            ) : wikiBlocks?.length ? (
+              <DefinitionBlocks blocks={wikiBlocks} />
+            ) : (
+              <span className="text-text-3">未收录</span>
+            )}
+          </LookupSource>
+        )}
+        {sources.wikipedia && (
+          <LookupSource label="维基百科">
+            {wikipedia.isPending ? (
+              <span className="text-text-3">正在查询…</span>
+            ) : wikiPage ? (
+              <>
+                <p className="text-text-1 font-medium">{wikiPage.title}</p>
+                <p>{wikiPage.extract}</p>
+                <a
+                  href={wikiPage.pageUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent text-[0.85em] hover:underline"
+                >
+                  在维基百科阅读 ↗
+                </a>
+              </>
+            ) : (
+              <span className="text-text-3">未收录</span>
+            )}
+          </LookupSource>
+        )}
+        {sources.urban && (
+          <LookupSource label="Urban Dictionary">
+            {urban.isPending ? (
+              <span className="text-text-3">正在查询…</span>
+            ) : urbanBlocks?.length ? (
+              <DefinitionBlocks blocks={urbanBlocks} />
+            ) : (
+              <span className="text-text-3">未收录</span>
+            )}
+          </LookupSource>
+        )}
+      </div>
+    </LookupPanel>
+  );
+}
+
+/** One named block of the aggregated popup: the source on top, its answer
+ *  under it, a hairline between blocks. */
+function LookupSource({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <section className="border-hairline not-first:mt-2.5 not-first:border-t not-first:pt-2.5">
+      <p className="text-text-3 mb-1 text-[11px] font-medium">{label}</p>
+      <div className="leading-relaxed whitespace-pre-wrap">{children}</div>
+    </section>
+  );
+}
+
+/** A web dictionary's sense blocks: part of speech in small type, meanings
+ *  under it, each meaning linking to the source it came from. Keys are the
+ *  content itself — a dictionary never repeats a sense block, and a repeated
+ *  meaning would render identically anyway. */
+function DefinitionBlocks({ blocks }: { blocks: WebDefinition[] }) {
+  return (
+    <>
+      {blocks.map((block) => (
+        <div key={`${block.partOfSpeech}:${block.meanings[0] ?? ""}`}>
+          <p className="text-text-3 text-[0.85em]">{block.partOfSpeech}</p>
+          {block.meanings.map((meaning) => (
+            <p key={meaning}>{meaning}</p>
+          ))}
+          {block.sourceUrl && (
+            <a
+              href={block.sourceUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent text-[0.85em] hover:underline"
+            >
+              查看来源 ↗
+            </a>
+          )}
+        </div>
+      ))}
+    </>
   );
 }
 

@@ -306,6 +306,14 @@ export const commands = {
    *  first for CJK selections with the English edition as fallback.
    */
   lookupWikipedia: (term: string) => __TAURI_INVOKE<WikiSummary>("lookup_wikipedia", { term }),
+  /**
+   *  `lookup.wiktionary` — 维基词典 sense blocks (reader's language first,
+   *  English fallback), key-free and open.
+   */
+  lookupWiktionary: (term: string) =>
+    __TAURI_INVOKE<WebDefinition[]>("lookup_wiktionary", { term }),
+  /**  `lookup.urban` — Urban Dictionary's top slang definitions, key-free. */
+  lookupUrban: (term: string) => __TAURI_INVOKE<WebDefinition[]>("lookup_urban", { term }),
   /**  `rag.status` — what the AI drawer needs to decide which controls to show. */
   ragStatus: (bookId: string) => __TAURI_INVOKE<RagStatus>("rag_status", { bookId }),
   /**  `rag.indexBook` — rebuilds the embedding index for one book. */
@@ -1204,6 +1212,18 @@ export type TopBook = {
 export type Translation = {
   text: string;
   detectedLang: string | null;
+};
+
+/**
+ *  One sense block from a web dictionary (维基词典, Urban Dictionary): a part
+ *  of speech and its plain-text meanings, ready for the lookup popup. Both
+ *  sources ship markup in their definitions; it is stripped here so the
+ *  popup's plain-text container never sees a tag.
+ */
+export type WebDefinition = {
+  partOfSpeech: string;
+  meanings: string[];
+  sourceUrl: string;
 };
 
 /**  A Wikipedia article summary, ready to render in the lookup popup. */

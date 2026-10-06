@@ -40,6 +40,22 @@ export interface NotesView {
   filter: "all" | "noted";
 }
 
+/**
+ * Which sources the 词典 popup asks at once. The local chain — the platform
+ * dictionary and the imported bundles — is one switch because one command
+ * answers for both; the web sources and the AI fallback are their own.
+ * 维基词典 and 维基百科 ship on (key-free and instant), Urban Dictionary off —
+ * it is a network source of a very particular flavour, and readest ships its
+ * network sources off too.
+ */
+export interface LookupSources {
+  local: boolean;
+  wiktionary: boolean;
+  wikipedia: boolean;
+  urban: boolean;
+  ai: boolean;
+}
+
 interface SettingsState {
   theme: ThemeMode;
   transparency: TransparencyMode;
@@ -54,6 +70,11 @@ interface SettingsState {
   /** The same for the notes page, which is unmounted just the same way when a
    *  highlight is followed back into its book. */
   notesView: NotesView;
+  /** 词典 popup: which sources answer, at what size, and whether the term is
+   *  spoken when the panel opens. */
+  lookupSources: LookupSources;
+  dictFontSize: number;
+  dictAutoSpeak: boolean;
   setTheme: (mode: ThemeMode) => void;
   setTransparency: (mode: TransparencyMode) => void;
   toggleSidebar: () => void;
@@ -61,6 +82,9 @@ interface SettingsState {
   setShelfLayout: (layout: ShelfLayout) => void;
   setShelfView: (filter: LibraryFilter, patch: Partial<ShelfView>) => void;
   setNotesView: (patch: Partial<NotesView>) => void;
+  setLookupSources: (patch: Partial<LookupSources>) => void;
+  setDictFontSize: (size: number) => void;
+  setDictAutoSpeak: (on: boolean) => void;
 }
 
 const shelfView = (sort: LibrarySort): ShelfView => ({
@@ -94,6 +118,9 @@ export const DEFAULT_SETTINGS = {
     tags: shelfView("recentlyAdded"),
   },
   notesView: { query: "", filter: "all" },
+  lookupSources: { local: true, wiktionary: true, wikipedia: true, urban: false, ai: true },
+  dictFontSize: 14,
+  dictAutoSpeak: false,
 } satisfies Partial<SettingsState>;
 
 export const useSettings = create<SettingsState>()(
@@ -113,6 +140,11 @@ export const useSettings = create<SettingsState>()(
           },
         })),
       setNotesView: (patch) => set((state) => ({ notesView: { ...state.notesView, ...patch } })),
+      setLookupSources: (patch) =>
+        set((state) => ({ lookupSources: { ...state.lookupSources, ...patch } })),
+      setDictFontSize: (dictFontSize) =>
+        set({ dictFontSize: Math.min(Math.max(Math.round(dictFontSize), 12), 20) }),
+      setDictAutoSpeak: (dictAutoSpeak) => set({ dictAutoSpeak }),
     }),
     {
       name: "colorreader.settings",

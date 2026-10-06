@@ -1027,7 +1027,87 @@ function DictionarySection() {
         </GlassButton>
         <Feedback status={status} />
       </Actions>
+
+      <LookupSourceRows />
     </SettingsGroup>
+  );
+}
+
+/**
+ * The 词典 popup's own controls, under the imported list: which sources answer
+ * at once (the readest source list), at what type size, and whether the term
+ * is spoken when the panel opens. The web sources are desktop-only — the
+ * browser has no backend to make the request from.
+ */
+function LookupSourceRows() {
+  const sources = useSettings((state) => state.lookupSources);
+  const setLookupSources = useSettings((state) => state.setLookupSources);
+  const fontSize = useSettings((state) => state.dictFontSize);
+  const setFontSize = useSettings((state) => state.setDictFontSize);
+  const autoSpeak = useSettings((state) => state.dictAutoSpeak);
+  const setAutoSpeak = useSettings((state) => state.setDictAutoSpeak);
+
+  return (
+    <>
+      <Row label="启用来源" hint="划词查词会同时询问所有启用的来源，各自一块结果。" />
+      <Row label="本地词典" hint="系统词典与已导入的词典，全部离线。">
+        <GlassSwitch
+          checked={sources.local}
+          onCheckedChange={(local) => setLookupSources({ local })}
+          ariaLabel="启用本地词典"
+        />
+      </Row>
+      {isDesktopRuntime && (
+        <>
+          <Row label="维基词典" hint="网络来源，不需要 Key。">
+            <GlassSwitch
+              checked={sources.wiktionary}
+              onCheckedChange={(wiktionary) => setLookupSources({ wiktionary })}
+              ariaLabel="启用维基词典"
+            />
+          </Row>
+          <Row label="维基百科" hint="网络来源，词条的百科摘要。">
+            <GlassSwitch
+              checked={sources.wikipedia}
+              onCheckedChange={(wikipedia) => setLookupSources({ wikipedia })}
+              ariaLabel="启用维基百科"
+            />
+          </Row>
+          <Row label="Urban Dictionary" hint="网络来源，英语俚语。">
+            <GlassSwitch
+              checked={sources.urban}
+              onCheckedChange={(urban) => setLookupSources({ urban })}
+              ariaLabel="启用 Urban Dictionary"
+            />
+          </Row>
+        </>
+      )}
+      <Row label="AI 兜底" hint="所有来源都未收录时，用 AI 解释这个词。">
+        <GlassSwitch
+          checked={sources.ai}
+          onCheckedChange={(ai) => setLookupSources({ ai })}
+          ariaLabel="启用 AI 兜底"
+        />
+      </Row>
+      <Row label="词典字号" hint={`${fontSize} px，只影响查词弹窗，与阅读界面相互独立。`}>
+        <input
+          type="range"
+          aria-label="词典字号"
+          className="range w-36"
+          min={12}
+          max={20}
+          step={1}
+          value={fontSize}
+          style={{
+            ["--range-fill" as string]: `${((fontSize - 12) / 8) * 100}%`,
+          }}
+          onChange={(event) => setFontSize(Number(event.currentTarget.value))}
+        />
+      </Row>
+      <Row label="自动播放发音" hint="打开查词弹窗时朗读一次所选词。">
+        <GlassSwitch checked={autoSpeak} onCheckedChange={setAutoSpeak} ariaLabel="自动播放发音" />
+      </Row>
+    </>
   );
 }
 
