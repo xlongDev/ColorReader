@@ -402,10 +402,48 @@ export function nextColumnBlock(
  * The band around a block: the block itself plus symmetric padding, capped at
  * `count + 1` lines so a tall element inside it — a full-page image, a table —
  * cannot blow the band up to cover everything on the page.
+ *
+ * The padding is a fraction of the page's **own** leading, not of the `pitch` the
+ * caller was configured with. Those are the same number only while the reader
+ * owns the line height; 使用书籍排版 hands the book's own paragraph styles back,
+ * so the page's real advance is whatever the book set and the configured pitch is
+ * fiction. Measured on a real book (18px type): the page advanced 21.6px a line
+ * while the ruler was padding by 10px — 46% of a line, not the intended 30% —
+ * and the band came out 66.6px over 46.6px of words, thick enough to reach into
+ * the line above and the line below. Padding off the measured advance is right
+ * in both cases and needs no setting threaded through, so `pitch` is only the
+ * fallback for a page with too few lines to measure.
  */
-export function bandOver(block: RulerInterval, pitch: number, count: number): RulerInterval {
-  const pad = Math.round(pitch * RULER_PAD_FACTOR);
-  const cap = pitch * (Math.max(1, Math.floor(count)) + 1);
+export function bandOver(
+  block: RulerInterval,
+  pitch: number,
+  count: number,
+  lines?: readonly RulerInterval[],
+): RulerInterval {
+  const lead = lines && lines.length >= 2 ? medianAdvance(lines) : pitch;
+  const cap = lead * (Math.max(1, Math.floor(count)) + 1);
+  // Three tenths of a line, but never more than the whitespace there is.
+  //
+  // The fraction is of the *advance*, and the advance and the glyph box are two
+  // different measurements: a line box is as tall as the font's own height, while
+  // the advance is how far the page steps. Where the book sets a leading tighter
+  // than the type is high — perfectly legal, and what 使用书籍排版 hands back — the
+  // line boxes *overlap* and consecutive lines have no whitespace between them at
+  // all, so any padding reaches into the neighbouring line. Measured on a real
+  // book (《认识世界》, 18px type, 跟随书籍): the page advanced 21.6px a line while
+  // each line's box was 25px tall, leaving -3.4px between lines, and the ruler
+  // padded 6px at each end regardless — so each edge sat 6.0px past the block's
+  // own line, inside the line above or below it, which is the whole of
+  // 「上下均超出了一些」. The same page under 自定义 advances 32.4px and has 7.4px
+  // of real whitespace, and the same arithmetic reached 2.6px in — close enough
+  // that it read as correct, which is why only the tight book was reported.
+  //
+  // So the padding is bounded by the gap the block actually has to the line
+  // next to it: taking the whole of it is what "not reaching in" means, and a
+  // line box carries air of its own around its glyphs, so an edge resting on the
+  // neighbouring box is still clear of that line's letters.
+  const wanted = Math.round(lead * RULER_PAD_FACTOR);
+  const pad = lines && lines.length >= 2 ? Math.min(wanted, airAround(block, lines)) : wanted;
   // From the block's own leading edge, not centred on it. A block is a run of
   // lines, and on a page whose lines are sparse — a chapter title centred in
   // three-quarters of a blank page, a section opening, a figure with a caption
@@ -416,6 +454,37 @@ export function bandOver(block: RulerInterval, pitch: number, count: number): Ru
   // covers the lines the block is made of, which is what it is for.
   const start = block.start - pad;
   return { start, end: Math.min(start + cap, block.end + pad) };
+}
+
+/**
+ * The whitespace between `block` and the line next to it — the most padding a
+ * band can take without reaching into a line it is not marking.
+ *
+ * Every other line counts, and each one's gap is measured on whichever side of
+ * the block it falls: a line above ends short of `block.start` by so much, a line
+ * below starts after `block.end` by so much. Both can come out **negative**, and
+ * that is the case this exists for. A book whose leading is tighter than its own
+ * type is high has line boxes that overlap, so a neighbour is neither wholly
+ * above nor wholly below the block — it reaches into it. Asking "how far is the
+ * line above" cannot see that, because there is no line wholly above; the answer
+ * is a negative number, and the band takes none.
+ *
+ * Measured on the block's own edges rather than on the page's leading, because
+ * the two differ exactly where it matters: a paragraph's last line is followed by
+ * a paragraph gap, not by another step, so the block can have far more room on
+ * one side than a step's worth and no room at all on the other. The nearest side
+ * decides, which is the only one the band's edges are actually standing in.
+ */
+function airAround(block: RulerInterval, lines: readonly RulerInterval[]): number {
+  let air = Infinity;
+  for (const line of lines) {
+    // The block's own lines are the band, not a neighbour of it.
+    if (line.start >= block.start && line.end <= block.end) continue;
+    const gap = line.start < block.start ? block.start - line.end : line.start - block.end;
+    air = Math.min(air, gap);
+  }
+  // No other line on the page: a block alone in a window has the whole of it.
+  return Number.isFinite(air) ? Math.max(0, air) : Infinity;
 }
 
 /**
