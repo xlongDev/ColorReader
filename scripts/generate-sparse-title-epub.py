@@ -30,20 +30,45 @@ import zipfile
 # leave the title and come back.
 TITLE = "自序：一封泛黄的信"
 
+# Each paragraph has to run to **several** lines, not two. Two reasons, both
+# measured:
+#
+# - The padding regression reads a block of `rulerLines` lines and asks how far
+#   the band stands off it. With a two-line paragraph the block *is* the
+#   paragraph, its extent already includes the `0.78em` gap, and the padding is a
+#   rounding error beside it — the slot went green with the guard removed.
+# - A 1.2 leading on 18px type is 21.6px a line, so a paragraph needs three or
+#   more of them before the gap between paragraphs (≈33px) is unambiguously
+#   *not* the leading. Two lines and the median step across the page is the gap.
 PARAGRAPHS = [
     "一九三〇年代的某个下午，我在.library 的窗边读到一封很旧的信，信里说人这一生会失去很多东西，"
-    "但真正失去的只有一样，就是妄自尊大。",
-    "那封信没有署名，年份也不清楚，可我后来反复想起它，大概是因为它说中了一件我花了很久才肯承认的事。",
-    "承认之后，剩下的事情就简单了：把「我知道」换成「我不知道」，然后把剩下的时间用来把不知道变成知道。",
-    "这也是这本书想说的全部内容——不是结论，是方法。",
+    "但真正失去的只有一样，就是妄自尊大。那封信的字迹已经褪得很淡，纸边也卷了起来，"
+    "可每一句都还认得出来，我把它抄在本子上，抄完就放在窗台上，此后多年没有动过。",
+    "那封信没有署名，年份也不清楚，可我后来反复想起它，大概是因为它说中了一件我花了很久"
+    "才肯承认的事。承认之后，剩下的事情就简单了：把「我知道」换成「我不知道」，"
+    "然后把剩下的时间用来把不知道变成知道——这条路上没有捷径，但每一步都算数。",
+    "这也是这本书想说的全部内容——不是结论，是方法。书里那些看起来绕远的讨论，"
+    "其实都在回答同一个问题：我们凭什么以为自己知道的事情，比实际知道的更多。"
+    "把这件事想清楚，后面读什么都会轻一点。",
 ]
 
 # The shape under test: a title centred in most of the page, the text far below
 # it. `min-height` on a flex column with `justify-content: center` is how real
 # books write a chapter opener, and it is what puts hundreds of pixels of nothing
 # between the two lines the ruler has to choose between.
+#
+# The line height is the second shape, and the one that decides whether this
+# fixture can tell anything: 使用书籍排版 hands the book its own paragraph styles
+# back, so the page's leading is whatever is written here. The reader's presets
+# are 1.6 / 1.8 / 2.0 / 2.2 — at 18px that is 28.8 / 32.4 / 36 / 39.6px a line.
+# This book was originally 1.75, which is 31.5px: **0.9px away from the 1.8
+# preset**, so a ruler padding off the setting and a ruler padding off the page
+# were indistinguishable and the regression slot was decoration. It has to be
+# nowhere near a preset. 1.2 is the shape found on the real book that reported
+# it (《认识世界》, whose sections advance 21.6px at 18px) and it clears the
+# nearest preset by 7px.
 CSS = """@charset "utf-8";
-body { font-family: "Noto Serif CJK SC", "Songti SC", serif; line-height: 1.75;
+body { font-family: "Noto Serif CJK SC", "Songti SC", serif; line-height: 1.2;
        margin: 5%; color: #202124; }
 p { margin: 0.78em 0; text-align: justify; text-indent: 2em; }
 h1 { font-size: 1.72em; line-height: 1.38; text-align: center; margin: 1.2em 0; }
