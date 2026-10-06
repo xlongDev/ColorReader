@@ -316,7 +316,12 @@ export function ReadingRuler({
     (target: RulerInterval, animate: boolean, column?: RulerColumn) => {
       const { axis } = areaRef.current;
       if (axis <= 0) return;
-      const wanted = bandOver(target, pitch, rulerLines);
+      // Hand `bandOver` the lines of the page the block is on, so its padding
+      // comes off the leading the page actually has. 使用书籍排版 gives the book
+      // back its own line height, and the configured `pitch` is then not a
+      // measurement of anything on screen — see `bandOver`.
+      const pageLines = column ? column.lines : linesRef.current;
+      const wanted = bandOver(target, pitch, rulerLines, pageLines);
       const extent = wanted.end - wanted.start;
       const centre = clampAnchor((wanted.start + wanted.end) / 2, extent, 0, axis);
       // A vertical line is a column that runs the page's full height by
