@@ -355,9 +355,14 @@ function hugsText(drawn: Drawn, lines: readonly Interval[], label = "") {
   const high = Math.max(...lines.map((line) => line.right));
   const bandLow = vertical ? drawn.band.top : drawn.band.left;
   const bandHigh = vertical ? drawn.band.bottom : drawn.band.right;
-  // The pad outside the text is three tenths of the reader's leading, which the
-  // page's own advance approximates.
-  const pad = advanceOf(lines) * 0.3 + 2;
+  // The pad outside the text is a fraction of the reader's leading, which the
+  // page's own advance approximates. Half the advance, not three tenths: the
+  // band pads by 0.3 × the advance *it* measures, and with 使用书籍排版 the
+  // page's steps are bimodal (行距 and 段距), so the two medians can land on
+  // different modes and the two 0.3s disagree by a few pixels. Half an advance
+  // still sits far under the failure this exists to catch — a band as wide as
+  // the page instead of the words is tens of percent of the window.
+  const pad = advanceOf(lines) * 0.5 + 2;
   expect(bandLow, `${label}带没有对齐正文的这一边`).toBeGreaterThanOrEqual(low - pad);
   expect(bandLow, `${label}带没有对齐正文的这一边`).toBeLessThanOrEqual(low + pad);
   expect(bandHigh, `${label}带没有对齐正文的那一边`).toBeGreaterThanOrEqual(high - pad);
