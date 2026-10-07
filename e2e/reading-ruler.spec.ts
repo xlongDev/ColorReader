@@ -33,7 +33,20 @@ import { readFileSync } from "node:fs";
  */
 
 /** One line of type: its extent along the reading axis, and across it. */
-type Interval = { start: number; end: number; left: number; right: number };
+/**
+ * A line as `LINES` reports it: `start`/`end` along the reading axis,
+ * `left`/`right` across the page, and `crossFrom`/`crossTo` the fragment's own
+ * extent on the *window* axis — which in vertical is the column's height, and
+ * is not on `left`/`right` there.
+ */
+type Interval = {
+  start: number;
+  end: number;
+  left: number;
+  right: number;
+  crossFrom: number;
+  crossTo: number;
+};
 
 /** A line as it is read off the page, with or without its cross-axis extent. */
 type Span = { start: number; end: number };
@@ -156,6 +169,11 @@ const LINES = `(() => {
           end: vertical ? hostBox.right - left : bottom,
           left: vertical ? top : left,
           right: vertical ? bottom : right,
+          // The fragment's own extent on the window axis. In vertical a column's
+          // height is what tells the band's height, and left/right carry the
+          // column's width there, so the cross extent has to be on the record.
+          crossFrom: vertical ? top : left,
+          crossTo: vertical ? bottom : right,
         });
       }
     }
@@ -185,6 +203,8 @@ const LINES = `(() => {
         last.end = Math.max(last.end, interval.end);
         last.left = Math.min(last.left, interval.left);
         last.right = Math.max(last.right, interval.right);
+        last.crossFrom = Math.min(last.crossFrom, interval.crossFrom);
+        last.crossTo = Math.max(last.crossTo, interval.crossTo);
         continue;
       }
     }
@@ -213,7 +233,7 @@ const columnLines = (page: Page, side: -1 | 1) =>
     const middle = (hostBox.left + hostBox.right) / 2;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     const range = document.createRange();
-    const intervals: { start: number; end: number; left: number; right: number }[] = [];
+    const intervals: Interval[] = [];
     for (let node = walker.nextNode(); node; node = walker.nextNode()) {
       if (!node.textContent?.trim()) continue;
       range.selectNodeContents(node);
@@ -231,11 +251,18 @@ const columnLines = (page: Page, side: -1 | 1) =>
         }
         const centre = rect.left + rect.width / 2;
         if ((centre - middle) * sign <= 0) continue;
-        intervals.push({ start: rect.top, end: rect.bottom, left: rect.left, right: rect.right });
+        intervals.push({
+          start: rect.top,
+          end: rect.bottom,
+          left: rect.left,
+          right: rect.right,
+          crossFrom: rect.left,
+          crossTo: rect.right,
+        });
       }
     }
     intervals.sort((a, b) => a.start - b.start);
-    const merged: { start: number; end: number; left: number; right: number }[] = [];
+    const merged: Interval[] = [];
     for (const interval of intervals) {
       const last = merged[merged.length - 1];
       if (last) {
@@ -245,6 +272,8 @@ const columnLines = (page: Page, side: -1 | 1) =>
           last.end = Math.max(last.end, interval.end);
           last.left = Math.min(last.left, interval.left);
           last.right = Math.max(last.right, interval.right);
+          last.crossFrom = Math.min(last.crossFrom, interval.crossFrom);
+          last.crossTo = Math.max(last.crossTo, interval.crossTo);
           continue;
         }
       }
@@ -305,7 +334,7 @@ function coveredLines<T extends Span>(drawn: Drawn, lines: readonly T[], label =
   const vertical = drawn.vertical;
   const low = vertical ? drawn.band.left : drawn.band.top;
   const high = vertical ? drawn.band.right : drawn.band.bottom;
-  const covered = lines.filter((line) => {
+  let covered = lines.filter((line) => {
     const centre = (line.start + line.end) / 2;
     return centre > low && centre < high;
   });
@@ -624,7 +653,7 @@ test("the band lands on the words, not the gap above them, on a chapter opener",
     const band = await rulerDrawn(page);
     const lines = (await page.evaluate(LINES)) as Interval[];
     expect(lines.length, `${label}标题页一个字的行盒都没量到`).toBeGreaterThan(0);
-    const covered = lines.filter((line) => {
+    let covered = lines.filter((line) => {
       const centre = (line.start + line.end) / 2;
       return centre > band.band.top && centre < band.band.bottom;
     });
@@ -799,7 +828,7 @@ test("the band's padding comes off the page's own leading, not the setting's", a
     const drawn = await rulerDrawn(page);
     const lines = (await page.evaluate(LINES)) as Interval[];
     expect(lines.length, `${label}：一个字的行盒都没量到`).toBeGreaterThan(3);
-    const covered = lines.filter((line) => {
+    let covered = lines.filter((line) => {
       const centre = (line.start + line.end) / 2;
       return centre > drawn.band.top && centre < drawn.band.bottom;
     });
@@ -1358,22 +1387,256 @@ test("the colour reaches the band: 仅描边 draws hairlines, 黄色 fills it", 
   expect(yellow.fill).not.toBe(clear.fill);
 });
 
-test("vertical type turns the band into a column, washed on either side", async ({ page }) => {
+test("vertical type turns the band into a column, as tall as the text it washes", async ({
+  page,
+}) => {
+  // The sparse-title book rather than the reader's own, and the reason is its
+  // **last paragraph is one line**. In 竖排 a paragraph is a column, so that is a
+  // short column — and a band's height has to be able to describe one. Every
+  // column of the demo prose book runs the full height of the page, so *there* a
+  // band drawn at the page's height is indistinguishable from a correct one: with
+  // only long paragraphs this slot stayed green against the bug, exactly like the
+  // two line-height fixtures before it.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      contentType: "application/epub+zip",
+    }),
+  );
   await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await choose(page, "单页");
   await enableRuler(page);
   await choose(page, "竖排");
+  // To the third section: a whole page of one line. Every page of the other two
+  // is full-height columns, so this is the only page where a band's height can be
+  // told apart from the page's.
+  for (let i = 0; i < 2; i += 1) {
+    await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+    await page.waitForTimeout(2400);
+  }
+  await page.keyboard.press("PageDown");
+  await page.waitForTimeout(2000);
 
-  const drawn = await rulerDrawn(page);
-  const height = drawn.host.bottom - drawn.host.top;
-  const width = drawn.host.right - drawn.host.left;
+  const first = await rulerDrawn(page);
+  const width = first.host.right - first.host.left;
+  const height = first.host.bottom - first.host.top;
   // A line is a column now, so the band stands up and the washes sit to its left
   // and right — along the page, because that is the axis the type now reads on.
-  expect(drawn.vertical, "竖排下标尺应当变成竖条").toBe(true);
-  expect(across(drawn.band, drawn.vertical), "竖排下标尺应当贯穿阅读区的高度").toBeCloseTo(
-    height,
-    -2,
+  expect(first.vertical, "竖排下标尺应当变成竖条").toBe(true);
+  expect(spanAlong(first), "竖排下带与左右遮罩加不满阅读区").toBeCloseTo(width, 0);
+
+  // `LINES` reports window coordinates, and so does the band. One basis
+  // throughout: 🔴 reading one of them host-relative and the other in window
+  // coordinates puts them 108px apart when they are 10px apart, which is how this
+  // first went red against a band that was already correct.
+  const firstLines = (await page.evaluate(LINES)) as Interval[];
+  expect(firstLines.length, "竖排：一个字的列都没量到").toBeGreaterThan(3);
+
+  /** The columns the band is standing on. */
+  const under = (d: Drawn, ls: readonly Interval[]) =>
+    ls.filter((line) => {
+      const centre = (line.start + line.end) / 2;
+      return centre > d.host.right - d.band.right && centre < d.host.right - d.band.left;
+    });
+
+  // Step onto a SHORT column — the fixture's whole point. Its last paragraph is
+  // one line, so there is a column a fraction of the page's height, and only on
+  // that one can a band drawn at the page's height be caught.
+  let drawn = await rulerDrawn(page);
+  let lines = (await page.evaluate(LINES)) as Interval[];
+  let covered = under(drawn, lines);
+  const shortest = Math.min(...lines.map((line) => line.crossTo - line.crossFrom));
+  for (let step = 0; step < 12; step += 1) {
+    const onShort = covered.some((line) => line.crossTo - line.crossFrom < shortest * 3);
+    if (onShort) break;
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(600);
+    drawn = await rulerDrawn(page);
+    lines = (await page.evaluate(LINES)) as Interval[];
+    covered = under(drawn, lines);
+  }
+  console.log(
+    "cols " +
+      lines.map((l) => l.start.toFixed(0) + "/h" + (l.crossTo - l.crossFrom).toFixed(0)).join(" ") +
+      " | band covers h" +
+      covered.map((l) => (l.crossTo - l.crossFrom).toFixed(0)).join(",") +
+      " [" +
+      covered.map((l) => l.crossFrom.toFixed(0) + "-" + l.crossTo.toFixed(0)).join(" ") +
+      "]" +
+      " | band t" +
+      drawn.band.top.toFixed(0) +
+      " b" +
+      drawn.band.bottom.toFixed(0) +
+      " host t" +
+      drawn.host.top.toFixed(0) +
+      " b" +
+      drawn.host.bottom.toFixed(0),
   );
-  expect(spanAlong(drawn), "竖排下带与左右遮罩加不满阅读区").toBeCloseTo(width, 0);
+  expect(covered.length, "竖排：带子底下没有一列字").toBeGreaterThan(0);
+  // The band must have reached a short column, or the rest proves nothing.
+  expect(
+    Math.min(...covered.map((line) => line.crossTo - line.crossFrom)),
+    "走位没有落到短列上，这条用例测不到带子的高度",
+  ).toBeLessThan(height * 0.5);
+
+  // 🔴 The assertion this test used to make, and why it was wrong: it read the
+  // band's height as the **page's** height. A vertical column is a block of text
+  // with a real top and a real bottom — its height is whatever the paragraph is —
+  // so the columns of one page run to different lengths and a chapter's last is
+  // one short line. Measured on a real book (《认识世界》, 18px 竖排) the ruler drew
+  // every band the full 636px of the reading area, overhanging the words below by
+  // 269–418px. The old assertion could not have caught that: it asserted the band
+  // *equalled* the page, so a band running past it passed too.
+  //
+  // What holds: the band is as tall as the text it washes, give or take a line's
+  // padding — and the padding is the *reader's own* configured leading, not the
+  // page's, because that is what `pad` is in the render (`round(pitch × 0.3)` with
+  // `pitch` the reader's font size times its line-height preset). In vertical the
+  // page's own leading is the *step between columns*, the other axis, so it says
+  // nothing about how far the band may stand off the top of a column.
+  //
+  // So the slack is bounded by what a padding of that size can possibly be: at
+  // most three tenths of a line, and the line is at least as tall as the smallest
+  // column on the page. Read that off the fixture rather than hardcoding a
+  // setting — 🔴 hardcoding 18 × 1.8 failed here for a reason worth keeping: the
+  // number is the *default* preset, and the assertion then silently measures the
+  // defaults rather than what this reader has.
+  const textTop = Math.min(...covered.map((line) => line.crossFrom));
+  const textBottom = Math.max(...covered.map((line) => line.crossTo));
+  // The smallest column is the floor for how tall a line can be here, so three
+  // tenths of it is the least padding any reader's setting can produce.
+  const shortestColumn = Math.min(...covered.map((line) => line.crossTo - line.crossFrom));
+  const slack = Math.max(advanceOf(lines), shortestColumn) * 0.35;
+  console.log(
+    "band t" +
+      drawn.band.top.toFixed(0) +
+      " b" +
+      drawn.band.bottom.toFixed(0) +
+      " | text " +
+      textTop.toFixed(0) +
+      ".." +
+      textBottom.toFixed(0) +
+      " | head " +
+      (textTop - drawn.band.top).toFixed(1) +
+      " tail " +
+      (drawn.band.bottom - textBottom).toFixed(1) +
+      " | slack " +
+      slack.toFixed(1),
+  );
+  expect(textTop - drawn.band.top, "竖排：带子上缘伸到它框的列之外").toBeLessThan(slack);
+  expect(drawn.band.bottom - textBottom, "竖排：带子下缘伸到它框的列之外").toBeLessThan(slack);
+  // …and it is padded at all, so a band flush with its text cannot pass the two
+  // above for the wrong reason.
+  expect(textTop - drawn.band.top, "竖排：带子紧贴文字，没有留白").toBeGreaterThan(0);
+  // …and inside the reading area, which the old one could not say.
+  expect(drawn.band.bottom - drawn.band.top, "竖排：带子比阅读区还高").toBeLessThanOrEqual(
+    height + 0.5,
+  );
+});
+
+test("in vertical type the band lands on columns, inside the type", async ({ page }) => {
+  // 竖排 puts the reading axis across the page, measured leftward from the right
+  // edge — and that measurement was being taken from the wrong edge. The ruler
+  // handed `toSpans` the reading area's *cross* extent (its height) where the
+  // vertical axis wants its *width*, so every column came out shifted by
+  // width − height and the whole line list sat off the axis: negative starts, ends
+  // past the far side. The two extents are the same number in horizontal, which is
+  // why only 竖排 showed it.
+  //
+  // What the reader saw, measured on a real book after a chapter turn: a two-line
+  // band **175px wide over 8 columns**, hanging **93px outside the words** and
+  // covering the page's right margin where there is no type at all. On a page it
+  // happened to land on something, it looked merely misaligned.
+  //
+  // The fixture is the sparse-title book rather than the reader's own: 跟随书籍
+  // hands the book its paragraph styles back, and this is a bug about the axis the
+  // ruler measures, so what matters is that the page's columns are far enough
+  // apart for the two extents to differ — which any paginated vertical page is,
+  // since the pane is wider than it is tall.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await choose(page, "单页");
+  await enableRuler(page);
+  await choose(page, "竖排");
+  // Off the plate and the opener, onto a page of ordinary columns. The fixture
+  // opens on a plate — a whole page of no words, where the band is deliberately
+  // not drawn — so the walk has to start past it.
+  await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+  await page.waitForTimeout(2600);
+  await page.keyboard.press("PageDown");
+  await page.waitForTimeout(2000);
+  // …and a screen with no lines in the window has no band, which is the honest
+  // answer rather than a failure. `rulerDrawn` insists the band is there, so read
+  // it directly and skip such a screen.
+  const drawnOrNull = async () => (await page.evaluate(DRAWN)) as Drawn | null;
+
+  for (const label of ["第一屏", "下一章", "上一章"]) {
+    if (label === "下一章") {
+      await page
+        .getByRole("button", { name: "下一章", exact: true })
+        .first()
+        .click({ force: true });
+      await page.waitForTimeout(2200);
+    } else if (label === "上一章") {
+      await page
+        .getByRole("button", { name: "上一章", exact: true })
+        .first()
+        .click({ force: true });
+      await page.waitForTimeout(2200);
+    }
+    const lines = (await page.evaluate(LINES)) as Interval[];
+    if (lines.length <= 3) {
+      console.log(`${label}: no lines in the window, skipped`);
+      continue;
+    }
+    const drawn = await drawnOrNull();
+    expect(drawn, `${label}：有字却没有标尺`).not.toBeNull();
+    expect(drawn!.vertical, `${label}：竖排下标尺应当是竖条`).toBe(true);
+
+    // `LINES` reports a vertical span as its distance from the host's *right*
+    // edge — that is the axis, and it is what makes forward mean the same thing in
+    // both writing modes. A window x converts back with `host.right - x`, and the
+    // band has to be converted too or the two are in different places entirely.
+    const toSpan = (x: number) => drawn!.host.right - x;
+    const low = toSpan(drawn!.band.right);
+    const high = toSpan(drawn!.band.left);
+
+    // The axis the ruler measures on has to be the axis it places on. That is not
+    // observable from here — `LINES` does its own projection, so asserting on it
+    // would only assert the probe agrees with itself. What *is* observable, and is
+    // the whole of the bug, is where the band ends up: on a line it is washing, or
+    // out in the margin where there is no type at all. The wrong edge put it in the
+    // second place, so that is what the assertions below say.
+
+    // …and the band is on the lines it is washing, as wide as they are and no
+    // wider. A band out in the margin beside the text, or stretched over the page
+    // next door, is the shape of this bug: 175px over 8 columns, 93px outside the
+    // words, sitting where there is no type at all.
+    let covered = lines.filter((line) => {
+      const centre = (line.start + line.end) / 2;
+      return centre > low && centre < high;
+    });
+    expect(covered.length, `${label}：带子底下没有一行字`).toBeGreaterThan(0);
+    const words = covered.reduce(
+      (acc, line) => ({ l: Math.min(acc.l, line.start), r: Math.max(acc.r, line.end) }),
+      { l: Infinity, r: -Infinity },
+    );
+    // The band's own ends, within one line's padding of the words' outer edges —
+    // a relation, because the two engines space a vertical column differently.
+    const pad = advanceOf(lines);
+    expect(low, `${label}：带子左缘伸到它框的列之外`).toBeGreaterThanOrEqual(words.l - pad);
+    expect(high, `${label}：带子右缘伸到它框的列之外`).toBeLessThanOrEqual(words.r + pad);
+    // …and on this page: those columns are inside the host, which is the axis
+    // the band is placed on.
+    const hostWidth = drawn!.host.right - drawn!.host.left;
+    expect(words.l, `${label}：带子框住的列不在阅读区内`).toBeGreaterThanOrEqual(-0.5);
+    expect(words.r, `${label}：带子框住的列不在阅读区内`).toBeLessThanOrEqual(hostWidth + 0.5);
+  }
 });
 
 test("on a spread the band covers one column, and the other one is washed", async ({ page }) => {
@@ -1476,4 +1739,142 @@ test("an arrow steps the band a whole block at a time, and the step is a move", 
   expect(end.band.left, "翻页之后带被带出了阅读区的左边").toBeGreaterThanOrEqual(end.host.left - 1);
   expect(end.band.right, "翻页之后带被带出了阅读区的右边").toBeLessThanOrEqual(end.host.right + 1);
   expect(await progress(page), "带走到页面末尾之后，方向键没有翻页").toBeGreaterThan(wasAt);
+});
+
+test("an arrow still reaches the ruler with the caret inside the book", async ({ page }) => {
+  // 🔴 The caret moves into the section, and the keys stop working.
+  //
+  // A book section is an iframe, and an iframe is its own browsing context: its
+  // events stop at its edge. foliate focuses a section's own window after every
+  // page it lays out — `paginator.focusView`, on `goTo` and on the resize a
+  // change of writing mode causes — so this is not a corner case, it is where the
+  // reader is after the first page turn. Measured on a real book with the caret
+  // on a `<p>` inside the section: a `keydown` listener on `window` saw **none**
+  // of three presses and `move` was never called. The band sat on the page and
+  // every arrow did nothing.
+  //
+  // Written in 竖排 because that is where it was reported, and because 竖排 is
+  // what puts the caret in the section here: re-laying the page out sideways is
+  // the resize that focuses it. The band answers `ArrowDown` by stepping along
+  // the reading axis, which runs **leftward** from the right edge in 竖排 — so
+  // the step is `band.left` *decreasing*, and asserting the wrong sign is how a
+  // test of this can pass against a band that did not move at all.
+  // The sparse-title book, not the reader's own prose: this bug is about the
+  // keyboard reaching *out of a book section*, so there has to be a section — the
+  // prose book is read in the plain-text path, which has no iframe to lose the
+  // event in — and 竖排 has to be a layout this book offers.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await choose(page, "单页");
+  await choose(page, "竖排");
+  await enableRuler(page);
+  // Off the plate and off the chapter opener: the fixture's first section is a
+  // whole page with no text node on it, and the ruler draws nothing to measure.
+  for (let i = 0; i < 2; i += 1) {
+    await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+    await page.waitForTimeout(2400);
+  }
+
+  const drawn = await rulerDrawn(page);
+  expect(drawn.vertical, "竖排下标尺应当变成竖条").toBe(true);
+
+  // Put the caret in the section the way a reader does: by clicking the page.
+  // Then proof that it is really there, asked of the *section's* window rather
+  // than the parent window's — without this the slot would pass against a band
+  // that never had to relay anything.
+  const section = page.frames().find((f) => f !== page.mainFrame());
+  const paragraph = section?.locator("p").first();
+  expect(await paragraph?.count(), "书页里一个段落都没有，这条用例测不到中继").toBeGreaterThan(0);
+  await paragraph!.click();
+  await page.waitForTimeout(300);
+  expect(section, "书页 iframe 一个都没找到").toBeDefined();
+
+  const seen = await page.evaluate(`(() => {
+    const frames = document.querySelector("foliate-view")?.shadowRoot
+      ?.querySelector("foliate-paginator")?.shadowRoot?.querySelectorAll("iframe") ?? [];
+    window.__sectionKeys = 0;
+    for (const frame of frames) {
+      const view = frame.contentWindow;
+      if (!view) continue;
+      view.addEventListener("keydown", () => { window.__sectionKeys += 1; });
+    }
+    return frames.length;
+  })()`);
+  expect(seen, "书页 iframe 一个都没找到，这条用例测不到中继").toBeGreaterThan(0);
+
+  const before = (await rulerDrawn(page)).band.left;
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(900);
+  const after = await rulerDrawn(page);
+  expect(
+    (await page.evaluate("window.__sectionKeys")) as number,
+    "按键没有落在书页里，这条用例测的不是中继",
+  ).toBeGreaterThan(0);
+  expect(
+    before - after.band.left,
+    "竖排下按方向键，带没有沿着阅读方向（向左）走一步",
+  ).toBeGreaterThan(20);
+});
+
+test("dragging the band sideways in 竖排 follows the hand, not the axis", async ({ page }) => {
+  // 🔴 竖排 runs its axis from the reading area's **right** edge, so `start`
+  // grows as the pointer goes **left** — the opposite of the screen's own
+  // direction. The drag fed it the pointer's delta as it stands, so the band ran
+  // away from the hand: measured on a real book, dragging the band 120px to the
+  // **left** moved it 120px to the **right** (846 → 966).
+  //
+  // 横排 is the control and it is here on purpose: there the drag is down the
+  // page only, so a sideways drag must leave the band where it was — a test that
+  // only checked the sign in 竖排 would pass against a band that moved on both
+  // axes at once.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await choose(page, "单页");
+  await enableRuler(page);
+  // Off the plate: the fixture's first section is a whole page with no text node
+  // on it, and the ruler has nothing there to measure.
+  for (let i = 0; i < 2; i += 1) {
+    await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+    await page.waitForTimeout(2400);
+  }
+
+  const before = await rulerDrawn(page);
+  const box = (await page.locator('[data-ruler-edge="leading"]').boundingBox())!;
+  const x = box.x + box.width / 2;
+  const y = box.y + box.height / 2;
+  // Hold it out at the right-hand end of the page, so a step left has room and
+  // the band is not already against the edge it is being asked to cross.
+  await page.mouse.move(x, y);
+  await page.mouse.down();
+  await page.mouse.move(x - 120, y, { steps: 12 });
+  const holding = await rulerDrawn(page);
+  expect(before.band.left - holding.band.left, "横排下横向拖动不该把带子带走").toBeLessThan(8);
+  await page.mouse.up();
+  await page.waitForTimeout(400);
+
+  await choose(page, "竖排");
+  await rulerDrawn(page);
+  const upright = await rulerDrawn(page);
+  const grip = (await page.locator('[data-ruler-edge="leading"]').boundingBox())!;
+  const gx = grip.x + grip.width / 2;
+  const gy = grip.y + grip.height / 2;
+  await page.mouse.move(gx, gy);
+  await page.mouse.down();
+  await page.mouse.move(gx - 120, gy, { steps: 12 });
+  const dragged = await rulerDrawn(page);
+  await page.mouse.up();
+  expect(
+    upright.band.left - dragged.band.left,
+    "竖排下向左拖，带子没有跟着手往左走",
+  ).toBeGreaterThan(80);
 });
