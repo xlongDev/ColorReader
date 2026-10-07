@@ -110,6 +110,46 @@ export function relayRulerTurn(target: Element | null, dir: 1 | -1) {
   );
 }
 
+/** Sections whose keys have already been carried over — one listener per window. */
+const relayedKeys = new WeakSet<Window>();
+
+/**
+ * The same boundary, on the keyboard: an arrow pressed with the caret inside a
+ * book section never reaches the reader's own window.
+ *
+ * An iframe is its own browsing context, so its events stop at its edge — and
+ * foliate puts the caret in the section's own window after every page it lays
+ * out (`paginator.focusView`, on `goTo` and on the resize that a change of
+ * writing mode or page size causes). So this is not a corner case, it is the
+ * state the reader is in after the first page turn: the caret sits on some `<p>`
+ * inside the section, and from there every arrow the reader presses is dropped.
+ *
+ * Measured with the caret in a section of a real book: a `keydown` listener on
+ * `window` saw **none** of three presses, and `move` was never called — the band
+ * sat on the page and the keys did nothing at all. Not only the ruler's: foliate
+ * binds no arrow keys of its own anywhere, so the page turns were gone too.
+ *
+ * So the section's window is listened to as well and the key is replayed on ours.
+ * Arrows only, and only plain ones: those are the keys the reader's own window
+ * answers for (the ruler steps, or the page turns when the ruler is off or the
+ * page runs out), and a modified arrow — Shift to select, Ctrl/Cmd to move by
+ * word — belongs to the text, which is the only thing that can act on it.
+ */
+export function relaySectionKeys(doc: Document) {
+  const view = doc.defaultView;
+  if (!view || relayedKeys.has(view)) return;
+  relayedKeys.add(view);
+  view.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    const { key } = event;
+    if (key !== "ArrowUp" && key !== "ArrowDown" && key !== "ArrowLeft" && key !== "ArrowRight") {
+      return;
+    }
+    window.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+  });
+}
+
 /**
  * Whether a fragment is *on the page the reader is reading*, across the page.
  *

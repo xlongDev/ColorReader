@@ -10,6 +10,7 @@ import {
   nextBlock,
   nextColumnBlock,
   onPage,
+  relaySectionKeys,
   toColumns,
   toLines,
   toSpans,
@@ -46,6 +47,31 @@ const padOf = (pitch: number) => Math.round(pitch * 0.3);
 describe("toSpans", () => {
   it("reads horizontal type down the page", () => {
     expect(toSpans([box(100, 126)], false, 800)).toEqual([{ start: 100, end: 126 }]);
+  });
+
+  it("measures the vertical axis from the WIDTH edge, not the cross extent", () => {
+    // The extent `toSpans` subtracts from has to be the reading area's *width* in
+    // vertical, because that is the edge vertical-rl reads leftward from. Passing
+    // the cross extent (the pane's height) instead shifts every line by the
+    // difference between the pane's two sides: on a 994 × 652 pane the columns
+    // came out at −249…548 instead of 93…890, the whole list sat off the axis,
+    // and a two-line band was placed where there is no type at all — measured at
+    // 175px wide over 8 columns, hanging 93px outside the words.
+    //
+    // The two extents are the same number in horizontal, which is why only 竖排
+    // ever showed it.
+    const width = 994;
+    const height = 652;
+    // Two columns near the right edge, as a vertical page lays them out.
+    const rects: RulerRect[] = [text(875, 901, 0, 600), text(845, 871, 0, 600)];
+    const fromWidth = toSpans(rects, true, width);
+    // Every line inside the axis, and reading order preserved: the column nearest
+    // the right edge first.
+    expect(fromWidth.every((span) => span.start >= 0 && span.end <= width)).toBe(true);
+    expect(fromWidth[0]!.start).toBeLessThan(fromWidth[1]!.start);
+    // The same rects with the height handed in: off the axis by width − height.
+    const fromHeight = toSpans(rects, true, height);
+    expect(fromHeight[0]!.start).toBe(fromWidth[0]!.start - (width - height));
   });
 
   it("reads vertical type leftward from the right edge", () => {
@@ -504,5 +530,83 @@ describe("clampAnchor", () => {
 
   it("centres a band too thick for the area", () => {
     expect(clampAnchor(10, 900, 0, 800)).toBe(400);
+  });
+});
+
+/** A stand-in for a section's window that hands back its keydown listener. */
+const sectionWindow = () => {
+  let handler: ((event: KeyboardEvent) => void) | null = null;
+  const doc = {
+    defaultView: {
+      addEventListener: (type: string, fn: (event: KeyboardEvent) => void) => {
+        if (type === "keydown") handler = fn;
+      },
+    },
+  } as unknown as Document;
+  relaySectionKeys(doc);
+  return (event: KeyboardEvent) => handler?.(event);
+};
+
+/** Presses a key inside a section and reports what reached the reader's window. */
+const pressInSection = (init: KeyboardEventInit) => {
+  const send = sectionWindow();
+  const seen: string[] = [];
+  const record = (event: Event) => seen.push((event as KeyboardEvent).key);
+  window.addEventListener("keydown", record);
+  try {
+    send(new KeyboardEvent("keydown", init));
+  } finally {
+    window.removeEventListener("keydown", record);
+  }
+  return seen;
+};
+
+describe("relaySectionKeys", () => {
+  it("carries an arrow out of the section and onto the reader's own window", () => {
+    // The whole bug in one line: an iframe is its own browsing context, so this
+    // key — pressed with the caret inside the book — arrives nowhere else.
+    expect(pressInSection({ key: "ArrowDown" })).toEqual(["ArrowDown"]);
+    expect(pressInSection({ key: "ArrowLeft" })).toEqual(["ArrowLeft"]);
+  });
+
+  it("leaves the keys the text itself owns alone", () => {
+    // Shift selects, Ctrl/Cmd moves by word, and neither has anything to do with
+    // a band: they belong to the text, which is the only thing that can act.
+    expect(pressInSection({ key: "ArrowDown", shiftKey: true })).toEqual([]);
+    expect(pressInSection({ key: "ArrowRight", ctrlKey: true })).toEqual([]);
+    expect(pressInSection({ key: "ArrowRight", metaKey: true })).toEqual([]);
+  });
+
+  it("does not answer for a key the section has already handled", () => {
+    const send = sectionWindow();
+    const event = new KeyboardEvent("keydown", { key: "ArrowDown", cancelable: true });
+    event.preventDefault();
+    const seen: string[] = [];
+    const record = (e: Event) => seen.push((e as KeyboardEvent).key);
+    window.addEventListener("keydown", record);
+    try {
+      send(event);
+    } finally {
+      window.removeEventListener("keydown", record);
+    }
+    expect(seen).toEqual([]);
+  });
+
+  it("listens to a section's window once, however often it is asked", () => {
+    // The measure runs on every relayout and on every page the reader arrives
+    // on, and each run walks every mounted section — a listener per run would
+    // replay one key once per run.
+    let listeners = 0;
+    const doc = {
+      defaultView: {
+        addEventListener: (type: string) => {
+          if (type === "keydown") listeners += 1;
+        },
+      },
+    } as unknown as Document;
+    relaySectionKeys(doc);
+    relaySectionKeys(doc);
+    relaySectionKeys(doc);
+    expect(listeners).toBe(1);
   });
 });

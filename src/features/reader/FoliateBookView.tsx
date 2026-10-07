@@ -10,7 +10,7 @@ import type { SpeechUnit, Span } from "./speech";
 import { foliateWash } from "./ttsWash";
 import type { TtsWashStyle } from "./ttsWash";
 import { applyVerticalQuotes, buildStyleSheet } from "./foliateStyle";
-import { lineRects, relayRulerLayout } from "./rulerPointer";
+import { lineRects, relayRulerLayout, relaySectionKeys } from "./rulerPointer";
 import type { RulerRect } from "./rulerPointer";
 import { CapturedPageTurn } from "./capturedTurn";
 import { markLoneFigures } from "./loneFigure";
@@ -1552,6 +1552,10 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
           if (!frame) continue;
           const box = frame.getBoundingClientRect();
           if (box.width <= 0 || box.height <= 0) continue;
+          // The arrows the reader presses with the caret in here have to reach
+          // the reader's own window, or the page goes quiet the moment foliate
+          // focuses a section — which is after every page it lays out.
+          relaySectionKeys(entry.doc);
           // Cut to the page the paginator paints: the strip is a chapter wide,
           // and the page next door starts inside the pane's own margin — so its
           // first line has a box there, and nothing on the screen.
