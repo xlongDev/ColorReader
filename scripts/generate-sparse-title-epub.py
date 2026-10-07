@@ -52,6 +52,42 @@ PARAGRAPHS = [
     "把这件事想清楚，后面读什么都会轻一点。",
 ]
 
+# A third section, one short paragraph, on purpose. In 竖排 a paragraph is a
+# column, so a short paragraph is a **short column** — and that is the shape a
+# band's *height* has to be able to describe. Measured on a real book
+# (《认识世界》, 18px 竖排) the ruler drew every band the full 636px of the reading
+# area, overhanging the words below by 269–418px, because it read the page's
+# height as the band's instead of the column's.
+#
+# Its own section rather than a paragraph at the end of the opener's, because the
+# opener's pagination is itself under test (a title centred in three-quarters of a
+# blank page, with the first paragraph hundreds of pixels below it) and one more
+# paragraph there changed how that page breaks. And a whole section of one line is
+# the honest shape anyway: every chapter's last page in a real book is a page of
+# a few lines, not a full one.
+SHORT_SECTION_TITLE = "尾"
+# One long paragraph between short ones: the shape that **tells two bugs apart**.
+# In 竖排 a paragraph is a run of columns, so a multi-line paragraph is a run of
+# full-height ones and a one-line paragraph is a single short column — and those
+# two have to sit side by side on the page. Measured on a real book (《认识世界》,
+# 18px 竖排): the band stood on a short column, and the fragment filter let the
+# column beside it in because the band *clipped* it — 2px of its 25 — and that
+# neighbour ran 318px down the page while the words under the band stopped at
+# 226px. 「带子压着它」和「带子擦到它」是两回事，可只要有一点重叠就会被算进去。
+#
+# Short enough that a band drawn at the page's height cannot pass for one that
+# fits them, and enough of them that the slot can measure a band over more than
+# one (one column would leave "the band covers the columns it marks" and "the band
+# covers everything" as the same claim).
+SHORT_SECTION_BODY = [
+    "就到这里吧。",
+    "后面没有了。",
+    "这一章写到最后只剩下几行，可它们该说的都说完了：纸有两端，翻过去是空白，"
+    "翻回来还是空白，中间夹着的这一段才是全部。写的人知道会在哪里停下，读的人"
+    "要走到最后一行才知道，而两个人看见的是同一片空白，这大概就是一本书的全部。",
+    "剩下的只有空白。",
+]
+
 # The shape under test: a title centred in most of the page, the text far below
 # it. `min-height` on a flex column with `justify-content: center` is how real
 # books write a chapter opener, and it is what puts hundreds of pixels of nothing
@@ -104,7 +140,7 @@ XHTML = """<?xml version="1.0" encoding="utf-8"?>
 <html xmlns="http://www.w3.org/1999/xhtml" xml:lang="zh">
 <head><title>{title}</title><link rel="stylesheet" href="style.css"/></head>
 <body>
-<section class="chapter-title"><h1>{title}</h1></section>
+{opening}
 {body}
 </body>
 </html>
@@ -129,6 +165,7 @@ def main(out: str) -> None:
     nav_items = (
         '<li><a href="plate.xhtml">插图</a></li>'
         f'<li><a href="ch1.xhtml">{TITLE}</a></li>'
+        f'<li><a href="ch2.xhtml">{SHORT_SECTION_TITLE}</a></li>'
     )
 
     opf = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -144,8 +181,9 @@ def main(out: str) -> None:
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="plate.xhtml" href="plate.xhtml" media-type="application/xhtml+xml"/>
     <item id="ch1.xhtml" href="ch1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="ch2.xhtml" href="ch2.xhtml" media-type="application/xhtml+xml"/>
   </manifest>
-  <spine><itemref idref="plate.xhtml"/><itemref idref="ch1.xhtml"/></spine>
+  <spine><itemref idref="plate.xhtml"/><itemref idref="ch1.xhtml"/><itemref idref="ch2.xhtml"/></spine>
 </package>
 """
 
@@ -163,7 +201,26 @@ def main(out: str) -> None:
         archive.writestr("OEBPS/nav.xhtml", NAV.format(title=TITLE, items=nav_items))
         archive.writestr("OEBPS/plate.xhtml", PLATE)
         archive.writestr(
-            "OEBPS/ch1.xhtml", XHTML.format(title=TITLE, body=body)
+            "OEBPS/ch1.xhtml",
+            XHTML.format(
+                title=TITLE,
+                body=body,
+                opening=f'<section class="chapter-title"><h1>{TITLE}</h1></section>',
+            ),
+        )
+        # No `.chapter-title` here: this section is the short-column shape, and a
+        # title centred in three-quarters of a blank page would put a full-height
+        # line on it and hide the very column the slot is here to measure.
+        archive.writestr(
+            "OEBPS/ch2.xhtml",
+            XHTML.format(
+                title=SHORT_SECTION_TITLE,
+                body="\n".join(f"<p>{line}</p>" for line in SHORT_SECTION_BODY),
+                # No opening section: a title centred in three-quarters of a blank
+                # page would put a full-height line on this page and hide the very
+                # short column the slot is here to measure.
+                opening="",
+            ),
         )
 
     with zipfile.ZipFile(out) as archive:
@@ -173,8 +230,8 @@ def main(out: str) -> None:
             if item.filename.startswith("OEBPS/ch")
         )
     print(
-        f"{out}: 2 sections (a plate, then a chapter opener), {spine_bytes / 1024:.1f} kB spine "
-        f"(~{spine_bytes // 1500 + 1} pages)"
+        f"{out}: 3 sections (a plate, a chapter opener, a short one), "
+        f"{spine_bytes / 1024:.1f} kB spine (~{spine_bytes // 1500 + 1} pages)"
     )
 
 
