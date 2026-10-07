@@ -286,20 +286,46 @@ export function ReadingRuler({
    * reader could see on it. The band is a window on the lines it washes, so the
    * lines it washes are what it is as wide as.
    *
-   * The two paths where a block is not a run of lines keep their own extent: a
+   * The path where a block is not a run of lines keeps its own extent: a
    * spread's block is one column of a two-column grid (its lines share heights,
-   * so the block alone would not say which column it is on), and a vertical line
-   * runs the page's full height by construction — the text not filling it is
-   * justification, not geometry.
+   * so the block alone cannot say which column it is on).
+   *
+   * 🔴 **A vertical line is *not* such a path**, whatever it looks like. Its
+   * "line" is a column, and a column is a block of text whose height is whatever
+   * the paragraph happens to be: the columns of one page run to wildly different
+   * lengths, and the last column of a chapter is a single short line. Reading the
+   * full page height as the band's cross extent drew it 636px tall over a column
+   * whose text is 126px — measured on a real book, overshooting the words below by
+   * **418px**, most of the band sitting on blank paper. 「行没排满是两端对齐」这句话
+   * 对横排的一**行**散文成立，对竖排的一**列**不成立 —— 列有真的顶边和底边。
    */
   const crossOf = useCallback(
     (washed: RulerInterval, column?: RulerColumn) => {
-      const { cross } = areaRef.current;
+      // 🔴 The vertical reading axis is measured from the reading area's **right**
+      // edge, so that is the extent a vertical fragment's own x has to be
+      // projected through — not `area.cross`, which in vertical is the pane's
+      // *height*. Projecting through the height shifts every fragment by
+      // width − height (342px on a 994 × 652 pane), so the filter below keeps the
+      // wrong fragments and the extent comes back describing columns the band is
+      // not on. Same wrong-edge bug as the line list, one function over.
+      const { cross, axis } = areaRef.current;
+      const from = vertical ? axis : cross;
       return crossExtentOf(
         rectsRef.current.filter((rect) => {
-          const lo = vertical ? cross - rect.right : rect.top;
-          const hi = vertical ? cross - rect.left : rect.bottom;
+          const lo = vertical ? from - rect.right : rect.top;
+          const hi = vertical ? from - rect.left : rect.bottom;
           if (hi <= washed.start || lo >= washed.end) return false;
+          // 🔴 Reaching in is not covering. The band is wider than the line it
+          // marks — its padding, and the room the cap leaves it, sit over the
+          // neighbour — and a fragment the band only clips by a hair is not one
+          // of the words it is washing, however much taller that fragment is.
+          // Measured on a real book in vertical type: the band stood on a column
+          // whose text runs 100..226 and clipped the column beside it by 2px of
+          // its 25, and that neighbour's 318px tail became the band's own — the
+          // band hung **102px** below every word it covered. A fragment counts
+          // when the band covers most of it.
+          const covered = Math.min(hi, washed.end) - Math.max(lo, washed.start);
+          if (covered * 2 < hi - lo) return false;
           if (!column) return true;
           const near = vertical ? rect.top : rect.left;
           const far = vertical ? rect.bottom : rect.right;
@@ -324,16 +350,20 @@ export function ReadingRuler({
       const wanted = bandOver(target, pitch, rulerLines, pageLines);
       const extent = wanted.end - wanted.start;
       const centre = clampAnchor((wanted.start + wanted.end) / 2, extent, 0, axis);
-      // A vertical line is a column that runs the page's full height by
-      // construction — the text not filling it is justification, not geometry —
-      // so that band stands the page's own height and the wash only its insets.
       // A spread hands the block back from one column, and its lines share
       // heights with the other column's, so the block alone cannot say which one
       // it is on: that path takes the width of the column it is stepping in.
       //
       // The band, not the block: `wanted` is the stretch of lines it actually
       // covers, and that is the window whose words it has to be as wide as.
-      const edges = vertical ? null : crossOf(wanted, column);
+      //
+      // Vertical included, and that is the fix: a column is a block of text with
+      // a real top and bottom, so its band's cross extent comes off the same
+      // measurement as a horizontal line's. `crossOf` reads the two axes the right
+      // way round already; skipping it here left `from`/`to` null, and a null pair
+      // is the render's cue to fall back to the whole area — so every vertical band
+      // was the full pane's height whatever it was covering.
+      const edges = crossOf(wanted, column);
       draw(
         { start: centre - extent / 2, end: centre + extent / 2 },
         animate,
@@ -341,7 +371,7 @@ export function ReadingRuler({
         edges?.to ?? null,
       );
     },
-    [crossOf, draw, pitch, rulerLines, vertical],
+    [crossOf, draw, pitch, rulerLines],
   );
 
   /**
@@ -452,7 +482,16 @@ export function ReadingRuler({
       return measured.reduce((total, entry) => total + entry.lines.length, 0);
     }
 
-    linesRef.current = visibleLines(toLines(toSpans(rects, vertical, next.cross)), 0, next.axis);
+    // The vertical axis is measured from the reading area's **right** edge, so
+    // that is the extent `toSpans` needs — not `next.cross`, which in vertical is
+    // the pane's *height*. Handing it the height shifts every line by the
+    // difference between the pane's two sides: on a 994 × 652 pane the lines came
+    // out at −249…548 instead of 93…890, so the whole list sat off the axis, the
+    // band was placed where nothing is, and a 2-line band came out 175px wide over
+    // 8 columns of the page next door. The two extents are the same number in
+    // horizontal, which is why only 竖排 showed it.
+    const axisFrom = vertical ? box.width : next.cross;
+    linesRef.current = visibleLines(toLines(toSpans(rects, vertical, axisFrom)), 0, next.axis);
     columnsRef.current = [];
     // The lines moved under a band that has not moved: the fraction it now sits
     // at is the one to keep, and it is the only reading of "where it was" that
@@ -603,7 +642,13 @@ export function ReadingRuler({
       const drawn = bandRef.current;
       const { axis } = areaRef.current;
       if (!grip || !drawn || axis <= 0) return;
-      const moved = (vertical ? event.clientX : event.clientY) - grip.at;
+      // 🔴 Negated in 竖排, and the reason is the axis the band is measured on.
+      // Down the page (horizontal) the reader's `start` grows with `clientY`, so
+      // the pointer's own delta moves the band the way the hand went. In 竖排
+      // `start` is the distance from the reading area's **right** edge, so it
+      // grows as the pointer goes **left** — feeding it the screen delta as it
+      // stands ran the band the other way: drag left, the band went right.
+      const moved = vertical ? grip.at - event.clientX : event.clientY - grip.at;
       const centre = clampAnchor(grip.centre + moved, grip.extent, 0, axis);
       // A drag moves the band down the page and not across it: the lines it was
       // measured on are the reader's own now, and they keep their own width.
