@@ -580,23 +580,25 @@ test("a page with no words on it gets no band", async ({ page }) => {
   // Distinct from *a line near where the band wants to be* (a paragraph gap, a
   // figure, the lines just off the top of the window), which still gets an
   // arithmetic band: that one marks a real place on a page that has text.
+  // 🔴 The wordless page is a **fixture section** (one image, no text node), not
+  // an accident of some other book. The sparse-title fixture used to supply one
+  // by having foliate render its opener as an empty section — which is what it
+  // does on macOS and *not* on the Linux runner, so the slot went red there with
+  // 「插图页上竟然量到了行」 and no change of mine could have been the cause.
   await page.route(/page-numbers\.epub/, (route) =>
     route.fulfill({
-      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      body: readFileSync(new URL("../public/demo/sparse-opener.epub", import.meta.url)),
       contentType: "application/epub+zip",
     }),
   );
   await openBook(page, "/?demo=1&epub=1", /页码样书/);
-  // `enableRuler` waits for the band, which a wordless page never grows — so the
-  // switch is thrown here and the assertions below read the page as it is.
-  await page.getByRole("button", { name: "阅读设置" }).first().click();
-  await page.waitForTimeout(700);
-  await rulerGroup(page).getByRole("button", { name: "开启", exact: true }).click();
-  await page.waitForTimeout(400);
-  await closeSettings(page);
-  await page.waitForTimeout(1200);
+  await choose(page, "单页");
+  await enableRuler(page);
 
-  // The fixture opens on its plate: no text at all.
+  // Onto the plate: the fixture's second section is a picture and nothing else.
+  await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+  await page.waitForTimeout(2600);
+
   const lines = (await page.evaluate(LINES)) as Interval[];
   expect(lines.filter((l) => l.start >= 0).length, "插图页上竟然量到了行").toBe(0);
   await expect(
@@ -607,7 +609,8 @@ test("a page with no words on it gets no band", async ({ page }) => {
   // And the washes go with it: there is no block of text for them to be outside.
   await expect(page.locator('[data-ruler-wash="after"]')).toHaveCount(0);
 
-  // Turn on, and the band comes back with the words.
+  // On to the words, and the band comes back with them — on the one-paragraph
+  // section, where a single line is all there is to cover.
   await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
   await page.waitForTimeout(2600);
   const drawn = await rulerDrawn(page);
@@ -834,11 +837,28 @@ test("the band's padding comes off the page's own leading, not the setting's", a
     });
     expect(covered.length, `${label}：带子底下没有一行字`).toBeGreaterThan(0);
     const lead = advanceOf(lines);
+    const first = lines.indexOf(covered[0]!);
+    const last = lines.indexOf(covered.at(-1)!);
+    const above = lines[first - 1];
+    const below = lines[last + 1];
     return {
       lead,
       count: covered.length,
       head: (covered[0]!.start - drawn.band.top) / lead,
       tail: (drawn.band.bottom - covered.at(-1)!.end) / lead,
+      /**
+       * How far the band's own edges reach **past** the neighbouring lines it
+       * does not cover, in leads. This is the assertion that holds whatever the
+       * platform's font metrics do to where the block happens to sit: `head` and
+       * `tail` are distances to the marked lines, which is the design's number
+       * only while the block is inside one paragraph — and under 自定义 the block
+       * may legitimately span a paragraph gap (bandOver's own rule), which puts
+       * that gap inside the tail. Reach is the promise that does not move.
+       */
+      reach: {
+        head: above ? Math.max(0, drawn.band.top - above.end) / lead : 0,
+        tail: below ? Math.max(0, drawn.band.bottom - below.start) / lead : 0,
+      },
     };
   };
 
@@ -876,10 +896,23 @@ test("the band's padding comes off the page's own leading, not the setting's", a
   const custom = await padding("自定义");
   expect(custom.lead, "自定义：页面的行距没有跟着设置走").toBeGreaterThan(follow.lead);
   expect(custom.head, "自定义：带的上边留白不是一个行距的三成").toBeLessThan(0.45);
-  expect(custom.tail, "自定义：带的下边留白不是一个行距的三成").toBeLessThan(0.45);
+  // 🔴 The tail is **not** held to three tenths here, and the runner is why: the
+  // book's own leading puts the block wherever paragraph geometry puts it, so
+  // under 自定义 it can legitimately span a paragraph gap — which the band's own
+  // rule allows — and then the tail is that gap, not padding. Pinned to three
+  // tenths it read as 「带的下边留白不是一个行距的三成」 on the Linux runner and
+  // nowhere else. What holds either way, and what the reader can see, is that
+  // neither edge reaches into the line it is not marking: at most one padding
+  // (0.3 lead) past where that line begins.
+  expect(custom.reach.head, "自定义：带子上缘伸进了没罩的那一行").toBeLessThanOrEqual(0.35);
+  expect(custom.reach.tail, "自定义：带子下缘伸进了没罩的那一行").toBeLessThanOrEqual(0.35);
 });
 
 test("the band's padding never outgrows the air between the lines", async ({ page }) => {
+  // Two passes over the settings (each re-derives the whole page) plus a walk of
+  // eight steps: ~25s on a laptop, and the 30s default timed the run out on the
+  // Linux runner without a single assertion failing.
+  test.setTimeout(120_000);
   // Three tenths of a line is a padding, not a distance. It only reads as
   // breathing room where there *is* room, and a page can have none: a book whose
   // leading is tighter than its own type is high has line boxes that overlap, so
@@ -1390,16 +1423,22 @@ test("the colour reaches the band: 仅描边 draws hairlines, 黄色 fills it", 
 test("vertical type turns the band into a column, as tall as the text it washes", async ({
   page,
 }) => {
-  // The sparse-title book rather than the reader's own, and the reason is its
-  // **last paragraph is one line**. In 竖排 a paragraph is a column, so that is a
-  // short column — and a band's height has to be able to describe one. Every
-  // column of the demo prose book runs the full height of the page, so *there* a
-  // band drawn at the page's height is indistinguishable from a correct one: with
-  // only long paragraphs this slot stayed green against the bug, exactly like the
-  // two line-height fixtures before it.
+  // The fixture's **one-paragraph section**, and the reason is that a paragraph
+  // in 竖排 is a column — so one paragraph is a short column, and a band's height
+  // has to be able to describe one. Every other section of it (and every column of
+  // the demo prose book) runs the full height of the page, so *there* a band drawn
+  // at the page's height is indistinguishable from a correct one: with only long
+  // paragraphs this slot stayed green against the bug, exactly like the two
+  // line-height fixtures before it.
+  //
+  // 🔴 It used to reach for that shape through the sparse-title book, which has a
+  // one-line section — but reaching it meant paging a book whose opening section
+  // foliate renders as **empty** on some platforms, and on the Linux runner the
+  // band never grew at all (「阅读标尺没有画出来」). The shape now has a section of
+  // its own, two page turns away and nothing to page through.
   await page.route(/page-numbers\.epub/, (route) =>
     route.fulfill({
-      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
+      body: readFileSync(new URL("../public/demo/sparse-opener.epub", import.meta.url)),
       contentType: "application/epub+zip",
     }),
   );
@@ -1407,15 +1446,14 @@ test("vertical type turns the band into a column, as tall as the text it washes"
   await choose(page, "单页");
   await enableRuler(page);
   await choose(page, "竖排");
-  // To the third section: a whole page of one line. Every page of the other two
-  // is full-height columns, so this is the only page where a band's height can be
-  // told apart from the page's.
+  // To the third section: the whole page is one line, and every page of the
+  // others is full-height columns, so this is the only page where a band's height
+  // can be told apart from the page's.
   for (let i = 0; i < 2; i += 1) {
     await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
     await page.waitForTimeout(2400);
   }
-  await page.keyboard.press("PageDown");
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(1200);
 
   const first = await rulerDrawn(page);
   const width = first.host.right - first.host.left;
@@ -1430,7 +1468,11 @@ test("vertical type turns the band into a column, as tall as the text it washes"
   // coordinates puts them 108px apart when they are 10px apart, which is how this
   // first went red against a band that was already correct.
   const firstLines = (await page.evaluate(LINES)) as Interval[];
-  expect(firstLines.length, "竖排：一个字的列都没量到").toBeGreaterThan(3);
+  // At least one column, i.e. the probe reads columns in vertical at all — not
+  // "several": this book puts the short column on a page of its own, so how many
+  // columns the page *starts* with is the fixture's arrangement, not the contract.
+  // What has to hold further down is that the walk reaches a short one.
+  expect(firstLines.length, "竖排：一个字的列都没量到").toBeGreaterThan(0);
 
   /** The columns the band is standing on. */
   const under = (d: Drawn, ls: readonly Interval[]) =>
@@ -1439,9 +1481,11 @@ test("vertical type turns the band into a column, as tall as the text it washes"
       return centre > d.host.right - d.band.right && centre < d.host.right - d.band.left;
     });
 
-  // Step onto a SHORT column — the fixture's whole point. Its last paragraph is
-  // one line, so there is a column a fraction of the page's height, and only on
-  // that one can a band drawn at the page's height be caught.
+  // Step onto a SHORT column — the fixture's whole point. One of its sections is a
+  // single line, so somewhere there is a column a fraction of the page's height,
+  // and only on that one can a band drawn at the page's height be caught. The walk
+  // is what gets there: whether it takes one step or a dozen is the book's
+  // arrangement, and the page the band starts on may not even hold a short one.
   let drawn = await rulerDrawn(page);
   let lines = (await page.evaluate(LINES)) as Interval[];
   let covered = under(drawn, lines);

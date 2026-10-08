@@ -9,12 +9,24 @@ route this over `page-numbers.epub`: a screenful of prose is not enough to
 reach the trigger line and keep stepping, and the tight-leading line grid is the
 one that breaks pad-derived blocks.
 
-`public/demo/sparse-opener.epub` — one chapter that opens the way a real one
-does: a spacer, then a title with a couple of hundred pixels of clearance under
-it, then the prose. The ruler parks its band on the title (which sits at about a
-third of the way down the first screen, so the stored place lands on it), and
-the first step off that title is the shape under test: the title's block must
-not swallow the paragraph's first line.
+`public/demo/sparse-opener.epub` — the shapes a slot would otherwise have to go
+paging around looking for, one section each:
+
+1. a chapter opener: a spacer, then a title with a couple of hundred pixels of
+   clearance under it, then the prose. The ruler parks a fresh band on the title
+   (the stored place is a third of the reading axis), and the first step off that
+   title is the shape under test — the title's block must not swallow the
+   paragraph's first line;
+2. a **wordless** section: one image, no text node at all. 「这一页没有行 →
+   什么都不画」 needs a page without text *by construction* — the sparse-title
+   book only had one by accident (foliate renders its opener as an empty section
+   on some platforms and not on others: a coin flip, not a fixture, and it is
+   what made that slot red on CI);
+3. a **one-paragraph** section: in 竖排 a paragraph is a column, so that is the
+   short column a band's height has to be able to describe. Every other section
+   here runs full-height columns, where 「band 的高度」 and 「页的高度」 are the
+   same number and the slot cannot tell them apart;
+4. plain prose, for coming back to.
 
     python3 scripts/generate-long-chapter-epub.py
 """
@@ -30,6 +42,13 @@ PARA = (
 
 CHAPTERS = 3
 PARAS = 150
+
+# 1×1 transparent PNG, inline: a plate with no text node is what 「这一页没有行」
+# needs, and a real image beats an empty section (which foliate may or may not
+# render as empty depending on the platform).
+PLATE_PNG = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
 
 # The opener's own geometry, in px — a fixed clearance rather than `vh`, which
 # inside a scrolled section (whose height is its content) is a circular quantity
@@ -81,16 +100,40 @@ def main() -> None:
 
     _write("public/demo/long-chapter.epub", [chapter(i) for i in range(1, CHAPTERS + 1)], "长章样书")
 
-    opener_body = "\n".join(f"    <p>{PARA}（第{i}段）</p>" for i in range(1, 7))
-    opener = f"""<?xml version="1.0" encoding="utf-8"?>
+    def section(title: str, body: str) -> str:
+        return f"""<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml"><head><title>第一章</title></head>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>{title}</title></head>
 <body>
-  <div style="height:{OPENER_SPACER}px"></div>
-  <h1 style="margin:0 0 {OPENER_TITLE_CLEARANCE}px 0">第一章 开篇</h1>
-{opener_body}
+{body}
 </body></html>"""
-    _write("public/demo/sparse-opener.epub", [opener], "开篇样书")
+
+    opener_body = "\n".join(f"  <p>{PARA}（第{i}段）</p>" for i in range(1, 7))
+    opener = section(
+        "第一章 开篇",
+        f"""  <div style="height:{OPENER_SPACER}px"></div>
+  <h1 style="margin:0 0 {OPENER_TITLE_CLEARANCE}px 0">第一章 开篇</h1>
+{opener_body}""",
+    )
+    # A plate: one image, not a text node. 1×1 PNG, inline so the section carries
+    # nothing else — `lineRects` only ever reads text, so this page has no lines
+    # on every platform.
+    plate = section(
+        "图版",
+        f'  <img src="data:image/png;base64,{PLATE_PNG}" alt=""/>',
+    )
+    # One **line**: in 竖排 a paragraph is a column, and this is a short one, and
+    # in horizontal type it is the page whose only line a one-line band can be
+    # told apart from a two-line one on. A long paragraph would not do — it wraps,
+    # and the ruler's block is two lines whatever the page holds.
+    short = section("短章", "  <p>短章仅此一行。</p>")
+    prose_body = "\n".join(f"  <p>{PARA}（第{i}段）</p>" for i in range(1, 13))
+    prose = section("第四章 正文", prose_body)
+    _write(
+        "public/demo/sparse-opener.epub",
+        [opener, plate, short, prose],
+        "开篇样书",
+    )
 
 
 if __name__ == "__main__":
