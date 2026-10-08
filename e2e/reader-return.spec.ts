@@ -142,7 +142,12 @@ test("with motion reduced the toggle swaps its words in place, without sliding",
   // Still in the slot: no travel is the entire point.
   expect(after.map((w) => w.y)).toEqual([0, 0]);
   // And the words did trade places — without this the assertion above would
-  // pass just as happily on a control that never changed at all.
-  expect(after.map((w) => w.opacity).toSorted()).toEqual([0, 1]);
-  expect(after[0]?.opacity).toBe(before[0]?.opacity === 1 ? 0 : 1);
+  // pass just as happily on a control that never changed at all. Polled rather
+  // than read once at a fixed 400ms: WebKit on a loaded runner can still be
+  // mid-swap, and 「it has not swapped *yet*」 is not the same failure as
+  // 「it does not swap under reduced motion」.
+  await expect
+    .poll(async () => (await rest())[0]?.opacity, { timeout: 4_000 })
+    .toBe(before[0]?.opacity === 1 ? 0 : 1);
+  expect((await rest()).map((w) => w.opacity).toSorted()).toEqual([0, 1]);
 });

@@ -82,8 +82,16 @@ test("an AZW3 opens in foliate and renders its own text", async ({ page }) => {
     })
     .toContain("AZW3 与 MOBI 是同一个容器");
 
-  // The heading is in the same section as that sentence, from the fixture's
-  // own `<h1>` — so this also says foliate kept the markup rather than
-  // flattening the page to a run of text.
-  expect(await sectionText(page)).toContain("第一章 同一个容器");
+  // The heading is in the same section as that sentence, from the fixture's own
+  // `<h1>` — so this also says foliate kept the markup rather than flattening the
+  // page to a run of text. Polled like the sentence above rather than read once:
+  // foliate mounts sections one after another, and on the Linux runner the body
+  // text was there a beat before the markup around it, so a bare read landed in
+  // between (「Expected substring: 第一章 同一个容器」).
+  await expect
+    .poll(() => sectionText(page), {
+      timeout: 10_000,
+      message: "AZW3 的标题没有出现在任何 section 文档里",
+    })
+    .toContain("第一章 同一个容器");
 });

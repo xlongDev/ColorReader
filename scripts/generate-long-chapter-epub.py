@@ -124,11 +124,9 @@ def main() -> None:
   <h1 style="margin:0 0 {OPENER_TITLE_CLEARANCE}px 0">第一章 开篇</h1>
 {opener_body}""",
     )
-    # One **line**: in 竖排 a paragraph is a column, and this is a short one, and
-    # in horizontal type it is the page whose only line a one-line band can be
-    # told apart from a two-line one on. A long paragraph would not do — it wraps,
-    # and the ruler's block is two lines whatever the page holds.
-    short_body = "  <p>短章仅此一行。</p>"
+    # One **line**: in 竖排 a paragraph is a column, and this is a short one.
+    # A long paragraph would not do — it wraps, and the ruler's block is two lines
+    # whatever the page holds.
     prose_body = "\n".join(f"  <p>{PARA}（第{i}段）</p>" for i in range(1, 13))
 
     # sparse-opener keeps the opener alone: the slots that want a wordless page
@@ -147,9 +145,14 @@ def main() -> None:
         ],
         "图版样书",
     )
+    # One **line**: in 竖排 a paragraph is a column, and this is a short one. Its
+    # own page, which is the point — every other section here runs full-height
+    # columns, and only beside one of those can a band's height be told apart
+    # from the page's.
+    short = section("短章", "  <p>短章仅此一行。</p>")
     _write(
         "public/demo/short-column.epub",
-        [section("短章", short_body), section("第二章 正文", prose_body)],
+        [short, section("第二章 正文", prose_body)],
         "短列样书",
     )
 

@@ -1434,16 +1434,9 @@ test("vertical type turns the band into a column, as tall as the text it washes"
   // paragraphs this slot stayed green against the bug, exactly like the two
   // line-height fixtures before it.
   //
-  // 🔴 A book whose **first section** is that one line. The shape used to be two
-  // page turns into another book — one whose opening section foliate renders as
-  // **empty** on some platforms, which on the Linux runner left the band with
-  // nothing to stand on (「竖排下标尺应当变成竖条」). Reaching a shape by turning
-  // sections is how this slot became a test of chapter turning; the subject here
-  // is a band's height, so the shape is now the first screen and no turning is
-  // involved at all.
   await page.route(/page-numbers\.epub/, (route) =>
     route.fulfill({
-      body: readFileSync(new URL("../public/demo/short-column.epub", import.meta.url)),
+      body: readFileSync(new URL("../public/demo/sparse-title.epub", import.meta.url)),
       contentType: "application/epub+zip",
     }),
   );
@@ -1451,7 +1444,18 @@ test("vertical type turns the band into a column, as tall as the text it washes"
   await choose(page, "单页");
   await enableRuler(page);
   await choose(page, "竖排");
-  await page.waitForTimeout(1200);
+  // To the one-line section: a whole page of one line. Every page of the other two
+  // is full-height columns, so this is the only page where a band's height can be
+  // told apart from the page's. (A fixture with the shape on its *first* screen was
+  // tried and reads worse: in 竖排 whether a band is 「taller than wide」 is the
+  // fixture's column length, not the ruler's doing, so the shape has to be walked
+  // to from a page of full columns — that comparison is the slot's real subject.)
+  for (let i = 0; i < 2; i += 1) {
+    await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
+    await page.waitForTimeout(2400);
+  }
+  await page.keyboard.press("PageDown");
+  await page.waitForTimeout(2000);
 
   const first = await rulerDrawn(page);
   const width = first.host.right - first.host.left;

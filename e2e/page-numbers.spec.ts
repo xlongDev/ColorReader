@@ -108,8 +108,12 @@ async function flip(page: Page, times: number) {
  */
 async function settledReading(page: Page) {
   let previous = await readIndicator(page);
-  for (let i = 0; i < 6; i += 1) {
-    await page.waitForTimeout(250);
+  // Three tries at 200ms: the turn's own animation is up to 450ms, so the second
+  // reading is normally the settled one, and the loop is only there for a runner
+  // slower than the animation. Bounded tightly on purpose — this runs up to sixty
+  // times per walk, and a generous settle turned the walk into a timeout on CI.
+  for (let i = 0; i < 3; i += 1) {
+    await page.waitForTimeout(200);
     const next = await readIndicator(page);
     if (next.page === previous.page && next.total === previous.total) return next;
     previous = next;
@@ -164,6 +168,9 @@ function expectSteady(
 }
 
 test("a foliate book's whole-book count is the book's own, and never moves", async ({ page }) => {
+  // Sixty turns, each read only once it has stopped moving — longer than the
+  // 30s default on a loaded runner.
+  test.setTimeout(120_000);
   // The reported defect: an EPUB's whole-book number swung by hundreds of pages
   // as it was read, stood still across a page turn, and printed the section's
   // own "1 / 1" wherever the estimate had nothing to work with.
@@ -182,6 +189,7 @@ test("a foliate book's whole-book count is the book's own, and never moves", asy
 });
 
 test("the prose pager's whole-book count does not move as the book is read", async ({ page }) => {
+  test.setTimeout(120_000);
   await openReader(page);
   await choose(page, "排版模式", "单页");
   await choose(page, "页码", "全书");
