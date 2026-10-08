@@ -1878,3 +1878,213 @@ test("dragging the band sideways in 竖排 follows the hand, not the axis", asyn
     "竖排下向左拖，带子没有跟着手往左走",
   ).toBeGreaterThan(80);
 });
+
+test("in the scrolled layout the arrows walk the band, and the page follows past the trigger", async ({
+  page,
+}) => {
+  // The scrolled ruler's model, rewritten: the arrows move the band and never
+  // scroll instead of it; once the band reaches the trigger line the *page*
+  // steps under it, by exactly the measured distance between two blocks' first
+  // lines — so the band holds its place on screen and stays on whole lines.
+  await openBook(page, "/?demo=1", /我们为什么会生病/);
+  await enableRuler(page);
+
+  const scrollOf = () =>
+    page.evaluate(() => document.querySelector("[data-reading-content]")?.scrollTop ?? -1);
+
+  // Above the trigger line a step is the band's alone: the page holds still.
+  const start = await rulerDrawn(page);
+  const atRest = await scrollOf();
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(700);
+  const walked = await rulerDrawn(page);
+  expect(walked.band.top, "方向键没有移动标尺").toBeGreaterThan(start.band.top);
+  expect(await scrollOf(), "标尺还没到触发线，页面就滚动了").toBe(atRest);
+
+  // Walk it down. The moment the page starts stepping while the band's top
+  // stays put is the crossing: from there the band is parked on screen.
+  let parked = walked;
+  let prevTop = walked.band.top;
+  let scrolled = atRest;
+  let crossed = false;
+  for (let i = 0; i < 24; i += 1) {
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(400);
+    parked = await rulerDrawn(page);
+    const now = await scrollOf();
+    if (now > scrolled && Math.abs(parked.band.top - prevTop) < 2) {
+      crossed = true;
+      break;
+    }
+    prevTop = parked.band.top;
+    scrolled = now;
+  }
+  expect(crossed, "带子越过触发线后页面没有开始联动").toBe(true);
+  const hostHeight = start.host.bottom - start.host.top;
+  const trigger = start.host.top + hostHeight * (2 / 3);
+  expect(parked.band.top, "联动开始时标尺停在触发线以下太深").toBeLessThanOrEqual(trigger);
+
+  // Held: another step moves the page, not the band — and the band is still
+  // sitting on whole lines, which is the measured-distance scroll's whole point.
+  const heldTop = parked.band.top;
+  const heldScroll = await scrollOf();
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(700);
+  const held = await rulerDrawn(page);
+  const lines = (await page.evaluate(LINES)) as Interval[];
+  const lead = advanceOf(lines);
+  expect(Math.abs(held.band.top - heldTop), "联动后标尺没有停在原地").toBeLessThan(lead / 2);
+  expect(await scrollOf(), "联动后页面没有前进一块").toBeGreaterThan(heldScroll);
+  expect(coveredLines(held, lines).count, "联动后带没有盖住整行").toBe(2);
+
+  // Stepping back holds the band too: the page steps the other way under it.
+  const backScroll = await scrollOf();
+  await page.keyboard.press("ArrowUp");
+  await page.waitForTimeout(700);
+  const backed = await rulerDrawn(page);
+  expect(Math.abs(backed.band.top - heldTop), "回退时标尺没有停在原地").toBeLessThan(lead / 2);
+  expect(await scrollOf(), "回退时页面没有跟着退").toBeLessThan(backScroll);
+});
+
+test("in the scrolled layout Left/Right switch chapters while the ruler is on", async ({
+  page,
+}) => {
+  await openBook(page, "/?demo=1", /我们为什么会生病/);
+  await enableRuler(page);
+
+  const before = await progress(page);
+  await page.keyboard.press("ArrowRight");
+  await page.waitForTimeout(1400);
+  const after = await progress(page);
+  expect(after, "右方向键没有切到下一章").toBeGreaterThan(before);
+
+  await page.keyboard.press("ArrowLeft");
+  await page.waitForTimeout(1400);
+  expect(await progress(page), "左方向键没有切回上一章").toBeLessThan(after);
+});
+
+test("on a real EPUB the absorbed steps hold the band on consecutive blocks", async ({ page }) => {
+  // 🔴 The absorbed steps are where the line grid's real shape shows. A book's
+  // own typography (使用书籍排版) sets a leading tighter than the type is high, so
+  // the line boxes overlap, and both a pad-derived "current block" and a
+  // first-box-wins anchor read one line off: measured on a real book, every
+  // absorbed step landed a line early and the band walked up its own page while
+  // the text ran on beneath it — 一段接不上一段. Routed over the 页码样书 card:
+  // long chapters, no CSS, the book's own tight leading.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync("public/demo/long-chapter.epub"),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await enableRuler(page);
+
+  const scrollOf = () =>
+    page.evaluate(() => {
+      const view = document.querySelector("foliate-view");
+      const container = view?.shadowRoot
+        ?.querySelector("foliate-paginator")
+        ?.shadowRoot?.querySelector("#container");
+      return container?.scrollTop ?? -1;
+    });
+
+  // Walk to the trigger. The crossing is the step where the page starts moving
+  // while the band's top stays put.
+  let crossed = false;
+  let parked = await rulerDrawn(page);
+  let prevTop = parked.band.top;
+  let scrolled = await scrollOf();
+  for (let i = 0; i < 24 && !crossed; i += 1) {
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(600);
+    parked = await rulerDrawn(page);
+    const now = await scrollOf();
+    if (now > scrolled && Math.abs(parked.band.top - prevTop) < 2) crossed = true;
+    prevTop = parked.band.top;
+    scrolled = now;
+  }
+  expect(crossed, "带子越过触发线后页面没有开始联动").toBe(true);
+  const heldTop = parked.band.top;
+  const lead = advanceOf((await page.evaluate(LINES)) as Interval[]);
+
+  // The box changing is a change the reader is looking at: a parked band holds
+  // its place, but each new block is taller or shorter and reaches further
+  // across the page, and it arrives on the landing curve. Counted on the band
+  // itself (`transitionrun`), not by sampling boxes — sampling races the frame
+  // it is drawn on. Installed after the crossing, so only absorbed steps count.
+  const listening = await page.evaluate(`(() => {
+    const band = document.querySelector("[data-ruler-band]");
+    if (!band) return false;
+    window.__absorbedRuns = 0;
+    band.addEventListener("transitionrun", () => { window.__absorbedRuns += 1; });
+    return true;
+  })()`);
+  expect(listening, "标尺没有画出来").toBe(true);
+
+  // Six absorbed steps: the page advances by whole measured blocks while the
+  // band holds its place on screen, still sitting on whole lines. A landing one
+  // line early drifts the band up the window a line at a time — exactly what
+  // the hold assertion catches.
+  for (let i = 0; i < 6; i += 1) {
+    await page.keyboard.press("ArrowDown");
+    await page.waitForTimeout(700);
+    const held = await rulerDrawn(page);
+    expect(Math.abs(held.band.top - heldTop), `第${i + 1}次联动后标尺没有停在原地`).toBeLessThan(
+      lead / 2,
+    );
+    expect(await scrollOf(), `第${i + 1}次联动后页面没有前进`).toBeGreaterThan(scrolled);
+    scrolled = await scrollOf();
+    const fresh = (await page.evaluate(LINES)) as Interval[];
+    expect(coveredLines(held, fresh).count, `第${i + 1}次联动后带没有盖住整行`).toBe(2);
+  }
+  expect(
+    (await page.evaluate("window.__absorbedRuns")) as number,
+    "联动落位时标尺框是瞬变的，没有动画",
+  ).toBeGreaterThan(0);
+});
+
+test("on a chapter opener the first step lands on the paragraph, not past it", async ({ page }) => {
+  // A band parked on a title with a couple of hundred pixels of clearance under
+  // it — a chapter opener, the shape a real book opens every chapter in. The
+  // title's block used to swallow the paragraph's first line (a block is the
+  // anchor's line plus the next ones, and a title has nothing near it), and the
+  // first press then stepped over that line: measured on a real book in 滚动
+  // (《堂吉诃德》荐读), the band went from the title to the paragraph's second and
+  // third lines. The fixture puts the title at a third of the first screen, so
+  // the stored place parks on it — no scrolling to find the shape.
+  await page.route(/page-numbers\.epub/, (route) =>
+    route.fulfill({
+      body: readFileSync("public/demo/sparse-opener.epub"),
+      contentType: "application/epub+zip",
+    }),
+  );
+  await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await enableRuler(page);
+
+  /** The tallest line on the screen: this book's title, nothing else. */
+  const titleIndexOf = (lines: readonly Interval[]) =>
+    lines.indexOf(
+      lines.reduce((best, line) => (line.end - line.start > best.end - best.start ? line : best)),
+    );
+  const coveredIndices = async (drawn: Drawn) => {
+    const lines = (await page.evaluate(LINES)) as Interval[];
+    return coveredLines(drawn, lines).covered.map((line) => lines.indexOf(line));
+  };
+
+  const start = await rulerDrawn(page);
+  const lines = (await page.evaluate(LINES)) as Interval[];
+  const title = titleIndexOf(lines);
+  expect(
+    lines[title]!.end - lines[title]!.start,
+    "夹具里没有找到标题行（标题不高于正文行）",
+  ).toBeGreaterThan(advanceOf(lines));
+  expect(await coveredIndices(start), "带子开局没有停在标题行上").toEqual([title]);
+
+  await page.keyboard.press("ArrowDown");
+  await page.waitForTimeout(800);
+  const stepped = await rulerDrawn(page);
+  expect(await coveredIndices(stepped), "按一次下键跳过了段落的第一行（标题的块吞掉了它）").toEqual(
+    [title + 1, title + 2],
+  );
+});
