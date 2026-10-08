@@ -352,7 +352,25 @@ export function blockAt(
 ): RulerInterval | null {
   if (lines.length === 0) return null;
   const wanted = Math.max(1, Math.floor(count));
-  let index = lines.findIndex((line) => anchor >= line.start && anchor <= line.end);
+  // The LAST line whose box holds the anchor, scanned from the far end — line
+  // boxes can overlap. A book set with a leading tighter than its type is high
+  // (使用书籍排版 hands the book's own leading back) draws every line's box a
+  // few px into its neighbour's, and an anchor that lands exactly on a line's
+  // start — which is where an absorbed scroll-step's anchor lands, being the
+  // difference of two measured block starts — then reads as inside the
+  // *previous* box too. "The first box that contains it" picks the line above:
+  // measured on a real book, every absorbed step landed one line early and the
+  // band walked up its own page while the text ran on beneath it. The reader
+  // is entering the later line; the block runs on from it. On a page whose
+  // boxes do not overlap the scan finds the same single line as before.
+  let index = -1;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]!;
+    if (anchor >= line.start && anchor <= line.end) {
+      index = i;
+      break;
+    }
+  }
   if (index === -1) {
     const reach = medianAdvance(lines) / 2;
     let bestDistance = Infinity;
@@ -679,7 +697,20 @@ export function lineRects(
   return rects;
 }
 
-/** Lines `first`..`last` as one interval, or `null` when that is no lines. */
+/**
+ * Lines `first`..`last` as one interval, or `null` when that is no lines — and
+ * shortened to stop short of a **sparse** line's neighbour.
+ *
+ * A block is a run of *neighbouring* lines: the one holding the anchor and the
+ * ones that follow it a step apart. A sparse line — a chapter title centred in
+ * three-quarters of a blank page, a figure, a caption far below the thing it
+ * captions — has nothing near it, and swallowing the next line into its block
+ * is not a taller block, it is a block the band's own step cannot get past:
+ * measured on a real book (a chapter opener in 滚动), a band parked on the title
+ * took the paragraph's first line into its block, and the first press stepped
+ * straight over that line to the second. One-and-a-half leads is the line: a
+ * paragraph gap is under it, a title's clearance is over it.
+ */
 function blockOf(
   lines: readonly RulerInterval[],
   first: number,
@@ -688,5 +719,16 @@ function blockOf(
   const start = lines[first];
   const end = lines[last];
   if (!start || !end) return null;
-  return { start: start.start, end: end.end };
+  const reach = medianAdvance(lines) * 1.5;
+  let lastLine = last;
+  for (let i = first; i < last; i += 1) {
+    const here = lines[i];
+    const next = lines[i + 1];
+    if (!here || !next || next.start - here.end > reach) {
+      lastLine = i;
+      break;
+    }
+  }
+  const tail = lines[lastLine];
+  return tail ? { start: start.start, end: tail.end } : null;
 }

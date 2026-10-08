@@ -324,6 +324,25 @@ describe("blockAt", () => {
   it("has nothing to offer on a page with no lines", () => {
     expect(blockAt([], 140, 2)).toBeNull();
   });
+
+  it("stops a block short of a sparse line's neighbour", () => {
+    // A chapter opener: the title centred in three-quarters of a blank page, and
+    // the first paragraph hundreds of pixels below it. The title's block is the
+    // title *alone* — taking the paragraph's first line into it is not a taller
+    // block, it is a block the band's own step cannot get past, and the first
+    // press then lands a whole line further on. Measured on a real book in 滚动:
+    // a band parked on the title stepped straight over the paragraph's first
+    // line. A paragraph gap (18px against a 26px advance) is under the bar; the
+    // title's clearance (160px) is over it.
+    const opener = pageLines([box(300, 360), box(520, 546), box(546, 572), box(572, 598)]);
+    expect(blockAt(opener, 330, 2)).toEqual({ start: 300, end: 360 });
+    expect(nextBlock(opener, { start: 300, end: 360 }, 2, 1)).toEqual({
+      start: 520,
+      end: 572,
+    });
+    // …while ordinary prose still blocks up across its paragraph gap.
+    expect(blockAt(pageLines(), 130, 2)).toEqual({ start: 126, end: 196 });
+  });
 });
 
 describe("nextBlock", () => {
