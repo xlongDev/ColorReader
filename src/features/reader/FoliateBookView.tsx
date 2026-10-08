@@ -128,8 +128,11 @@ export type FoliateHandle = {
    */
   goToHighlight: (highlight: FoliateHighlight) => void;
   /** Advances the scrolled flow by whole `delta` px, `subpixel` carried as a
-   *  composited transform; no-op outside the scroll layout. */
-  scrollByPx: (delta: number, subpixel: number) => void;
+   *  composited transform; no-op outside the scroll layout. Returns how far the
+   *  flow actually went — the browser clamps the scrollport to the content
+   *  extent, and the reading ruler holds its band on its line by scrolling
+   *  exact block distances, so it needs to know when a clamp ate part of one. */
+  scrollByPx: (delta: number, subpixel: number) => number;
   /** True parked on the very end of the book (auto-scroll stop). */
   bookEnd: () => boolean;
   /** Jumps to a foliate anchor string (a CFI). */
@@ -1559,17 +1562,20 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
           // Cut to the page the paginator paints: the strip is a chapter wide,
           // and the page next door starts inside the pane's own margin — so its
           // first line has a box there, and nothing on the screen.
-          rects.push(...lineRects(entry.doc, null, box.left, box.top, pageBox(frame, box)));
+          const clip = pageBox(frame, box);
+          rects.push(...lineRects(entry.doc, null, box.left, box.top, clip));
         }
         return rects;
       },
       scrollByPx: (delta, subpixel) => {
         const renderer = viewRef.current?.renderer;
-        if (!renderer?.scrolled) return;
+        if (!renderer?.scrolled) return 0;
         renderer.subpixelOffset = subpixel;
         // The browser clamps the scrollport to the content extent, so an
         // overshooting delta parks at the end where `bookEnd` stops the loop.
-        renderer.containerPosition += delta;
+        const before = renderer.containerPosition;
+        renderer.containerPosition = before + delta;
+        return renderer.containerPosition - before;
       },
       bookEnd: () => viewRef.current?.renderer?.atEnd ?? false,
       goToCfi: (cfi) => {

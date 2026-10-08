@@ -15,12 +15,14 @@ import {
   MAX_MARGIN_Y,
   MAX_RULER_LINES,
   MAX_RULER_OPACITY,
+  MAX_RULER_SCROLL_TRIGGER,
   MIN_AUTO_SCROLL_SPEED,
   MIN_FONT_SIZE,
   MIN_MARGIN_X,
   MIN_MARGIN_Y,
   MIN_RULER_LINES,
   MIN_RULER_OPACITY,
+  MIN_RULER_SCROLL_TRIGGER,
   MARGIN_X_PRESETS,
   PAGE_NUMBER_SCOPES,
   PAGE_THEMES,
@@ -372,6 +374,19 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
                 value={Math.round(settings.rulerOpacity * 100)}
                 onChange={(value) => update({ rulerOpacity: value / 100 })}
               />
+              {/* Only where it does something: the trigger line is the scrolled
+                  layout's auto-scroll, and the paged layouts have no scrolling
+                  for the band to hand its step to. */}
+              {settings.layoutMode === "scroll" && (
+                <SliderRow
+                  label="自动滚动起点"
+                  readout={`${Math.round(settings.rulerScrollTrigger * 100)}%`}
+                  min={Math.round(MIN_RULER_SCROLL_TRIGGER * 100)}
+                  max={Math.round(MAX_RULER_SCROLL_TRIGGER * 100)}
+                  value={Math.round(settings.rulerScrollTrigger * 100)}
+                  onChange={(value) => update({ rulerScrollTrigger: value / 100 })}
+                />
+              )}
             </>
           )}
         </Group>
@@ -391,6 +406,21 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
             value={settings.pageTransition}
             onChange={(key) => update({ pageTransition: key })}
           />
+        </Group>
+
+        <Group label="手柄翻页">
+          <Chips
+            options={[
+              { key: true, label: "开启" },
+              { key: false, label: "关闭" },
+            ]}
+            value={settings.gamepadPaging}
+            onChange={(value) => update({ gamepadPaging: value })}
+          />
+          <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
+            手柄的 L1 /
+            R1、方向键左右、摇杆左右都能翻页；摇杆上下移动阅读标尺。关闭后手柄不再操作阅读。
+          </p>
         </Group>
 
         <Group label="PDF 页面">

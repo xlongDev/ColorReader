@@ -463,6 +463,29 @@ function ReaderView({
   // where those sections currently sit. Stable, because the ruler measures on
   // it and an unstable prop would re-measure on every render.
   const foliateRulerLines = useCallback(() => foliateRef.current?.rulerLines() ?? null, []);
+  /**
+   * Scrolls the reading flow by one measured distance, in the scrolled layout,
+   * and reports how far it actually went.
+   *
+   * 🔴 Which element is the scroller is the renderer's answer, not a CSS class:
+   * `[data-reading-content]` is `overflow-y-auto` for a plain-text book and
+   * `overflow-hidden` for one foliate renders — the scrollport lives inside the
+   * section — so the foliate book goes through the view's own `scrollByPx`.
+   * The report is what lets the ruler tell a clean block step from a clamp at
+   * an edge of the flow, and it is why the plain-text path writes `scrollTop`
+   * and reads it back instead of `scrollBy` (which reports nothing).
+   */
+  const scrollFlowBy = useCallback(
+    (delta: number): number => {
+      if (useFoliate) return foliateRef.current?.scrollByPx(delta, 0) ?? 0;
+      const el = scrollRef.current;
+      if (!el) return 0;
+      const before = el.scrollTop;
+      el.scrollTop = before + delta;
+      return el.scrollTop - before;
+    },
+    [useFoliate],
+  );
   // The reading ruler, driven imperatively for the same reason the foliate view
   // is: an arrow key has to ask the band to step *before* it becomes a page turn,
   // and only the ruler knows whether there is another block of lines to step to.
@@ -1179,6 +1202,44 @@ function ReaderView({
     return () => el.removeEventListener("wheel", onWheel);
   }, [flip, isPdf, layoutMode, pdfZoom]);
 
+  /**
+   * One step *along the reading axis*, which is not the same thing as a page.
+   *
+   * The reading ruler owns that axis while it is on: a step lays the band over
+   * the next block of lines — and in the scrolled layout, past the trigger line
+   * (`ReadingRuler.scroll`), the same step scrolls the flow under the band, so
+   * the arrows never scroll the page *instead of* the ruler. Only when the band
+   * has run out of page does the step move the reading on itself: a page turn in
+   * the paged layouts, the neighbouring section in the scrolled one.
+   *
+   * Shared by the arrow keys and the gamepad, and it has to be: those are the
+   * same gesture, and two copies of "ruler first, page second" would drift apart
+   * the first time one of them was touched.
+   *
+   * 🔴 The scrolled fallback goes through `flip`, and that is not a preference:
+   * it is the only branch that knows which element is the scroller.
+   * `[data-reading-content]` is `overflow-y-auto` for a plain-text book and
+   * **`overflow-hidden` for a book foliate renders** — foliate owns its own
+   * scrollport inside the section, and the host cannot be scrolled at all.
+   * `flip` crosses into the next section when the renderer reports the section
+   * edge (`atEdge`), which is what is left of the step once the auto-scroll has
+   * absorbed everything short of the flow's own end. A plain-text flow scrolls
+   * its own container, whose clamp makes the call a no-op at either edge.
+   */
+  const stepAlongReading = useCallback(
+    (step: 1 | -1) => {
+      if (rulerRef.current?.move(step)) return;
+      if (paged || useFoliate) {
+        flip(step);
+        return;
+      }
+      // A plain-text book in the scrolled layout: its host *is* the scroller.
+      const block = fontSize * (LINE_HEIGHTS[lineHeightIdx] ?? 1.8) * settings.rulerLines;
+      scrollRef.current?.scrollBy({ top: step * block, behavior: "smooth" });
+    },
+    [flip, fontSize, lineHeightIdx, paged, useFoliate, settings.rulerLines],
+  );
+
   // Keyboard paging.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -1229,31 +1290,19 @@ function ReaderView({
       if (editing) return;
       // The reading ruler owns the arrows while it is on, because that is what
       // reading with it means: each press lays the band over the next block of
-      // lines, and the band arrives where the press put it — no second
-      // adjustment. Only when the page runs out does the key move the reading
-      // instead: a page turn in the paged layouts, one step of scroll in the
-      // scroll layout, which brings the next block under the band where it is.
+      // lines, and in the scrolled layout the page follows the band past the
+      // trigger line — the arrows themselves never scroll instead of it. Only
+      // when the band runs out of page does the key move the reading instead.
       //
-      // Horizontal type reads down the page, so all four arrows step it. Vertical
-      // type reads leftward, where Left/Right are the page turns, so only Up/Down
-      // step the band (the reference's own rule).
+      // Left/Right are spoken for: by the page turns in vertical type, and by
+      // the chapter steps of the scroll layout (the band walks only up and down
+      // a continuous flow). Up/Down step the band in both.
       if (settings.readingRuler) {
         // Left/Right are spoken for: by the page turns in vertical type, and by
         // the chapter steps of the scroll layout. Up/Down step the band in both.
         const step = rulerStepForKey(event.key, readsLeftward || !paged);
         if (step !== 0) {
-          if (!(rulerRef.current?.move(step) ?? false)) {
-            const el = scrollRef.current;
-            if (paged) flip(step);
-            else if (el) {
-              // One step of the reader's own leading, times the lines the band
-              // spans: the same distance the band walks inside a page.
-              el.scrollBy({
-                top: step * fontSize * (LINE_HEIGHTS[lineHeightIdx] ?? 1.8) * settings.rulerLines,
-                behavior: "smooth",
-              });
-            }
-          }
+          stepAlongReading(step);
           event.preventDefault();
           return;
         }
@@ -1301,11 +1350,8 @@ function ReaderView({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [
-    // The ruler's scroll-layout step is one block of the reader's own leading.
-    fontSize,
     flip,
     fullscreen,
-    lineHeightIdx,
     lightboxPath,
     lookup,
     closeLightbox,
@@ -1320,7 +1366,7 @@ function ReaderView({
     // re-bind when it is switched on — otherwise the key that just turned the
     // band on would keep turning pages until something else changed.
     settings.readingRuler,
-    settings.rulerLines,
+    stepAlongReading,
     stepChapter,
     stepLightbox,
     toggleFullscreen,
@@ -1337,13 +1383,20 @@ function ReaderView({
     [flip, paged, stepChapter],
   );
 
-  // A gamepad or a Bluetooth page-turner: the same two actions the arrows
-  // own, driven from a pedal. Always on — a pad attached to a reading app is
-  // there to turn pages, and there is nothing else here it could mean.
+  // A gamepad or a Bluetooth page-turner. The shoulders and the D-pad page, and
+  // so does a stick pushed across: the same two calls, so the pad and the pedal
+  // cannot disagree about which way the book goes. The stick's other axis is the
+  // reading axis, and it gets the arrow keys' own step — the ruler when it is
+  // on, the page when the page has run out.
+  //
+  // Off is the reader's own switch (手柄翻页 in the panel), for the pad shared
+  // with something else that also uses the shoulders.
   useGamepadPager({
-    enabled: true,
+    enabled: settings.gamepadPaging,
     onNext: () => pageStep(1),
     onPrev: () => pageStep(-1),
+    onLineForward: () => stepAlongReading(1),
+    onLineBack: () => stepAlongReading(-1),
   });
 
   const saveProgress = useCallback(
@@ -2198,6 +2251,11 @@ function ReaderView({
           scrim={surface.tint}
           ink={surface.fg}
           lines={useFoliate ? foliateRulerLines : undefined}
+          scroll={
+            !paged && !isPdf
+              ? { trigger: settings.rulerScrollTrigger, by: scrollFlowBy }
+              : undefined
+          }
         />
 
         {/* Page indicator (settings-gated) and a hairline progress rail that

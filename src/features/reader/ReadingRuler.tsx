@@ -132,6 +132,7 @@ export function ReadingRuler({
   scrim,
   ink,
   lines,
+  scroll,
 }: {
   ref?: RefObject<ReadingRulerHandle | null>;
   /** The reading viewport; the band is absolute against it. */
@@ -156,6 +157,20 @@ export function ReadingRuler({
    * book's lines are.
    */
   lines?: () => readonly RulerRect[] | null;
+  /**
+   * The scrolled layout's auto-scroll. Absent in the paged layouts, where a step
+   * ends at the page's edge and the key turns the page.
+   *
+   * The scrolled model is the paged one turned inside out. The band still steps
+   * whole measured blocks — the same `nextBlock`/`bandOver` geometry the page
+   * turns use — but past the trigger line the step stops being a move of the
+   * band and becomes a move of the page: `by` scrolls the reading flow by the
+   * *measured* distance between the two blocks' first lines, which lands the
+   * block the band just stepped to exactly where the band was standing. The
+   * band holds its place on screen, the text steps under it, and the eye never
+   * chases either. `trigger` is that line, as a fraction of the reading axis.
+   */
+  scroll?: { trigger: number; by: (delta: number) => number };
 }) {
   const rulerLines = useReaderSettings((state) => state.rulerLines);
   const rulerColor = useReaderSettings((state) => state.rulerColor);
@@ -218,6 +233,26 @@ export function ReadingRuler({
   const movedRef = useRef(false);
   /** The way the page last turned, consumed by the placement that meets it. */
   const dirRef = useRef<1 | -1 | 0>(0);
+  /**
+   * Whether steps are currently being absorbed by auto-scroll. Set the moment a
+   * forward step crosses the trigger line, and cleared the moment a step can no
+   * longer be absorbed — a clamp at either edge of the flow, a drag, the band
+   * running out of page — because in every one of those the band is walking the
+   * window again and the next backward step must walk with it.
+   */
+  const parkedRef = useRef(false);
+  /**
+   * The block of lines the band is standing on — the state the next step is
+   * computed from. Kept apart from the drawn band on purpose: the band carries
+   * whatever padding `bandOver` found room for (none on a page whose leading is
+   * tighter than its type, where the line boxes touch), so stripping a fixed
+   * pad off the drawn band to recover "the block" reads a number that is not
+   * one of anything — measured on a real book, the recovered block start crept
+   * one padding-width down the page at every absorbed step and the band drifted
+   * off the text it was parked on. A drag leaves the band off any block, and
+   * this goes null until a landing puts it on one again.
+   */
+  const blockRef = useRef<RulerInterval | null>(null);
   /** What the last placement was made for: the reading area's own size and the
    *  leading the band was sized against. A page that moved *under* a band made
    *  for the same ones leaves it exactly where it is; a differently shaped
@@ -337,9 +372,11 @@ export function ReadingRuler({
     [vertical],
   );
 
-  /** Draws the band around a block, as wide as the lines in it. */
+  /** Draws the band around a block, as wide as the lines in it. The block is
+   *  remembered as the one the next step runs from — see `blockRef`. */
   const applyBlock = useCallback(
     (target: RulerInterval, animate: boolean, column?: RulerColumn) => {
+      blockRef.current = target;
       const { axis } = areaRef.current;
       if (axis <= 0) return;
       // Hand `bandOver` the lines of the page the block is on, so its padding
@@ -578,14 +615,84 @@ export function ReadingRuler({
     }
   }, [applyBlock, applyFallback, blockNear, pad, pitch, rulerLines]);
 
-  /** One step of the reader's own advance, whole blocks at a time. */
+  /**
+   * An absorbed step in flight: the page is carrying it on the landing curve,
+   * frame by frame, and the band stands still while the text glides under it.
+   * `appliedMag` accumulates how far the scroller actually went, as a
+   * *magnitude* — the scrollport quantizes to whole pixels, so the last
+   * frame's remainder rides the next delta and the total lands on the measured
+   * advance to the pixel; the direction is kept apart from the distance so a
+   * backward glide cannot double-count its sign.
+   */
+  const glideRef = useRef<{
+    raf: number;
+    at: number;
+    advance: number;
+    appliedMag: number;
+    direction: 1 | -1;
+    nextStart: number;
+  } | null>(null);
+
+  /**
+   * Lands an absorbed step for real: whatever is left of the glide scrolls
+   * on the spot, the lines are re-measured at rest, and the band is drawn on
+   * the block it was handed. Runs when a glide finishes — and when a new step
+   * interrupts one, so every step measures a page standing still and its
+   * advance stays the measured distance between two blocks' first lines.
+   */
+  const landGlide = useCallback(() => {
+    const glide = glideRef.current;
+    if (!glide || !scroll) return;
+    glideRef.current = null;
+    window.cancelAnimationFrame(glide.raf);
+    let appliedMag = glide.appliedMag;
+    const remaining = glide.advance - appliedMag;
+    if (remaining > 0) {
+      appliedMag += Math.abs(scroll.by(glide.direction * remaining));
+    }
+    measure();
+    // The block stepped to stands the applied distance from where it was
+    // measured; find it among the fresh lines and draw there. A clamp at an
+    // edge of the flow (the total falling short of the advance) puts the band
+    // most of the way down — still on its block, or on the flow's last one.
+    //
+    // Animated even though the band does not move: a parked band holds its
+    // place on screen, and what changes here is its *shape* — the next block
+    // is taller or shorter, its lines reach further across the page — which is
+    // a change of the box the reader is looking at, and it arrives on the same
+    // landing curve as a step that does travel. (Under reduced motion `draw`
+    // drops the transition, which is the point of asking for less movement.)
+    const anchor = glide.nextStart - glide.direction * appliedMag;
+    const landed = blockNear(linesRef.current, anchor);
+    parkedRef.current = true;
+    if (landed) applyBlock(landed, true);
+    else applyFallback(anchor);
+  }, [applyBlock, applyFallback, blockNear, measure, scroll]);
+
+  /**
+   * One step of the reader's own advance, whole blocks at a time.
+   *
+   * In the paged layouts the band walks the page and the step ends at its edge;
+   * in the scrolled one the same walk crosses the trigger line and turns into a
+   * scroll — see `scroll`. The absorbed step travels on the band's own landing
+   * curve — `--ease-land`, a cubic ease-out, for exactly as long as a band
+   * step — so the text glides one block under the stationary band and the eye
+   * never sees a jump. Distance and direction stay apart in the glide: the
+   * ease works in magnitudes, and the sign rides only the `scroll.by` call.
+   */
   const move = useCallback(
     (direction: 1 | -1) => {
+      // A step arriving mid-glide lands the glide first: the page stands
+      // still while the next one measures it.
+      landGlide();
       const drawn = bandRef.current;
       if (!drawn) return false;
-      // The block is the band without its padding: a dragged band is not on a
-      // block boundary, and its padding is what says where the lines ran.
-      const from = { start: drawn.start + pad, end: drawn.end - pad };
+      if (!scroll) parkedRef.current = false;
+      // The block the band stands on — remembered when it was drawn, not
+      // re-derived from the band, whose padding is whatever the page had room
+      // for (see `blockRef`). A dragged band is off any block, and the old
+      // pad-stripping reading is the best that is left.
+      const from = blockRef.current ?? { start: drawn.start + pad, end: drawn.end - pad };
 
       if (columnsRef.current.length > 0) {
         const next = nextColumnBlock(
@@ -604,13 +711,92 @@ export function ReadingRuler({
       }
 
       const next = nextBlock(linesRef.current, from, rulerLines, direction);
-      if (!next) return false;
+      if (!next) {
+        parkedRef.current = false;
+        return false;
+      }
       movedRef.current = true;
-      applyBlock(next, true);
+      const { axis } = areaRef.current;
+      // Where the step would put the band, decided before it is drawn: past the
+      // trigger line the step is absorbed by the page instead. Backward joins
+      // only once forward has parked — a band below the line must be able to
+      // walk up to it.
+      const wanted = scroll ? bandOver(next, pitch, rulerLines, linesRef.current) : null;
+      const absorb =
+        scroll !== undefined &&
+        wanted !== null &&
+        (parkedRef.current || (direction === 1 && wanted.end > axis * scroll.trigger));
+      if (absorb && scroll) {
+        // The scroll is the *measured* distance between the two blocks' first
+        // lines — not a block of the settings' leading. That exactness is the
+        // whole alignment story: scrolling precisely that far lands the block
+        // the band just stepped to exactly where the band was standing, so the
+        // band holds its place on screen and the text steps one block under it.
+        const advance = Math.max(1, Math.abs(Math.round(next.start - from.start)));
+        if (reduce) {
+          // Under reduced motion there is no glide: the step is a change of
+          // place, and the reader who asked for less movement wants it to
+          // arrive. The scroll is instant, so the landing measures against it
+          // synchronously.
+          const applied = scroll.by(direction * advance);
+          measure();
+          parkedRef.current = Math.abs(applied) >= advance - 1;
+          const anchor = next.start - applied;
+          const landed = blockNear(linesRef.current, anchor);
+          if (landed) applyBlock(landed, true);
+          else applyFallback(anchor);
+        } else {
+          // The band never moves from here on — the text glides under it, on
+          // the landing curve, for exactly as long as a band step takes. Until
+          // the glide lands, the band keeps covering the block it was on,
+          // which the scroll has not moved yet. The frame is created with the
+          // glide (a plain closure may re-schedule itself; a useCallback
+          // cannot read its own identity), and it ends in `landGlide`.
+          const glide: NonNullable<typeof glideRef.current> = {
+            raf: 0,
+            at: performance.now(),
+            advance,
+            appliedMag: 0,
+            direction,
+            nextStart: next.start,
+          };
+          const frame = (now: number) => {
+            if (glideRef.current !== glide) return;
+            const t = Math.min(1, (now - glide.at) / RULER_STEP_MS);
+            const target = (1 - (1 - t) ** 3) * glide.advance;
+            const delta = target - glide.appliedMag;
+            if (delta > 0) {
+              glide.appliedMag += Math.abs(scroll.by(glide.direction * delta));
+            }
+            if (t < 1) {
+              glide.raf = requestAnimationFrame(frame);
+              return;
+            }
+            landGlide();
+          };
+          glideRef.current = glide;
+          glide.raf = requestAnimationFrame(frame);
+          parkedRef.current = true;
+        }
+      } else {
+        applyBlock(next, true);
+      }
       remember();
       return true;
     },
-    [applyBlock, pad, remember, rulerLines],
+    [
+      applyBlock,
+      applyFallback,
+      blockNear,
+      landGlide,
+      measure,
+      pad,
+      pitch,
+      reduce,
+      remember,
+      rulerLines,
+      scroll,
+    ],
   );
 
   /** One arrow of a drag: the band follows the pointer, and stops where it is put. */
@@ -623,6 +809,12 @@ export function ReadingRuler({
       // while they drag it (a window resize, a repagination) must leave it where
       // their hand put it.
       movedRef.current = true;
+      // A glide still in the air lands on the spot first — the hand grabs a
+      // band standing on its block — and a dragged band is out of the
+      // auto-scroll's keep: it stands where the hand left it, off any block.
+      landGlide();
+      blockRef.current = null;
+      parkedRef.current = false;
       gripRef.current = {
         centre: (drawn.start + drawn.end) / 2,
         extent: drawn.end - drawn.start,
@@ -633,7 +825,7 @@ export function ReadingRuler({
       event.preventDefault();
       event.stopPropagation();
     },
-    [vertical],
+    [landGlide, vertical],
   );
 
   const onDragMove = useCallback(
@@ -678,7 +870,13 @@ export function ReadingRuler({
     [remember],
   );
 
-  useImperativeHandle(ref, () => ({ move }), [move]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      move,
+    }),
+    [move],
+  );
 
   useEffect(() => {
     const host = hostRef.current;
@@ -806,6 +1004,7 @@ export function ReadingRuler({
   useEffect(
     () => () => {
       if (stepTimerRef.current !== null) window.clearTimeout(stepTimerRef.current);
+      if (glideRef.current !== null) window.cancelAnimationFrame(glideRef.current.raf);
     },
     [],
   );

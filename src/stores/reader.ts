@@ -89,6 +89,10 @@ interface ReaderState {
   /** Where the band sits along the reading axis, as a percentage — moved by
    *  dragging the band's own edges. */
   rulerPosition: number;
+  /**
+   * Where the band stops walking and the page starts stepping under it, as a
+   * fraction of the reading axis (滚动排版 only). */
+  rulerScrollTrigger: number;
   /** Speed-reading rate, in words per minute (RSVP). */
   rsvpWpm: number;
   /** Reading surface for the light appearance, a `READING_SURFACES` key or `"custom"`. */
@@ -101,6 +105,15 @@ interface ReaderState {
   pageTransition: PageTransition;
   /** Vertical scroll, single page or two-page spread. */
   layoutMode: LayoutMode;
+  /**
+   * 手柄翻页: a gamepad or a Bluetooth page-turner turns the page — shoulder
+   * buttons and the D-pad, and a stick pushed left or right. On by default: a
+   * pad plugged into a reading app is there to page, and nothing else in here
+   * could mean it. Off is for the reader whose pad is shared with something
+   * else — a game that also uses the shoulders — and who would rather it did
+   * nothing here at all.
+   */
+  gamepadPaging: boolean;
   /** Auto-scroll speed in px per second. */
   autoScrollSpeed: number;
   /** Sustained reading speed in chars per minute, measured while scrolling. */
@@ -317,6 +330,12 @@ export const MAX_RULER_LINES = 6;
 export const MIN_RULER_OPACITY = 0.1;
 export const MAX_RULER_OPACITY = 0.9;
 export const DEFAULT_RULER_POSITION = 33;
+/** Where the scrolled layout's auto-scroll takes over: low enough that the band
+ *  keeps a screenful of the text it is walking toward below it, high enough that
+ *  it still gets to cross most of the window before the page starts following. */
+export const MIN_RULER_SCROLL_TRIGGER = 0.3;
+export const MAX_RULER_SCROLL_TRIGGER = 0.9;
+export const DEFAULT_RULER_SCROLL_TRIGGER = 2 / 3;
 
 /**
  * Folds one animation frame of auto-scroll into a whole-pixel delta plus the
@@ -381,12 +400,14 @@ export const DEFAULT_READER_SETTINGS = {
   rulerColor: "clear",
   rulerOpacity: 0.5,
   rulerPosition: DEFAULT_RULER_POSITION,
+  rulerScrollTrigger: DEFAULT_RULER_SCROLL_TRIGGER,
   rsvpWpm: DEFAULT_WPM,
   surface: "standard",
   nightSurface: "night",
   customSurface: null,
   pageTransition: "pan",
   layoutMode: "scroll",
+  gamepadPaging: true,
   autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
   readingSpeed: DEFAULT_READING_SPEED,
   paceSamples: [],
