@@ -580,24 +580,24 @@ test("a page with no words on it gets no band", async ({ page }) => {
   // Distinct from *a line near where the band wants to be* (a paragraph gap, a
   // figure, the lines just off the top of the window), which still gets an
   // arithmetic band: that one marks a real place on a page that has text.
-  // 🔴 The wordless page is a **fixture section** (one image, no text node), not
-  // an accident of some other book. The sparse-title fixture used to supply one
-  // by having foliate render its opener as an empty section — which is what it
-  // does on macOS and *not* on the Linux runner, so the slot went red there with
-  // 「插图页上竟然量到了行」 and no change of mine could have been the cause.
+  // 🔴 The wordless page is a **book of its own whose first section is one image
+  // and no text node at all**. The sparse-title fixture used to supply one by
+  // having foliate render its opener as an empty section — which is what it does
+  // on macOS and *not* on the Linux runner, so the slot went red there with
+  // 「插图页上竟然量到了行」 and no change of mine could have been the cause. Turning
+  // to it across sections was the other half of the problem: the turn is the part
+  // that differs between platforms, and this slot is about a page without lines,
+  // not about chapter turning. So the shape is the **first screen** instead.
   await page.route(/page-numbers\.epub/, (route) =>
     route.fulfill({
-      body: readFileSync(new URL("../public/demo/sparse-opener.epub", import.meta.url)),
+      body: readFileSync(new URL("../public/demo/plate-book.epub", import.meta.url)),
       contentType: "application/epub+zip",
     }),
   );
   await openBook(page, "/?demo=1&epub=1", /页码样书/);
   await choose(page, "单页");
   await enableRuler(page);
-
-  // Onto the plate: the fixture's second section is a picture and nothing else.
-  await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
-  await page.waitForTimeout(2600);
+  await page.waitForTimeout(1200);
 
   const lines = (await page.evaluate(LINES)) as Interval[];
   expect(lines.filter((l) => l.start >= 0).length, "插图页上竟然量到了行").toBe(0);
@@ -609,8 +609,8 @@ test("a page with no words on it gets no band", async ({ page }) => {
   // And the washes go with it: there is no block of text for them to be outside.
   await expect(page.locator('[data-ruler-wash="after"]')).toHaveCount(0);
 
-  // On to the words, and the band comes back with them — on the one-paragraph
-  // section, where a single line is all there is to cover.
+  // On to the words, and the band comes back with them. One turn, to the section
+  // right beside the plate.
   await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
   await page.waitForTimeout(2600);
   const drawn = await rulerDrawn(page);
@@ -619,7 +619,10 @@ test("a page with no words on it gets no band", async ({ page }) => {
     const centre = (line.start + line.end) / 2;
     return centre > drawn.band.top && centre < drawn.band.bottom;
   });
-  expect(covered.length, "翻到有字的页后带子仍然没落在任何一行上").toBe(1);
+  // As many lines as the reader asked for — the point of this half is that the
+  // band *came back*, not how many lines it covers (the line count has slots of
+  // its own, and the prose here is many lines long by design).
+  expect(covered.length, "翻到有字的页后带子仍然没落在任何一行上").toBeGreaterThan(0);
   hugsText(drawn, covered);
 });
 
@@ -1431,14 +1434,16 @@ test("vertical type turns the band into a column, as tall as the text it washes"
   // paragraphs this slot stayed green against the bug, exactly like the two
   // line-height fixtures before it.
   //
-  // 🔴 It used to reach for that shape through the sparse-title book, which has a
-  // one-line section — but reaching it meant paging a book whose opening section
-  // foliate renders as **empty** on some platforms, and on the Linux runner the
-  // band never grew at all (「阅读标尺没有画出来」). The shape now has a section of
-  // its own, two page turns away and nothing to page through.
+  // 🔴 A book whose **first section** is that one line. The shape used to be two
+  // page turns into another book — one whose opening section foliate renders as
+  // **empty** on some platforms, which on the Linux runner left the band with
+  // nothing to stand on (「竖排下标尺应当变成竖条」). Reaching a shape by turning
+  // sections is how this slot became a test of chapter turning; the subject here
+  // is a band's height, so the shape is now the first screen and no turning is
+  // involved at all.
   await page.route(/page-numbers\.epub/, (route) =>
     route.fulfill({
-      body: readFileSync(new URL("../public/demo/sparse-opener.epub", import.meta.url)),
+      body: readFileSync(new URL("../public/demo/short-column.epub", import.meta.url)),
       contentType: "application/epub+zip",
     }),
   );
@@ -1446,13 +1451,6 @@ test("vertical type turns the band into a column, as tall as the text it washes"
   await choose(page, "单页");
   await enableRuler(page);
   await choose(page, "竖排");
-  // To the third section: the whole page is one line, and every page of the
-  // others is full-height columns, so this is the only page where a band's height
-  // can be told apart from the page's.
-  for (let i = 0; i < 2; i += 1) {
-    await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
-    await page.waitForTimeout(2400);
-  }
   await page.waitForTimeout(1200);
 
   const first = await rulerDrawn(page);

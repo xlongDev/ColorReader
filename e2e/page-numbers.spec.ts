@@ -96,6 +96,28 @@ async function flip(page: Page, times: number) {
 }
 
 /**
+ * The indicator read **twice**, the second one taken.
+ *
+ * A page turn's own animation runs for up to 450ms, and `flip` waits 560 — which
+ * is enough on a laptop and not on a loaded runner, where the reading right after
+ * a turn is still the page before it. That is not a cosmetic slip either: the
+ * walk to the end of the book then finishes one page short and the whole-book
+ * invariant 「读完一本后页码应当停在总页数上」 goes red on CI while passing
+ * everywhere else. Reading until the number stops moving is the same rule the
+ * ruler's own suite follows for its boxes (「读标尺要先等它静止」).
+ */
+async function settledReading(page: Page) {
+  let previous = await readIndicator(page);
+  for (let i = 0; i < 6; i += 1) {
+    await page.waitForTimeout(250);
+    const next = await readIndicator(page);
+    if (next.page === previous.page && next.total === previous.total) return next;
+    previous = next;
+  }
+  return previous;
+}
+
+/**
  * Turns pages to the end of the book, reading the indicator on every page.
  *
  * A chapter's last page and its successor's first can report the same number —
@@ -104,11 +126,11 @@ async function flip(page: Page, times: number) {
  * hang the suite rather than fail it.
  */
 async function walkToTheEnd(page: Page) {
-  const readings = [await readIndicator(page)];
+  const readings = [await settledReading(page)];
   let still = 0;
   for (let i = 0; i < 60 && still < 3; i += 1) {
     await flip(page, 1);
-    const next = await readIndicator(page);
+    const next = await settledReading(page);
     const last = readings[readings.length - 1]!;
     still = next.page === last.page && next.total === last.total ? still + 1 : 0;
     readings.push(next);

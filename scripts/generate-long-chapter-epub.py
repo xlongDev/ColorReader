@@ -28,6 +28,15 @@ paging around looking for, one section each:
    same number and the slot cannot tell them apart;
 4. plain prose, for coming back to.
 
+`public/demo/plate-book.epub` and `public/demo/short-column.epub` — one shape
+each, **first section**, so a slot that needs a wordless page or a one-line
+vertical column gets it on the first screen instead of paging to it. Reaching a
+shape by turning pages across sections is how the two slots below went red on the
+Linux runner: the turn itself is the part that differs between platforms, and a
+slot whose subject is 「no lines here」 should not also be a test of chapter
+turning. Each book keeps one prose section so 「the band comes back with the
+words」 has somewhere to come back to.
+
     python3 scripts/generate-long-chapter-epub.py
 """
 
@@ -115,24 +124,33 @@ def main() -> None:
   <h1 style="margin:0 0 {OPENER_TITLE_CLEARANCE}px 0">第一章 开篇</h1>
 {opener_body}""",
     )
-    # A plate: one image, not a text node. 1×1 PNG, inline so the section carries
-    # nothing else — `lineRects` only ever reads text, so this page has no lines
-    # on every platform.
-    plate = section(
-        "图版",
-        f'  <img src="data:image/png;base64,{PLATE_PNG}" alt=""/>',
-    )
     # One **line**: in 竖排 a paragraph is a column, and this is a short one, and
     # in horizontal type it is the page whose only line a one-line band can be
     # told apart from a two-line one on. A long paragraph would not do — it wraps,
     # and the ruler's block is two lines whatever the page holds.
-    short = section("短章", "  <p>短章仅此一行。</p>")
+    short_body = "  <p>短章仅此一行。</p>"
     prose_body = "\n".join(f"  <p>{PARA}（第{i}段）</p>" for i in range(1, 13))
-    prose = section("第四章 正文", prose_body)
+
+    # sparse-opener keeps the opener alone: the slots that want a wordless page
+    # or a short column have books of their own, where that shape is the *first*
+    # section rather than two turns away.
+    _write("public/demo/sparse-opener.epub", [opener, section("第二章 正文", prose_body)], "开篇样书")
+
+    # A plate: one image, not a text node. 1×1 PNG, inline so the section carries
+    # nothing else — `lineRects` only ever reads text, so this page has no lines
+    # on every platform.
     _write(
-        "public/demo/sparse-opener.epub",
-        [opener, plate, short, prose],
-        "开篇样书",
+        "public/demo/plate-book.epub",
+        [
+            section("图版", f'  <img src="data:image/png;base64,{PLATE_PNG}" alt=""/>'),
+            section("正文", prose_body),
+        ],
+        "图版样书",
+    )
+    _write(
+        "public/demo/short-column.epub",
+        [section("短章", short_body), section("第二章 正文", prose_body)],
+        "短列样书",
     )
 
 
