@@ -126,7 +126,14 @@ block2 = "0.6.2"
 codegen-units = 1
 lto = true
 opt-level = "s"
-panic = "abort"
+# Not `abort`: the reader contains a panic from a third party rather than
+# letting it take the app down. pdf-extract panics on PDFs it cannot map
+# (`panic!("unsupported encoding …")`, a Type0 font with anything but
+# Identity-H/V), and `document/pdf.rs` catches it with `catch_unwind` — which
+# under `abort` never runs, so one such book aborted the whole process
+# (SIGABRT) instead of importing with a page index and no text. Unwinding is
+# the price of that containment; it is paid once, in binary size.
+panic = "unwind"
 strip = true
 
 [profile.release.package.pdf-extract]

@@ -18,7 +18,12 @@ pub fn read_metadata(path: &Path) -> AppResult<BookMetadata> {
         // One parse answers all three questions. `load_mem` is the expensive
         // half of this module on a large file (327 ms for 21 MB) and it used to
         // run once per field, so reading a title and an author cost 645 ms.
-        && let Ok(document) = pdf_extract::Document::load_mem(&bytes)
+        //
+        // Through `catch`, like every other call into pdf-extract: the parse
+        // walks the same font tables the extraction does, so a file that panics
+        // one panics the other, and a metadata read is not worth more than the
+        // title fallback below.
+        && let Some(Ok(document)) = catch(|| pdf_extract::Document::load_mem(&bytes))
     {
         metadata.title = info_field(&document, b"Title").unwrap_or_default();
         metadata.authors = info_field(&document, b"Author").into_iter().collect();
@@ -106,6 +111,15 @@ fn page_texts(bytes: &[u8]) -> Vec<String> {
 /// `catch_unwind` in one line: `None` when the closure panicked. A malformed
 /// PDF can make pdf-extract panic, and one bad file must not abort a whole
 /// import batch, so every call into it goes through here.
+///
+/// It only works while unwinding is on: under `panic = "abort"` there is
+/// nothing to catch and the process dies instead — which is exactly how one
+/// Type0 font with a non-Identity encoding took the app down (SIGABRT) on a
+/// release build. Pin the profile here, next to the thing that depends on it.
+#[cfg(not(panic = "unwind"))]
+compile_error!(
+    "release 不能用 panic=\"abort\"：pdf.rs 靠 catch_unwind 兜住 pdf-extract 的 panic，abort 下它不生效"
+);
 fn catch<T>(f: impl FnOnce() -> T) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
 }
