@@ -8,6 +8,7 @@
 
 import { LONE_FIGURE_ATTR } from "./loneFigure";
 import type { WritingMode } from "./theme";
+import type { ZhConvertMode } from "./zhConvert";
 
 /** Typography and palette pushed into the book's own document. */
 export type FoliateStyle = {
@@ -54,6 +55,13 @@ export type FoliateStyle = {
    * changes with the same settings and reloads the same sections.
    */
   quoteReplace: boolean;
+  /**
+   * 简繁转换: rewrite the section text between Simplified and Traditional
+   * Chinese at section load, for the same reason quote replacement travels
+   * here — it lives in the section text, not the sheet, and a flip reloads
+   * the same sections the other typography settings do.
+   */
+  zhConvert: ZhConvertMode;
 };
 
 /**
@@ -76,33 +84,12 @@ export function verticalQuotes(text: string): string {
 
 /** Elements whose text is code or sheet content, not prose: rewriting the
  *  quotes inside a `<style>` rule or a `<code>` sample would corrupt it. */
-const QUOTE_SKIP = new Set(["SCRIPT", "STYLE", "CODE", "PRE", "KBD", "SAMP", "TEXTAREA"]);
-
 /**
- * Rewrites the quotes in every text node of a section document. Runs at
- * section load, on the mounted document itself — the book's source is never
- * touched, and a reload (the setting flip re-opens the view) rebuilds the
- * text from it. Returns how many nodes changed.
+ * The same mapping, applied to a section's text nodes by the shared rewrite
+ * pipeline (`sectionText.ts`): 替换引号 is one `TextLayer` next to 简繁转换,
+ * and both are replayed from the node's published string rather than from
+ * each other's output.
  */
-export function applyVerticalQuotes(doc: Document): number {
-  const walker = doc.createTreeWalker(doc.body ?? doc, NodeFilter.SHOW_TEXT, {
-    acceptNode: (node) =>
-      QUOTE_SKIP.has(node.parentElement?.tagName ?? "")
-        ? NodeFilter.FILTER_REJECT
-        : NodeFilter.FILTER_ACCEPT,
-  });
-  let changed = 0;
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const text = node.nodeValue;
-    if (!text) continue;
-    const replaced = verticalQuotes(text);
-    if (replaced !== text) {
-      node.nodeValue = replaced;
-      changed += 1;
-    }
-  }
-  return changed;
-}
 
 /**
  * Typography always. Colour follows the readest scheme and is dark-only:

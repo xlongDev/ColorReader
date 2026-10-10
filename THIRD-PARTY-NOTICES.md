@@ -50,6 +50,19 @@ Bundled as the reading surface's default CJK face. One subset is also copied to
 - Project: <https://github.com/mozilla/pdf.js>
 - Vendored build assets under `public/pdfjs/`.
 
+## opencc-js — MIT（词典数据 Apache-2.0）
+
+- Project: <https://github.com/nk2028/opencc-js>
+- Version: `opencc-js@1.4.2`（npm 依赖，未 vendored）
+- License: 代码 MIT — `node_modules/opencc-js/LICENSE`；词典数据由
+  [`opencc-data`](https://github.com/nk2028/opencc-data) 生成，属 Apache-2.0
+  衍生作品 — `node_modules/opencc-js/LICENSES/Apache-2.0.txt`（上游说明见
+  `node_modules/opencc-js/THIRD_PARTY_LICENSES.md`）
+- Copyright (c) 2020-2021 The nk2028 Project
+
+简繁转换的词典与转换链（readest 用的是同一套 OpenCC 规则）。按转换方向切成
+两个懒加载 chunk（简→繁族 / 繁→简族），只在读者真的切换转换模式时才下载。
+
 ## React, Vite, Tailwind CSS, TanStack Query, Zustand, Motion, Tauri
 
 Each under its own license (MIT / Apache-2.0); see `node_modules/<pkg>/LICENSE`.

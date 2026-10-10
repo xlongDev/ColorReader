@@ -7,6 +7,7 @@ import { DEFAULT_WPM } from "@/features/reader/rsvp";
 import type { LayoutMode, PageTransition, WritingMode } from "@/features/reader/theme";
 import type { SpeechGranularity, SpeechPlayerStyle } from "@/features/reader/speech";
 import type { TtsWashStyle } from "@/features/reader/ttsWash";
+import type { ZhConvertMode } from "@/features/reader/zhConvert";
 import type { AnnotationStyle } from "@/types/ipc";
 
 /** Reading typography and viewing preferences, persisted across sessions. */
@@ -73,6 +74,21 @@ interface ReaderState {
    * re-opened when the flag flips.
    */
   quoteReplace: boolean;
+  /**
+   * 简繁转换: rewrite the displayed text between Simplified and Traditional
+   * Chinese (with the regional phrase variants readest offers). Display only —
+   * the corpus, the search index and the book source stay as published. The
+   * dictionaries load in a lazy chunk per direction; a flip re-opens the
+   * foliate view (the conversion lives in the section text) and re-derives the
+   * prose paragraphs.
+   */
+  zhConvert: ZhConvertMode;
+  /**
+   * Whether the reader header shows the 简繁转换 button. The conversion itself
+   * is configured in the settings panel either way; this only hides the
+   * shortcut for readers who never use it.
+   */
+  zhToolbarButton: boolean;
   /**
    * Reading ruler: a band parked at the reader's place on the page, with
    * everything outside it washed toward the paper. Worth most on a dense CJK
@@ -395,6 +411,8 @@ export const DEFAULT_READER_SETTINGS = {
   writingMode: "auto",
   bookTypography: true,
   quoteReplace: false,
+  zhConvert: "off",
+  zhToolbarButton: true,
   readingRuler: false,
   rulerLines: 2,
   rulerColor: "clear",

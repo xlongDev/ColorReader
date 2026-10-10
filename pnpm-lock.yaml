@@ -44,6 +44,9 @@ importers:
       motion:
         specifier: ^13.1.1
         version: 13.1.1(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
+      opencc-js:
+        specifier: ^1.4.2
+        version: 1.4.2
       pdfjs-dist:
         specifier: ^6.3.289
         version: 6.3.289
@@ -1516,6 +1519,9 @@ packages:
     resolution: {integrity: sha512-4a+OsYv9UktOJKE+l1A4OufDgdRF9PifWj+tJnHURo/P+WOxpG4GzUFL9qCalmWauao6ogiG+QvnCovwPoyAWA==}
     engines: {node: '>=12.20.0'}
 
+  opencc-js@1.4.2:
+    resolution: {integrity: sha512-EdcspgdROiCCZDM+jZR6Pa670xW+EW2QhctPBQ8gRjg6lrx4IHEl+2s+kt5izk/TkxVRgdWuFgaGkaEdIUfdaw==}
+
   oxlint-tsgolint@7.0.2001:
     resolution: {integrity: sha512-KjK/XLcXr1DSyonKhsuFqJRiuKqcyG9j3LJ8nkOsrLzGvodBPqzHOKauy10asLMDI0sUpvb+1sxlzff3udZvfg==}
     hasBin: true
@@ -2935,6 +2941,8 @@ snapshots:
   nanoid@3.3.18: {}
 
   obug@2.1.4: {}
+
+  opencc-js@1.4.2: {}
 
   oxlint-tsgolint@7.0.2001:
     optionalDependencies:

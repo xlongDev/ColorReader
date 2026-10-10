@@ -10,6 +10,7 @@ import {
 } from "@/features/reader/theme";
 import { LINE_HEIGHTS, PARA_GAPS } from "@/stores/reader";
 import type { LocalFont } from "@/types/ipc";
+import type { ZhConvertMode } from "@/features/reader/zhConvert";
 
 /**
  * The reading settings as the foliate renderer wants them.
@@ -52,6 +53,8 @@ export interface FoliateStyleOptions {
   writingMode: WritingMode;
   /** 替换引号: western quotes become vertical corner brackets at section load. */
   quoteReplace: boolean;
+  /** 简繁转换: section text rewritten between 简 and 繁 at section load. */
+  zhConvert: ZhConvertMode;
 }
 
 export function useFoliateStyle({
@@ -66,6 +69,7 @@ export function useFoliateStyle({
   fonts,
   writingMode,
   quoteReplace,
+  zhConvert,
 }: FoliateStyleOptions): FoliateStyle {
   return useMemo(
     () => ({
@@ -89,6 +93,7 @@ export function useFoliateStyle({
       fontFaces: [fontFaceCss(fonts), bundledFacesFor(font)].filter(Boolean).join("\n"),
       writingMode,
       quoteReplace,
+      zhConvert,
     }),
     [
       fontSize,
@@ -104,6 +109,7 @@ export function useFoliateStyle({
       font,
       writingMode,
       quoteReplace,
+      zhConvert,
     ],
   );
 }

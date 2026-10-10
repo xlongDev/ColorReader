@@ -33,6 +33,7 @@ import {
   useReaderSettings,
 } from "@/stores/reader";
 import { useFonts } from "@/hooks/useFonts";
+import { ZH_MODES } from "@/features/reader/zhConvert";
 import {
   customFontKey,
   FONT_STACKS,
@@ -56,7 +57,13 @@ const RULER_CUSTOM_FALLBACK = "#7cd92c";
  * into the persisted reader store; the page re-renders live off the same
  * store, so nothing here needs an "apply" step.
  */
-export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable?: boolean }) {
+export function SettingsPanel({
+  verticalAvailable = false,
+  zhAvailable = false,
+}: {
+  verticalAvailable?: boolean;
+  zhAvailable?: boolean;
+}) {
   const settings = useReaderSettings();
   const { update } = settings;
   const fonts = useFonts().data ?? [];
@@ -265,6 +272,30 @@ export function SettingsPanel({ verticalAvailable = false }: { verticalAvailable
             <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
               把西文引号 “ ” ‘ ’ 换成竖排角引号 ﹁ ﹂ ﹃ ﹄，只改显示不改书源。
             </p>
+          </Group>
+        )}
+        {/* 简繁转换, the readest placement: a text-level rewrite, offered
+            wherever the book has flowing text. Nine modes are too many for a
+            pill row, so the Select carries them; the header shortcut can be
+            hidden from its own menu or from here. */}
+        {zhAvailable && (
+          <Group label="简繁转换">
+            <Select
+              label="简繁转换模式"
+              options={ZH_MODES}
+              value={settings.zhConvert}
+              onChange={(key) => update({ zhConvert: key })}
+            />
+            <div className="flex w-full items-start gap-3">
+              <p className="text-text-3 min-w-0 flex-1 text-[12px] leading-relaxed">
+                只改显示不改书源：检索与朗读语料仍是原文。台湾、香港变体含当地习惯用语。
+              </p>
+              <GlassSwitch
+                checked={settings.zhToolbarButton}
+                onCheckedChange={(next) => update({ zhToolbarButton: next })}
+                ariaLabel="在工具栏显示简繁转换按钮"
+              />
+            </div>
           </Group>
         )}
         <Group label="阅读标尺">

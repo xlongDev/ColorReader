@@ -1,4 +1,5 @@
 import type { RefObject } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion } from "motion/react";
 import {
   ArrowDown,
@@ -8,6 +9,8 @@ import {
   BookmarkSimple,
   CaretLeft,
   CaretRight,
+  Check,
+  EyeSlash,
   Faders,
   Graph,
   HighlighterCircle,
@@ -20,6 +23,7 @@ import {
   Ruler,
   SpeakerHigh,
   Sparkle,
+  Translate,
 } from "@phosphor-icons/react";
 
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
@@ -28,6 +32,8 @@ import { HeaderCover, HeaderRule } from "@/features/reader/ReaderHeader";
 import { estimateLabel } from "@/features/reader/progress";
 import { MAX_PDF_ZOOM, MIN_PDF_ZOOM, PDF_ZOOM_STEP } from "@/features/reader/usePdfZoom";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "@/stores/reader";
+import { ZH_MODES } from "@/features/reader/zhConvert";
+import type { ZhConvertMode } from "@/features/reader/zhConvert";
 import { cn } from "@/lib/cn";
 
 /** Which side panel is open. Only one at a time, so they never stack. */
@@ -65,6 +71,11 @@ export function ReaderHeaderBar({
   onToggleFullscreen,
   rulerOn,
   onToggleRuler,
+  zhAvailable,
+  zhConvert,
+  onZhConvert,
+  zhButton,
+  onHideZhButton,
 }: {
   fullscreen: boolean;
   onBack: () => void;
@@ -92,6 +103,16 @@ export function ReaderHeaderBar({
   /** Whether the reading ruler is on: the header button shows it. */
   rulerOn: boolean;
   onToggleRuler: () => void;
+  /** 简繁转换 needs a paginator or flowing prose; PDF pages and comics have
+   *  neither, and a button that does nothing where it sits is worse than none. */
+  zhAvailable: boolean;
+  /** The active conversion mode; `off` means the book reads as published. */
+  zhConvert: ZhConvertMode;
+  onZhConvert: (mode: ZhConvertMode) => void;
+  /** Whether the header carries the 简繁转换 button at all (设置里可关). */
+  zhButton: boolean;
+  /** Hides the shortcut from this header (the menu's own affordance). */
+  onHideZhButton: () => void;
 }) {
   return (
     <header
@@ -169,6 +190,12 @@ export function ReaderHeaderBar({
             <Ruler size={16} weight={rulerOn ? "fill" : "regular"} />
           </span>
         </GlassIconButton>
+        {/* 简繁转换 sits with the ruler: another thing that changes the page
+            itself rather than opening a drawer. Hidden on PDF/comics and when
+            the reader has turned the shortcut off in settings. */}
+        {zhAvailable && zhButton && (
+          <ZhConvertButton mode={zhConvert} onPick={onZhConvert} onHide={onHideZhButton} />
+        )}
         <GlassIconButton
           label="阅读设置"
           size="sm"
@@ -261,6 +288,104 @@ export function ReaderHeaderBar({
         </GlassIconButton>
       </div>
     </header>
+  );
+}
+
+/**
+ * The header's 简繁转换 button: pressed like the ruler (accent while a mode is
+ * active), and opening a menu of the conversion modes readest offers — plain
+ * direction swaps plus the Taiwan / Hong Kong regional and phrase variants.
+ * The menu also carries the way to hide this shortcut from the header, so the
+ * reader who never uses it learns the setting exists where the button is.
+ */
+function ZhConvertButton({
+  mode,
+  onPick,
+  onHide,
+}: {
+  mode: ZhConvertMode;
+  onPick: (mode: ZhConvertMode) => void;
+  onHide: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLSpanElement>(null);
+  const active = mode !== "off";
+  const activeLabel = ZH_MODES.find((entry) => entry.key === mode)?.label ?? "";
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown, true);
+      document.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [open]);
+
+  return (
+    <span ref={rootRef} className="relative">
+      <GlassIconButton
+        label={active ? `简繁转换：${activeLabel}` : "简繁转换"}
+        size="sm"
+        className={CHROME_BTN}
+        aria-pressed={active}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <span className={cn("inline-flex transition-colors duration-300", active && "text-accent")}>
+          <Translate size={16} weight={active ? "fill" : "regular"} />
+        </span>
+      </GlassIconButton>
+      {open && (
+        <div
+          role="menu"
+          aria-label="简繁转换"
+          className="border-hairline bg-surface-1 shadow-glass absolute top-[calc(100%+8px)] right-0 z-50 w-56 rounded-[14px] border p-1.5 backdrop-blur-xl"
+        >
+          {ZH_MODES.map((entry) => {
+            const on = entry.key === mode;
+            return (
+              <button
+                key={entry.key}
+                type="button"
+                role="menuitemradio"
+                aria-checked={on}
+                onClick={() => {
+                  onPick(entry.key);
+                  setOpen(false);
+                }}
+                className={cn(
+                  "focus-visible:focus-ring text-text-2 hover:text-text-1 hover:bg-surface-2 flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[13px] transition-colors",
+                  on && "text-accent",
+                )}
+              >
+                {entry.label}
+                {on && <Check size={13} weight="bold" />}
+              </button>
+            );
+          })}
+          <div className="border-hairline mt-1.5 border-t pt-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onHide();
+              }}
+              className="text-text-3 hover:text-text-1 hover:bg-surface-2 focus-visible:focus-ring flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors"
+            >
+              <EyeSlash size={13} />
+              不在工具栏显示
+            </button>
+          </div>
+        </div>
+      )}
+    </span>
   );
 }
 

@@ -27,6 +27,7 @@ import {
 } from "@/features/reader/chapterText";
 import { usePdfZoom } from "@/features/reader/usePdfZoom";
 import { useFoliateBook } from "@/features/reader/useFoliateBook";
+import { useZhConverter } from "@/features/reader/zhConvert";
 import { useFoliateStyle } from "@/features/reader/useFoliateStyle";
 import { useReaderFullscreen } from "@/features/reader/useReaderFullscreen";
 import { FULLSCREEN_MARGIN_BONUS, useReaderLayout } from "@/features/reader/useReaderLayout";
@@ -675,6 +676,31 @@ function ReaderView({
     };
   }, [chapter.data]);
   const wallpaperPath = chapterData?.wallpaper ?? null;
+
+  /**
+   * 简繁转换, display layer for the prose path. The converter arrives with the
+   * dictionary chunk; until then (and for `off`) the chapter reads as
+   * published. The rewrite sits *here* — one memo above every consumer — so
+   * the rendered text, the selection resolver, the read-aloud queue and the AI
+   * context all measure against the same string, exactly the invariant the
+   * wallpaper blanking below it established. Marker paragraphs (image / link /
+   * wallpaper) keep their syntax untouched.
+   */
+  const zhAvailable = !chapterIsPage;
+  const zhConverter = useZhConverter(zhAvailable ? settings.zhConvert : "off");
+  const displayChapterData = useMemo(() => {
+    if (!chapterData || !zhConverter) return chapterData;
+    return {
+      ...chapterData,
+      paragraphs: chapterData.paragraphs.map((paragraph) =>
+        paragraph &&
+        !paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX) &&
+        !paragraph.startsWith(LINK_PARAGRAPH_PREFIX)
+          ? zhConverter(paragraph)
+          : paragraph,
+      ),
+    };
+  }, [chapterData, zhConverter]);
   /**
    * The page indicator, and the tally its whole-book unit is built from.
    *
@@ -862,7 +888,7 @@ function ReaderView({
     tts,
     useFoliate,
     isPdf,
-    paragraphs: chapterData?.paragraphs ?? null,
+    paragraphs: displayChapterData?.paragraphs ?? null,
     scrollRef,
     foliateRef,
     storedVoice: speechVoiceURI,
@@ -940,7 +966,7 @@ function ReaderView({
       pendingSpeechPara.current = null;
       const frac = pendingScroll.current;
       pendingScroll.current = 0;
-      const paragraphs = chapterData?.paragraphs ?? [];
+      const paragraphs = displayChapterData?.paragraphs ?? [];
       const continueSpeech = autoAdvance.current;
       autoAdvance.current = false;
       if (continueSpeech) playFromStart();
@@ -971,7 +997,7 @@ function ReaderView({
       applyPosition(el, frac, layoutModeRef.current, marginRef.current);
     },
     [
-      chapterData,
+      displayChapterData,
       chapterIdx,
       chapters,
       isPdf,
@@ -1544,11 +1570,11 @@ function ReaderView({
         return;
       }
       const selection = window.getSelection();
-      if (!selection || !chapterData) {
+      if (!selection || !displayChapterData) {
         setPending(null);
         return;
       }
-      const range = resolveSelection(selection, chapterData.paragraphs);
+      const range = resolveSelection(selection, displayChapterData.paragraphs);
       if (!range) {
         setPending(null);
         return;
@@ -1564,7 +1590,7 @@ function ReaderView({
     };
     el.addEventListener("mouseup", onMouseUp);
     return () => el.removeEventListener("mouseup", onMouseUp);
-  }, [chapterData]);
+  }, [displayChapterData]);
 
   const createHighlight = (
     range: TextRange,
@@ -1671,7 +1697,7 @@ function ReaderView({
   const { pick: pickHit, follow: jumpToCitation } = useHitJumps({
     bookId,
     chapterIdx,
-    paragraphs: chapterData?.paragraphs,
+    paragraphs: displayChapterData?.paragraphs,
     goTo,
     setPendingFocus,
     scrollRef,
@@ -1733,6 +1759,7 @@ function ReaderView({
     writingMode: settings.writingMode,
     bookTypography: settings.bookTypography,
     quoteReplace: settings.quoteReplace,
+    zhConvert: settings.zhConvert,
   });
 
   /** Column width for the paged layouts; `undefined` keeps flow layout. */
@@ -1832,7 +1859,7 @@ function ReaderView({
   // key. Only the paragraph the voice is on gets the extra cut, so a word-level
   // wash re-renders one paragraph, not the chapter.
   const renderedParagraphs = useMemo(() => {
-    const paragraphs = chapterData?.paragraphs ?? [];
+    const paragraphs = displayChapterData?.paragraphs ?? [];
     const chapterAnnotations = (annotations ?? []).filter((a) => a.chapterIdx === chapterIdx);
     const wash = speechSpan && isProseParagraph(paragraphs[speechSpan.source]) ? speechSpan : null;
     return paragraphs.map((paragraph, idx) => ({
@@ -1868,7 +1895,7 @@ function ReaderView({
         };
       }),
     }));
-  }, [chapterData, chapterIdx, annotations, search, speechSpan]);
+  }, [displayChapterData, chapterIdx, annotations, search, speechSpan]);
 
   /**
    * Inline ink for one prose-path annotation run: the translucent wash, the
@@ -2031,6 +2058,11 @@ function ReaderView({
       onToggleFullscreen={() => void toggleFullscreen()}
       rulerOn={settings.readingRuler}
       onToggleRuler={() => settings.update({ readingRuler: !settings.readingRuler })}
+      zhAvailable={zhAvailable}
+      zhConvert={settings.zhConvert}
+      onZhConvert={(mode) => settings.update({ zhConvert: mode })}
+      zhButton={settings.zhToolbarButton}
+      onHideZhButton={() => settings.update({ zhToolbarButton: false })}
     />
   );
 
@@ -2434,6 +2466,7 @@ function ReaderView({
         panel={panel}
         bookId={bookId}
         verticalAvailable={useFoliate}
+        zhAvailable={zhAvailable}
         // The drawer's own ✕. Same call as Escape's, so the two cannot drift
         // apart again — that drift is what left the highlights painted.
         onClose={closePanel}
@@ -2505,7 +2538,7 @@ function ReaderView({
           context: aiContext,
           onClearContext: () => setAiContext(null),
           chapterTitle: chapterTitle || `第 ${chapterIdx + 1} 章`,
-          paragraphs: chapterData?.paragraphs ?? [],
+          paragraphs: displayChapterData?.paragraphs ?? [],
           onJumpCitation: jumpToCitation,
         }}
       />

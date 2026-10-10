@@ -42,6 +42,7 @@
     "clsx": "^2.1.1",
     "lxgw-wenkai-webfont": "^1.7.0",
     "motion": "^13.1.1",
+    "opencc-js": "^1.4.2",
     "pdfjs-dist": "^6.3.289",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",

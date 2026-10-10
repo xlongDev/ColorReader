@@ -23,6 +23,7 @@ function setup(overrides: Partial<FoliateStyleOptions> = {}) {
     fonts: [],
     writingMode: "auto",
     quoteReplace: false,
+    zhConvert: "off",
     ...overrides,
   };
   return renderHook((props: FoliateStyleOptions) => useFoliateStyle(props), {

@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import {
-  applyVerticalQuotes,
-  buildStyleSheet,
-  verticalQuotes,
-  type FoliateStyle,
-} from "./foliateStyle";
+import { buildStyleSheet, verticalQuotes, type FoliateStyle } from "./foliateStyle";
 import { LONE_FIGURE_ATTR } from "./loneFigure";
 
 /** A night page, so each case only states the field it is about. */
@@ -23,6 +18,7 @@ const style = (over: Partial<FoliateStyle> = {}): FoliateStyle => ({
   fontFaces: "",
   writingMode: "auto",
   quoteReplace: false,
+  zhConvert: "off",
   ...over,
 });
 
@@ -156,20 +152,5 @@ describe("buildStyleSheet", () => {
     expect(verticalQuotes("don’t")).toBe("don﹄t");
     expect(verticalQuotes("straight \" and ' stay")).toBe("straight \" and ' stay");
     expect(verticalQuotes("无引号")).toBe("无引号");
-  });
-
-  it("rewrites every text node of a section document, and only text nodes", () => {
-    const doc = new DOMParser().parseFromString(
-      `<article><p>他说：“你好。”</p><p>don’t stop</p><img alt="“不这里”"><style>.x::before{content:"“css 不动”"}</style></article>`,
-      "text/html",
-    );
-    const changed = applyVerticalQuotes(doc);
-    // Two text nodes changed: the two paragraphs. Attribute values (the img
-    // alt), the style element's sheet text and code samples are skipped —
-    // rewriting those would corrupt the rule, not the prose.
-    expect(changed).toBe(2);
-    expect(doc.body.textContent).toContain("他说：﹁你好。﹂");
-    expect(doc.body.textContent).toContain("don﹄t stop");
-    expect(doc.querySelector("style")?.textContent).toContain("“css 不动”");
   });
 });

@@ -9,7 +9,11 @@ import { speechUnits, unitsFromOffset } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
 import { foliateWash } from "./ttsWash";
 import type { TtsWashStyle } from "./ttsWash";
-import { applyVerticalQuotes, buildStyleSheet } from "./foliateStyle";
+import { buildStyleSheet, verticalQuotes } from "./foliateStyle";
+import { applySectionText } from "./sectionText";
+import type { TextLayer } from "./sectionText";
+import { loadZhConverter } from "./zhConvert";
+import type { ZhConverter } from "./zhConvert";
 import { lineRects, relayRulerLayout, relaySectionKeys } from "./rulerPointer";
 import type { RulerRect } from "./rulerPointer";
 import { CapturedPageTurn } from "./capturedTurn";
@@ -27,6 +31,19 @@ import { inkWash, selectionBottom } from "./selection";
 import { bookPageFromLocation } from "./progress";
 import { findInSections, findRange, indexText } from "./textAnchor";
 import type { TextIndex } from "./textAnchor";
+
+/**
+ * Every text rewrite that is on right now, in the order they apply — 替换引号
+ * first, then 简繁转换. Module scope rather than a memo: it captures nothing,
+ * so a section that mounts and a section that is already up go through
+ * exactly the same pipeline, and an effect can depend on the flags alone.
+ */
+function sectionTextLayers(quoteReplace: boolean, converter: ZhConverter | null): TextLayer[] {
+  const layers: TextLayer[] = [];
+  if (quoteReplace) layers.push(verticalQuotes);
+  if (converter) layers.push(converter);
+  return layers;
+}
 
 /** Where the reader is. `cfi` is opaque — hand it back to foliate verbatim. */
 export type FoliateLocation = {
@@ -1023,11 +1040,13 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
    * component has to notice and act on itself.
    */
   const verticalRef = useRef(injectedVertical(style));
-  // Whether sections are being rewritten on load (替换引号). A flip re-opens
-  // the view below: the quotes live in the section text, and sections already
-  // mounted have to be rebuilt from the book's source to get the originals
-  // back.
-  const quoteRef = useRef(style.quoteReplace);
+  /**
+   * 简繁转换: the dictionaries are a lazy chunk, so the converter arrives
+   * *after* the sections have mounted. `zhLoadedRef` holds it (with the mode
+   * it belongs to), `null` until then; sections mounting earlier are caught up
+   * by the flip effect below.
+   */
+  const zhLoadedRef = useRef<{ mode: string; converter: ZhConverter } | null>(null);
   const attachSection = useCallback(
     (event: Event) => {
       // foliate announces which section a document belongs to; the lightbox's
@@ -1036,10 +1055,13 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       const doc = detail?.doc;
       if (!doc || hookedRef.current.has(doc)) return;
       hookedRef.current.add(doc);
-      // 替换引号: western curly quotes become the corner brackets vertical CJK
-      // is set with. Applied at load so every section — this one and the ones
-      // still to mount — reads the same flag; a flip re-opens the view.
-      if (styleRef.current.quoteReplace) applyVerticalQuotes(doc);
+      // 替换引号 + 简繁转换, one pipeline over the published text: the
+      // section is never reloaded for either, so both are applied here at
+      // load and replayed on a flip by the effects below.
+      applySectionText(
+        doc,
+        sectionTextLayers(styleRef.current.quoteReplace, zhLoadedRef.current?.converter ?? null),
+      );
       if (typeof detail.index === "number") sectionOfDoc.set(doc, detail.index);
       // A book can pin its own colour scheme with a meta tag, and that form
       // outranks the `color-scheme: normal` our stylesheet sets: WebKit then
@@ -1376,14 +1398,49 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       verticalRef.current = injectedVertical(style);
       if (locatedRef.current) void view.goTo(locatedRef.current);
     }
-    // 替换引号 lives in the section text, not the sheet: flipping it re-opens
-    // the view so every section rebuilds from the book's source — off gives
-    // the quotes back, on rewrites them at the fresh sections' load.
-    if (quoteRef.current !== style.quoteReplace) {
-      quoteRef.current = style.quoteReplace;
-      if (locatedRef.current) void view.goTo(locatedRef.current);
-    }
   }, [style]);
+
+  /**
+   * The two settings that live in the section text rather than in the sheet —
+   * 替换引号 and 简繁转换 — replayed over the sections already on screen.
+   *
+   * Neither can go through `goTo`: the paginator reuses an already-mounted
+   * view for the section it is on and never re-fires `load`, so the old
+   * "flip → re-open the view" route did nothing inside the current section
+   * (turning 替换引号 off left the corner brackets on the page). Both now
+   * replay the whole pipeline from each node's published string, which
+   * `sectionText.ts` captured on first sight — so turning one off leaves the
+   * other's work standing, and the reading position never moves.
+   */
+  useEffect(() => {
+    const mode = style.zhConvert;
+    const replay = (converter: ZhConverter | null) => {
+      const layers = sectionTextLayers(style.quoteReplace, converter);
+      for (const { doc } of viewRef.current?.renderer?.getContents() ?? []) {
+        if (doc) applySectionText(doc, layers);
+      }
+    };
+    if (mode === "off") {
+      zhLoadedRef.current = null;
+      replay(null);
+      return;
+    }
+    const loaded = zhLoadedRef.current;
+    // Already loaded: the flip lands in this frame, not in a microtask.
+    if (loaded?.mode === mode) {
+      replay(loaded.converter);
+      return;
+    }
+    let cancelled = false;
+    void loadZhConverter(mode).then((converter) => {
+      if (cancelled) return;
+      zhLoadedRef.current = { mode, converter };
+      replay(converter);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [style.quoteReplace, style.zhConvert]);
 
   // Highlights: repaint whenever the list changes. foliate draws each one
   // through `draw-annotation`, so a brand-new highlight appears immediately.
