@@ -484,6 +484,14 @@ struct RawTag {
 /// address that works ever being tried. Resolving here and running the whole
 /// handshake per address is what lets that case fall through.
 async fn connect() -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Attempt> {
+    // reqwest 0.13 turns on rustls's `aws_lc_rs` provider while
+    // tokio-tungstenite's TLS keeps `ring` enabled; with both features on,
+    // rustls refuses to guess and `client_async_tls` panics before the socket
+    // is ever used — debug builds lose the invoke silently (the renderer waits
+    // forever on a promise that is never answered), release builds abort the
+    // process. Pin the default once; a second call is a no-op error we ignore.
+    // ponytail: revisit if tokio-tungstenite ever grows an explicit-provider API.
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let addresses = lookup_host((WSS_HOST, 443)).await.map_err(|err| {
         Attempt::Failed(AppError::Message(format!("无法解析 Edge 语音地址：{err}")))
     })?;
