@@ -79,10 +79,12 @@ fn unzip_first(bytes: &[u8]) -> AppResult<Vec<u8>> {
 
     let mut archive = zip::ZipArchive::new(Cursor::new(bytes))
         .map_err(|err| AppError::Parse(format!("无法打开 FB2 压缩包：{err}")))?;
+    // An undecodable entry name is not the FB2 document we are looking for.
     let name = archive
         .file_names()
+        .filter_map(|name| name.ok())
         .find(|name| !name.ends_with('/') && !name.starts_with('.'))
-        .map(str::to_string)
+        .map(|name| name.to_string())
         .ok_or_else(|| AppError::Parse("FB2 压缩包是空的".into()))?;
     let mut out = Vec::new();
     archive

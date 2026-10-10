@@ -123,7 +123,7 @@ pub fn stage(data_dir: &Path, archive: &Path) -> AppResult<BackupSummary> {
             manifest.version
         )));
     }
-    if !zip.file_names().any(|name| name == DB_FILE) {
+    if !zip.file_names().any(|name| name.is_ok_and(|name| name == DB_FILE)) {
         return Err(AppError::Message("备份里没有书库数据库".into()));
     }
 
@@ -141,7 +141,9 @@ pub fn stage(data_dir: &Path, archive: &Path) -> AppResult<BackupSummary> {
         let mut entry = zip.by_index(index)?;
         // The manifest has said everything it has to say; unpacking it would
         // drop a stray `backup.json` into the data directory.
-        if entry.is_dir() || entry.name() == MANIFEST_ENTRY {
+        // zip 9 decodes names lazily, so this is a `Result`; a name that does
+        // not decode is certainly not the manifest we wrote.
+        if entry.is_dir() || entry.name().is_ok_and(|name| name == MANIFEST_ENTRY) {
             continue;
         }
         // `enclosed_name` is what keeps an entry named `../../x` inside.

@@ -14,8 +14,7 @@ use std::path::Path;
 
 use aes_gcm::Aes256Gcm;
 use aes_gcm::Nonce;
-use aes_gcm::aead::rand_core::RngCore;
-use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
+use aes_gcm::aead::{Aead, Generate, KeyInit, Payload};
 use argon2::{Algorithm, Argon2, Params, Version};
 use rusqlite::{Connection, Transaction};
 use serde::{Deserialize, Serialize};
@@ -237,7 +236,11 @@ fn build(source: &[u8], source_ext: &str, reading: &Reading) -> AppResult<Vec<u8
 
 fn read(archive: &[u8]) -> AppResult<Unpacked> {
     let mut zip = ZipArchive::new(Cursor::new(archive))?;
-    let names: Vec<String> = zip.file_names().map(str::to_string).collect();
+    // zip 9 decodes entry names lazily, so each one arrives as
+    // `Result<Cow<str>, _>`. A name that is not valid UTF-8 cannot be one of
+    // the entries this module looks for, so it is skipped.
+    let names: Vec<String> =
+        zip.file_names().filter_map(|name| name.ok()).map(|name| name.to_string()).collect();
 
     let manifest: Manifest = serde_json::from_reader(zip.by_name(MANIFEST_ENTRY)?)?;
     if manifest.format != MANIFEST_FORMAT {
@@ -338,29 +341,40 @@ impl Header {
     }
 }
 
+/// `N` fresh bytes from the OS CSPRNG.
+///
+/// `aes-gcm` 0.11 dropped its `OsRng` re-export (the `rand_core` it came from
+/// no longer has one); `Generate::try_generate` is what replaced it, and it is
+/// the same system RNG.
+fn random<const N: usize>() -> AppResult<[u8; N]> {
+    <[u8; N]>::try_generate().map_err(|err| AppError::Message(format!("随机数不可用：{err}")))
+}
+
 /// Encrypts a whole archive under one key, one nonce, one GCM tag.
 ///
 /// The salt is fresh per export, so the key is too: a nonce is never reused
 /// with the same key no matter how many packs the user writes.
 fn encrypt(archive: &[u8], password: &str) -> AppResult<Vec<u8>> {
-    let mut salt = [0_u8; SALT_BYTES];
-    let mut nonce = [0_u8; NONCE_BYTES];
-    OsRng.fill_bytes(&mut salt);
-    OsRng.fill_bytes(&mut nonce);
+    let salt = random::<SALT_BYTES>()?;
+    let nonce_bytes = random::<NONCE_BYTES>()?;
+    // 0.11 dropped `Array::from_slice`; `TryFrom` is its replacement, and the
+    // length is fixed by `NONCE_BYTES` so this cannot fail in practice.
+    let nonce = Nonce::try_from(&nonce_bytes[..])
+        .map_err(|_| AppError::Message("随机数长度非法".into()))?;
 
     let header = Header::new(&salt);
     let raw = serde_json::to_vec(&header)?;
     let cipher = Aes256Gcm::new_from_slice(&header.key(password)?)
         .map_err(|_| AppError::Message("密钥长度非法".into()))?;
     let sealed = cipher
-        .encrypt(Nonce::from_slice(&nonce), Payload { msg: archive, aad: &raw })
+        .encrypt(&nonce, Payload { msg: archive, aad: &raw })
         .map_err(|_| AppError::Message("书档加密失败".into()))?;
 
-    let mut out = Vec::with_capacity(4 + raw.len() + nonce.len() + sealed.len());
+    let mut out = Vec::with_capacity(4 + raw.len() + nonce_bytes.len() + sealed.len());
     let length = u32::try_from(raw.len()).map_err(|_| AppError::Message("头部过长".into()))?;
     out.extend_from_slice(&length.to_le_bytes());
     out.extend_from_slice(&raw);
-    out.extend_from_slice(&nonce);
+    out.extend_from_slice(&nonce_bytes);
     out.extend_from_slice(&sealed);
     Ok(out)
 }
@@ -384,13 +398,12 @@ fn decrypt(bytes: &[u8], password: &str) -> AppResult<Vec<u8>> {
 
     let cipher = Aes256Gcm::new_from_slice(&header.key(password)?)
         .map_err(|_| AppError::Message("密钥长度非法".into()))?;
+    let nonce = Nonce::try_from(&rest[..NONCE_BYTES])
+        .map_err(|_| AppError::Parse("加密书档内容不完整".into()))?;
     // GCM cannot tell a wrong password from a corrupted file, and the message
     // must not tell the user which one it was.
     cipher
-        .decrypt(
-            Nonce::from_slice(&rest[..NONCE_BYTES]),
-            Payload { msg: &rest[NONCE_BYTES..], aad: raw },
-        )
+        .decrypt(&nonce, Payload { msg: &rest[NONCE_BYTES..], aad: raw })
         .map_err(|_| AppError::InvalidArgument("密码错误，或书档已损坏".into()))
 }
 

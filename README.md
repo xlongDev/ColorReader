@@ -6,7 +6,7 @@
 ![license](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue)
 ![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)
 ![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)
-![Rust](https://img.shields.io/badge/Rust-1.88-000000?logo=rust&logoColor=white)
+![Rust](https://img.shields.io/badge/Rust-1.90-000000?logo=rust&logoColor=white)
 ![React](https://img.shields.io/badge/React-19-087EA4?logo=react&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-7-3178C6?logo=typescript&logoColor=white)
 
@@ -108,7 +108,7 @@ EPUB 与四种 Kindle 容器（MOBI / AZW / AZW3 / PRC）走 vendored [foliate-j
 | 层         | 选型                                                         | 说明                                           |
 | ---------- | ------------------------------------------------------------ | ---------------------------------------------- |
 | 桌面运行时 | **Tauri 2**                                                  | 不用 Electron，不引入 Node 作为桌面 Runtime    |
-| 后端       | **Rust**（edition 2024，MSRV 1.88）                          | 文本引擎、解析、索引、搜索、文件 IO            |
+| 后端       | **Rust**（edition 2024，MSRV 1.90）                          | 文本引擎、解析、索引、搜索、文件 IO            |
 | 前端       | **React 19** + **TypeScript 7**                              | 只用函数组件与 Hooks                           |
 | 构建       | **Vite 8**                                                   | 路由级 `lazy` + 手工 vendor 分块               |
 | 样式       | **Tailwind CSS v4**                                          | 自建 Design Token 与材质层，不套现成组件库视觉 |
@@ -139,7 +139,7 @@ pnpm dev        # 加 ?demo=1 得到一份样本书架（?demo=1&books=84 可放
                 # &kindle=1（AZW3 / foliate）。三个夹具都由 scripts/generate-demo-*.py 生成
 ```
 
-要求：**Node 22+、pnpm 11+、Rust 1.88+**；macOS 另需 Xcode Command Line Tools，Linux 需要 webkit2gtk / gtk 等打包依赖（见 `.github/workflows/ci.yml`）。
+要求：**Node 22+、pnpm 11+、Rust 1.90+**；macOS 另需 Xcode Command Line Tools，Linux 需要 webkit2gtk / gtk 等打包依赖（见 `.github/workflows/ci.yml`）。
 
 > 浏览器模式只是 UI 预览：没有后端，**导入**与持久化都用不了，书架内容全部来自 `?demo=1` 的夹具（参数见上）。要看完整功能请用 `pnpm tauri dev`。
 

@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "ColorReader - AI native, local first, high performance ebook reader"
 authors = ["xlongDev"]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 default-run = "colorreader"
 
 [lib]
@@ -36,7 +36,7 @@ thiserror = "2"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
-zip = "8"
+zip = "9"
 quick-xml = "0.42"
 sha2 = "0.11.0"
 uuid = { version = "1", features = ["v4"] }
@@ -44,17 +44,20 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 # `.ctzx` encryption. Both are RustCrypto crates; nothing here invents a cipher
 # or a KDF, and both are on the hot path only while exporting or importing.
-argon2 = "0.5"
-aes-gcm = "0.10"
-# Outbound HTTP for AI providers. `rustls-tls` keeps the build free of a
-# system OpenSSL, which is the usual cross-platform build breaker.
-reqwest = { version = "0.12", default-features = false, features = [
-  "rustls-tls",
+argon2 = "0.6"
+aes-gcm = "0.11"
+# Outbound HTTP for AI providers. `rustls` keeps the build free of a system
+# OpenSSL, which is the usual cross-platform build breaker; `system-proxy` is
+# what makes reqwest honour the OS proxy settings (the 0.12 feature of that
+# name, `macos-system-configuration`, was folded into it).
+reqwest = { version = "0.13", default-features = false, features = [
+  "rustls",
   "json",
   "stream",
   "charset",
   "http2",
-  "macos-system-configuration",
+  "query",
+  "system-proxy",
 ] }
 futures-util = "0.3"
 pdf-extract = "0.12.0"

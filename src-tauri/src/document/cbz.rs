@@ -66,8 +66,15 @@ fn page_entries(path: &Path) -> AppResult<Vec<String>> {
     let archive = ZipArchive::new(file)
         .map_err(|err| AppError::Parse(format!("无法打开 CBZ 容器：{err}")))?;
 
-    let mut pages: Vec<String> =
-        archive.file_names().filter(|name| is_page(name)).map(|name| name.to_string()).collect();
+    // zip 9 decodes entry names lazily, so each one arrives as
+    // `Result<Cow<str>, _>`: a name that is not valid UTF-8 cannot be a page
+    // this module could open, so it is dropped rather than fatal.
+    let mut pages: Vec<String> = archive
+        .file_names()
+        .filter_map(|name| name.ok())
+        .filter(|name| is_page(name))
+        .map(|name| name.to_string())
+        .collect();
     pages.sort_by(|a, b| natural_cmp(a, b));
     Ok(pages)
 }
