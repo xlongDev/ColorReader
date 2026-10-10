@@ -120,6 +120,9 @@ function linearLuma({ r, g, b }: Rgba): number {
   return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
 }
 
+/** One channel of the fg-bg distance, clamped to a positive byte. */
+const spread = (from: number, to: number) => clamp255(Math.round(to - from));
+
 /** The two fills that ramp a grey onto the fg<->bg axis, for compositing:
  *  `multiply` by the fg-bg distance, then `lighter` (add) the bg. Both are
  *  written as positive numbers — a night axis is always a light `fg` over a
@@ -128,7 +131,6 @@ function axisLift(axis: NightAxis): { spread: string; floor: string } | null {
   const fg = parseColor(axis.fg);
   const bg = parseColor(axis.bg);
   if (!fg || !bg) return null;
-  const spread = (from: number, to: number) => clamp255(Math.round(to - from));
   return {
     spread: `rgb(${spread(bg.r, fg.r)}, ${spread(bg.g, fg.g)}, ${spread(bg.b, fg.b)})`,
     floor: `rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)})`,

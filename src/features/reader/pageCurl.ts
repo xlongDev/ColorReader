@@ -91,6 +91,8 @@ void main() {
 `;
 
 const GRID = 64;
+/** Index of vertex (x, y) in the row-major (GRID+1)² vertex list. */
+const vertexAt = (x: number, y: number) => y * (GRID + 1) + x;
 // A leaf without an incoming-page texture lands showing paper; fade the whole
 // canvas over the last stretch so the live page takes over smoothly.
 const LEAF_FADE_START = 0.8;
@@ -250,11 +252,10 @@ export class PageCurlRenderer {
       }
     }
     const indices: number[] = [];
-    const at = (x: number, y: number) => y * (GRID + 1) + x;
     for (let y = 0; y < GRID; y++) {
       for (let x = 0; x < GRID; x++) {
-        indices.push(at(x, y), at(x + 1, y), at(x, y + 1));
-        indices.push(at(x + 1, y), at(x + 1, y + 1), at(x, y + 1));
+        indices.push(vertexAt(x, y), vertexAt(x + 1, y), vertexAt(x, y + 1));
+        indices.push(vertexAt(x + 1, y), vertexAt(x + 1, y + 1), vertexAt(x, y + 1));
       }
     }
     this.#indexCount = indices.length;
