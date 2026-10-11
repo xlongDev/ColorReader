@@ -18,11 +18,19 @@
 //! renamed to `<data dir>-previous`, never deleted: whether a restore was the
 //! right call is only known afterwards, and that directory is the one copy
 //! left.
+//!
+//! The one thing that does not travel verbatim is the credentials in `settings`:
+//! the AI key, the DeepL key and the WebDAV login are blanked on the way in,
+//! because "put the backup in my cloud drive" should not also mean "publish
+//! every credential this machine has". Re-typing a key costs a reader a
+//! minute; the endpoint, the model names and the collection URL all still
+//! travel with them, so nothing else has to be set up again.
 
 use std::fs::{self, File};
 use std::io::copy;
 use std::path::{Path, PathBuf};
 
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
@@ -44,6 +52,14 @@ const STAGING: &str = "-restore";
 const STAGING_TMP: &str = "-restore.tmp";
 /// Sibling directory holding the library a restore displaced.
 const PREVIOUS: &str = "-previous";
+
+/// The `settings` rows a backup carries, and the JSON fields in each that are
+/// the secret itself.
+///
+/// The WebDAV username goes with the password: half a credential pair is
+/// useless for signing in and still names the account.
+const SECRET_FIELDS: [(&str, &[&str]); 2] =
+    [("ai.config", &["apiKey", "deeplKey"]), ("sync.webdav", &["username", "password"])];
 
 /// What one backup or restore moved.
 #[derive(specta::Type, Debug, Clone, Copy, Serialize)]
@@ -95,13 +111,71 @@ pub fn export(library: &Library, data_dir: &Path, dest: &Path) -> AppResult<Back
         let method =
             if name == DB_FILE { CompressionMethod::Deflated } else { CompressionMethod::Stored };
         writer.start_file(name.as_str(), options(method))?;
-        let mut source = File::open(path)?;
+        // One member is not a byte-for-byte copy: the database goes in with its
+        // credentials blanked (see [`SECRET_FIELDS`]).
+        let redacted = if name == DB_FILE { Some(redacted_db(library)?) } else { None };
+        let mut source = File::open(redacted.as_deref().unwrap_or(path.as_path()))?;
         copy(&mut source, &mut writer)?;
+        if let Some(tmp) = redacted {
+            let _ = fs::remove_file(&tmp);
+        }
         summary.files += 1;
         summary.bytes += size;
     }
     writer.finish()?;
     Ok(summary)
+}
+
+/// A standalone copy of the database with the credentials in `settings` blanked.
+///
+/// `VACUUM INTO` rather than `fs::copy`: it folds the WAL back in and hands
+/// over a single file with no sidecars, so the caller has exactly one path to
+/// read and one to delete. The live database is opened read-through it and
+/// never written — the reader's own keys stay in place, only the archive's
+/// copy loses them.
+fn redacted_db(library: &Library) -> AppResult<PathBuf> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_nanos())
+        .unwrap_or_default();
+    let tmp =
+        std::env::temp_dir().join(format!("colorreader-backup-{}-{nanos}.db", std::process::id()));
+    let _ = fs::remove_file(&tmp);
+    library.with(|conn| {
+        // `VACUUM INTO` takes the target as SQL text, so a quote in the path
+        // would end the literal. The temp directory is the only thing we do not
+        // choose here, so double it rather than trust it.
+        let target = tmp.to_string_lossy().replace('\'', "''");
+        conn.execute_batch(&format!("VACUUM INTO '{target}'"))?;
+        Ok(())
+    })?;
+
+    let conn = rusqlite::Connection::open(&tmp)?;
+    // Back to a rollback journal so the writes below land in this one file and
+    // the archive never has to ship a sidecar to go with it.
+    conn.pragma_update(None, "journal_mode", "DELETE")?;
+    for (key, fields) in SECRET_FIELDS {
+        let stored: Option<String> = conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0))
+            .optional()?;
+        let Some(raw) = stored else { continue };
+        let mut value: serde_json::Value = serde_json::from_str(&raw)
+            .map_err(|err| AppError::Message(format!("设置「{key}」已损坏，未能脱敏：{err}")))?;
+        if let Some(row) = value.as_object_mut() {
+            for field in fields {
+                if let Some(slot) = row.get_mut(*field) {
+                    *slot = serde_json::Value::String(String::new());
+                }
+            }
+        }
+        conn.execute(
+            "UPDATE settings SET value = ?2 WHERE key = ?1",
+            rusqlite::params![key, serde_json::to_string(&value)?],
+        )?;
+    }
+    // Closed before the caller reads it: a WAL checkpoint happens here.
+    drop(conn);
+    Ok(tmp)
 }
 
 /// Unpacks a backup beside the data directory, ready for the next start.
@@ -300,6 +374,65 @@ mod tests {
         // And the staging directory is gone, so the next start is a no-op.
         assert!(!sibling(&target, STAGING).exists());
         assert!(!apply_pending(&target).expect("second apply"));
+    }
+
+    #[test]
+    fn a_backup_travels_the_settings_but_not_the_credentials() {
+        let (dir, library) = data("backup-secrets");
+        crate::ai::set_config(
+            &library,
+            &crate::ai::AiConfig {
+                api_key: "sk-do-not-leak".into(),
+                model: "gpt-4o-mini".into(),
+                ..Default::default()
+            },
+        )
+        .expect("ai config");
+        crate::library::sync::set_config(
+            &library,
+            &crate::library::sync::SyncConfig {
+                url: "https://dav.example.com/dav".into(),
+                username: "reader".into(),
+                password: "hunter2".into(),
+            },
+        )
+        .expect("sync config");
+
+        let archive = dir.parent().unwrap().join("backup-secrets.zip");
+        export(&library, &dir, &archive).expect("export");
+
+        // Read the archived database back the way a restore would.
+        let mut zip = ZipArchive::new(File::open(&archive).expect("open zip")).expect("zip");
+        let mut bytes = Vec::new();
+        {
+            use std::io::Read;
+            zip.by_name(DB_FILE).expect("database member").read_to_end(&mut bytes).expect("read");
+        }
+        let unpacked = dir.parent().unwrap().join("backup-secrets.db");
+        fs::write(&unpacked, &bytes).expect("unpack");
+        let conn = rusqlite::Connection::open(&unpacked).expect("open archived");
+        let setting = |key: &str| -> serde_json::Value {
+            let raw: String = conn
+                .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| row.get(0))
+                .expect("row");
+            serde_json::from_str(&raw).expect("json")
+        };
+
+        let ai = setting("ai.config");
+        assert_eq!(ai["apiKey"], "", "the key must not travel");
+        assert_eq!(ai["deeplKey"], "", "nor the translation key");
+        // Everything that is not a secret still has to be there, or restoring
+        // means re-entering the whole provider setup instead of one field.
+        assert_eq!(ai["model"], "gpt-4o-mini");
+        assert_eq!(ai["baseUrl"], "https://api.openai.com/v1");
+
+        let sync = setting("sync.webdav");
+        assert_eq!(sync["username"], "", "half a credential pair is useless anyway");
+        assert_eq!(sync["password"], "", "the password must not travel");
+        assert_eq!(sync["url"], "https://dav.example.com/dav");
+
+        // And the live library keeps its own keys: only the archive is redacted.
+        assert_eq!(crate::ai::config(&library).expect("local ai").api_key, "sk-do-not-leak");
     }
 
     #[test]
