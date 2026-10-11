@@ -58,7 +58,7 @@ pub fn import_files(
     let mut outcomes = Vec::with_capacity(total);
 
     for (index, path) in paths.iter().enumerate() {
-        let outcome = match import_one(library, layout, path, password) {
+        let outcome = match guarded(|| import_one(library, layout, path, password)) {
             Ok(result) => result,
             Err(err) => {
                 tracing::warn!(file = %path.display(), error = %err, "导入失败");
@@ -73,6 +73,38 @@ pub fn import_files(
     }
 
     outcomes
+}
+
+/// Runs one file's pipeline with a panic turned into that file's failure.
+///
+/// Everything below here parses bytes the reader handed us: a mobi's
+/// HUFF-CDIC tables, a zip central directory, the font tables inside a PDF, a
+/// dictionary bundle. One out-of-range index in any of them is a panic, and in
+/// a release build — where `panic = "unwind"` is what makes this answer
+/// possible at all (see the `compile_error!` in `document/pdf.rs`) — a panic
+/// that reaches the runtime takes the whole application with it. That is not
+/// hypothetical: a Chinese PDF whose Type0 font declares an encoding
+/// pdf-extract does not know took the app down on 2026-10-11.
+///
+/// The guard sits here, at the boundary, rather than in each parser: one
+/// wrapper covers all seven formats and anything added later, where seven
+/// copies are seven chances to forget one. The parsers keep returning
+/// `Result` for the failures they can describe; this is only for the ones they
+/// cannot.
+fn guarded<T>(run: impl FnOnce() -> AppResult<T>) -> AppResult<T> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(run)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let detail = payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_string())
+                .or_else(|| payload.downcast_ref::<String>().cloned());
+            // The reason goes to the log, where a developer will look; the
+            // reader gets a sentence that says what happened and what to try.
+            tracing::error!(panic = ?detail, "导入时解析器 panic，已降级为该文件失败");
+            Err(AppError::Parse("解析这个文件时出了内部错误，已跳过。换一个版本再试。".into()))
+        }
+    }
 }
 
 /// Successful result of importing a single file.
@@ -810,6 +842,41 @@ mod tests {
             })
             .expect("list");
         assert!(recent.is_empty(), "没有读过就不该出现在最近里");
+    }
+
+    #[test]
+    fn a_panicking_parser_becomes_one_failed_file() {
+        // The bug this guards: a release build unwinds nothing, so a panic
+        // inside any of the seven parsers ends the process — one malformed
+        // book out of a batch of thirty takes the shelf with it.
+        let err = guarded(|| -> AppResult<()> { panic!("模拟解析器越界") })
+            .expect_err("must not panic out");
+        assert!(matches!(err, AppError::Parse(_)), "{err:?}");
+        // The reader gets a sentence, not a Rust panic payload.
+        assert!(err.to_string().contains("内部错误"), "{err}");
+
+        // And an ordinary failure still comes through untouched.
+        let plain = guarded(|| -> AppResult<()> { Err(AppError::Parse("容器损坏".into())) })
+            .expect_err("propagated");
+        assert_eq!(plain.to_string(), "parse error: 容器损坏");
+        let ok: usize = guarded(|| Ok(7)).expect("ordinary success");
+        assert_eq!(ok, 7);
+    }
+
+    #[test]
+    fn one_bad_file_does_not_cost_the_batch_the_good_ones() {
+        let harness = Harness::new("import-guard-batch");
+        let good = epub(&harness.dir, "good.epub", "三体");
+        // Not a zip at all: whatever the parsers do with it, it cannot take
+        // the file after it in the batch with it.
+        let junk = harness.dir.join("junk.epub");
+        std::fs::write(&junk, b"not a book").expect("write");
+
+        let outcomes = harness.import(&[junk, good]);
+        assert_eq!(outcomes.len(), 2);
+        assert!(!outcomes[0].is_success(), "第一个应当失败");
+        assert!(outcomes[1].is_success(), "第二个仍然要进来");
+        assert_eq!(harness.shelve().len(), 1);
     }
 
     #[test]
