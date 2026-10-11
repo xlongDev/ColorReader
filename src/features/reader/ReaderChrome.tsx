@@ -29,7 +29,7 @@ import {
 import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { IconSwap } from "@/components/motion/IconSwap";
 import { HeaderCover, HeaderRule } from "@/features/reader/ReaderHeader";
-import { estimateLabel } from "@/features/reader/progress";
+import { estimateLabel, planLabel } from "@/features/reader/progress";
 import { MAX_PDF_ZOOM, MIN_PDF_ZOOM, PDF_ZOOM_STEP } from "@/features/reader/usePdfZoom";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "@/stores/reader";
 import { ZH_MODES } from "@/features/reader/zhConvert";
@@ -441,6 +441,10 @@ export function ReaderFooterControls({
       ? "暂停自动滚动"
       : "开始自动滚动";
 
+  /** What finishing the book in a week would ask of each day, or nothing — a
+   *  book with minutes left has no plan worth printing. */
+  const plan = planLabel(bookRemaining, readingSpeed);
+
   const speechLabel =
     speechStatus === "paused"
       ? "继续朗读"
@@ -511,9 +515,13 @@ export function ReaderFooterControls({
       >
         <CaretLeft size={14} /> 上一章
       </GlassButton>
+      {/* Two readings of the same number: how much is left, and what finishing
+          it would ask of a day. The second is absent on short books and before
+          the reader's own pace has been measured — see `planLabel`. */}
       <span className="text-text-3 text-xs">
         本章 {estimateLabel(chapterRemaining, readingSpeed)} · 全书{" "}
         {estimateLabel(bookRemaining, readingSpeed)}
+        {plan ? ` · ${plan}` : ""}
       </span>
       {/* The readout pops as it changes: progress arriving silently next to
           buttons that all respond reads as frozen, not as steady. */}

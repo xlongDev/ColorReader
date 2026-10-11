@@ -9,6 +9,7 @@ import {
   globalProgress,
   locateChapter,
   observeUnit,
+  planLabel,
   remainingChars,
   totalChars,
 } from "./progress";
@@ -108,6 +109,31 @@ describe("estimateLabel", () => {
 
   it("degrades gracefully on a zero speed", () => {
     expect(estimateLabel(100, 0)).toBe("未知");
+  });
+});
+
+describe("planLabel", () => {
+  it("splits what is left over the horizon", () => {
+    // 300 chars/minute over 7 days: 21 000 characters is 70 minutes a week,
+    // which is ten minutes a day.
+    expect(planLabel(21_000, 300)).toBe("7 天读完需每天约 10 分钟");
+  });
+
+  it("answers a different horizon when asked", () => {
+    expect(planLabel(21_000, 300, 3)).toBe("3 天读完需每天约 23 分钟");
+  });
+
+  it("says nothing when there is no pace to divide by", () => {
+    // A plan made from a default speed is a number the reader did not earn —
+    // the same silence as the estimate's "未知".
+    expect(planLabel(21_000, 0)).toBeNull();
+    expect(planLabel(0, 300)).toBeNull();
+  });
+
+  it("says nothing about a book that is nearly finished", () => {
+    // Four minutes from the end, "7 天读完需每天约 1 分钟" is a joke, not a plan.
+    expect(planLabel(1_200, 300)).toBeNull();
+    expect(planLabel(18_000, 300)).toBe("7 天读完需每天约 9 分钟");
   });
 });
 

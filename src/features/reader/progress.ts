@@ -94,6 +94,35 @@ export function estimateLabel(chars: number, charsPerMinute: number): string {
 }
 
 /**
+ * The horizon "finish this book in N days" is measured over.
+ *
+ * One number rather than a picker: a week is the only horizon a reader carries
+ * in their head without being asked, and three options would make this a
+ * setting nobody remembers setting.
+ */
+export const PLAN_DAYS = 7;
+
+/**
+ * What finishing in `days` asks of each day, or `null` when there is nothing
+ * worth planning.
+ *
+ * Two silences, and both are deliberate:
+ *
+ * - No pace to divide by — the same "未知" the estimate already falls back to.
+ *   A plan made up from a default speed is a number the reader did not earn.
+ * - Less than an hour left of the book. Below that the answer is "今天就读完",
+ *   and putting "7 天读完需每天约 1 分钟" next to a reader who is four minutes
+ *   from the end is a joke, not a plan.
+ */
+export function planLabel(chars: number, charsPerMinute: number, days = PLAN_DAYS): string | null {
+  if (chars <= 0 || charsPerMinute <= 0) return null;
+  const minutes = chars / charsPerMinute;
+  if (minutes < 60) return null;
+  const perDay = Math.round(minutes / days);
+  return `${days} 天读完需每天约 ${perDay} 分钟`;
+}
+
+/**
  * Where in the book a position lands, given the book's whole page count.
  *
  * The whole-book indicator works the other way round than a unit's counter:
