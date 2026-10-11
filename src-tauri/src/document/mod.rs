@@ -187,15 +187,16 @@ pub struct BookMetadata {
 /// never left with a blank title on the shelf.
 pub fn read_metadata(path: &Path, format: BookFormat) -> AppResult<BookMetadata> {
     let mut metadata = match format {
-        BookFormat::Epub => epub::read_metadata(path)?,
-        BookFormat::Pdf => pdf::read_metadata(path)?,
+        BookFormat::Epub => epub::read_metadata(path),
+        BookFormat::Pdf => pdf::read_metadata(path),
         BookFormat::Mobi | BookFormat::Azw | BookFormat::Azw3 | BookFormat::Prc => {
-            mobi::read_metadata(path)?
+            mobi::read_metadata(path)
         }
-        BookFormat::Fb2 => fb2::read_metadata(path)?,
-        BookFormat::Cbz => cbz::read_metadata(path)?,
-        BookFormat::Markdown | BookFormat::Text => plain::read_metadata(path, format)?,
-    };
+        BookFormat::Fb2 => fb2::read_metadata(path),
+        BookFormat::Cbz => cbz::read_metadata(path),
+        BookFormat::Markdown | BookFormat::Text => plain::read_metadata(path, format),
+    }
+    .map_err(|err| AppError::missing_source(path, err))?;
     if metadata.title.trim().is_empty() {
         metadata.title = plain::title_from_stem(path);
     }
@@ -219,6 +220,7 @@ pub fn read_chapters(path: &Path, format: BookFormat) -> AppResult<Vec<RawChapte
         BookFormat::Cbz => cbz::read_chapters(path),
         BookFormat::Markdown | BookFormat::Text => plain::read_chapters(path, format),
     }
+    .map_err(|err| AppError::missing_source(path, err))
 }
 
 /// Raw bytes of one in-book asset, addressed the way `read_chapters` named it.
@@ -228,16 +230,19 @@ pub fn read_chapters(path: &Path, format: BookFormat) -> AppResult<Vec<RawChapte
 /// Kindle containers' images are PDB records addressed by their `kindle:embed:`
 /// reference. Other formats have no in-book assets at all.
 pub fn read_asset(path: &Path, format: BookFormat, asset: &str) -> AppResult<Vec<u8>> {
-    if let Some(id) = asset.strip_prefix('#') {
-        return fb2::read_binary(path, id);
-    }
-    if matches!(format, BookFormat::Mobi | BookFormat::Azw | BookFormat::Azw3 | BookFormat::Prc) {
-        return mobi::read_asset(path, asset);
-    }
-    if !format.is_zip_container() {
-        return Err(AppError::Parse(format!("{} 没有内嵌资源", format.as_str())));
-    }
-    read_zip_entry(path, asset, MAX_ASSET_BYTES)
+    let bytes = if let Some(id) = asset.strip_prefix('#') {
+        fb2::read_binary(path, id)
+    } else if matches!(
+        format,
+        BookFormat::Mobi | BookFormat::Azw | BookFormat::Azw3 | BookFormat::Prc
+    ) {
+        mobi::read_asset(path, asset)
+    } else if !format.is_zip_container() {
+        Err(AppError::Parse(format!("{} 没有内嵌资源", format.as_str())))
+    } else {
+        read_zip_entry(path, asset, MAX_ASSET_BYTES)
+    };
+    bytes.map_err(|err| AppError::missing_source(path, err))
 }
 
 /// Refuse to buffer more than this for a single in-book asset.

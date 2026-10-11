@@ -88,7 +88,12 @@ pub async fn book_source_file(
     let library = state.library.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let (file_path, _) = library.with(|conn| library::repository::source(conn, &id))?;
-        Ok(tauri::ipc::Response::new(std::fs::read(file_path)?))
+        // Same re-labelling as `document::read_*`: a PDF the reader cannot open
+        // because its file is gone should say so, not report an errno.
+        let bytes = std::fs::read(&file_path).map_err(|err| {
+            AppError::missing_source(std::path::Path::new(&file_path), err.into())
+        })?;
+        Ok(tauri::ipc::Response::new(bytes))
     })
     .await
     .map_err(|err| AppError::Message(format!("读取书籍文件被中断：{err}")))?
