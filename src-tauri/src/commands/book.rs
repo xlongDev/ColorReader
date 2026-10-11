@@ -265,6 +265,50 @@ pub async fn pack_export(
     .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?
 }
 
+/// `book.migrate` — move a reader's marks onto a re-imported edition.
+///
+/// Re-importing a file that changed is a new book: `content_hash` is the
+/// identity key, so the corrected file lands beside the old one carrying
+/// nothing. This copies the marks across and then removes the old edition,
+/// which is what "replace" means to somebody who fixed a typo in their epub.
+///
+/// The old edition is deleted *after* the copy commits, and the copy leaves it
+/// in place until then — so a failure here costs the reader nothing they had.
+#[tauri::command]
+#[specta::specta]
+pub async fn book_migrate(
+    state: State<'_, AppState>,
+    from: String,
+    to: String,
+) -> AppResult<Migrated> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let moved = library::migrate::migrate(&library, &from, &to)?;
+        library::delete_book(&library, &from)?;
+        Ok(Migrated {
+            annotations: moved.annotations,
+            unlocated: moved.unlocated,
+            bookmarks: moved.bookmarks,
+            progress: moved.progress,
+        })
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("迁移任务被中断：{err}")))?
+}
+
+/// What one `book.migrate` carried across, for the dialog that asked for it.
+#[derive(specta::Type, Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Migrated {
+    pub annotations: usize,
+    /// Highlights whose text the new file does not contain. Reported rather
+    /// than swallowed: a reader who is told "3 of 30 could not be found" knows
+    /// what to look for, one who is told nothing loses three highlights.
+    pub unlocated: usize,
+    pub bookmarks: usize,
+    pub progress: bool,
+}
+
 /// `book.delete`
 #[tauri::command]
 #[specta::specta]

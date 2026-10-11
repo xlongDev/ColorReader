@@ -587,7 +587,7 @@ fn ignorable(ch: char) -> bool {
 /// A chapter body reduced once, then searched by every clipping of that book.
 ///
 /// [`locate`]: Haystack::locate
-struct Haystack {
+pub struct Haystack {
     /// The text with the ignorable characters taken out, one entry per UTF-16
     /// code unit (annotation offsets are UTF-16, so these are too).
     units: Vec<u16>,
@@ -827,7 +827,7 @@ pub fn import(conn: &Connection, parsed: &Parsed, dry_run: bool) -> AppResult<Ou
         outcome.books[at].total += 1;
 
         if !haystacks.contains_key(&book_id) {
-            haystacks.insert(book_id.clone(), chapters(conn, &book_id)?);
+            haystacks.insert(book_id.clone(), chapter_haystacks(conn, &book_id)?);
         }
         // Chapters are read once per book; a book whose text could not be read
         // anchors nothing, which the report already covers as "unlocated".
@@ -903,7 +903,10 @@ fn shelf(conn: &Connection) -> AppResult<Vec<(String, String, String)>> {
 }
 
 /// Every chapter body of a book, ready to be searched.
-fn chapters(conn: &Connection, book_id: &str) -> AppResult<Option<Vec<(usize, Haystack)>>> {
+pub fn chapter_haystacks(
+    conn: &Connection,
+    book_id: &str,
+) -> AppResult<Option<Vec<(usize, Haystack)>>> {
     let mut stmt =
         conn.prepare("SELECT idx, content FROM chapters WHERE book_id = ?1 ORDER BY idx")?;
     let mut rows = stmt.query(params![book_id])?;
@@ -923,7 +926,7 @@ fn chapters(conn: &Connection, book_id: &str) -> AppResult<Option<Vec<(usize, Ha
 /// matters twice over: it is one chapter searched instead of every one, and it
 /// settles the case a text-only search cannot — a sentence that appears in two
 /// chapters should anchor in the one the reader actually marked.
-fn locate(
+pub fn locate(
     chapters: &[(usize, Haystack)],
     needle: &str,
     hint: Option<usize>,

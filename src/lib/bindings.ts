@@ -188,6 +188,18 @@ export const commands = {
   /**  `book.delete` */
   bookDelete: (id: string) => __TAURI_INVOKE<null>("book_delete", { id }),
   /**
+   *  `book.migrate` — move a reader's marks onto a re-imported edition.
+   *
+   *  Re-importing a file that changed is a new book: `content_hash` is the
+   *  identity key, so the corrected file lands beside the old one carrying
+   *  nothing. This copies the marks across and then removes the old edition,
+   *  which is what "replace" means to somebody who fixed a typo in their epub.
+   *
+   *  The old edition is deleted *after* the copy commits, and the copy leaves it
+   *  in place until then — so a failure here costs the reader nothing they had.
+   */
+  bookMigrate: (from: string, to: string) => __TAURI_INVOKE<Migrated>("book_migrate", { from, to }),
+  /**
    *  `book.deleteMany` — the shelf's batch bar.
    *
    *  One transaction for the whole selection rather than one `book.delete` per
@@ -1004,6 +1016,19 @@ export type Lookup =
    *  unfulfilled and fail the gate.
    */
   | { status: "unavailable" };
+
+/**  What one `book.migrate` carried across, for the dialog that asked for it. */
+export type Migrated = {
+  annotations: number;
+  /**
+   *  Highlights whose text the new file does not contain. Reported rather
+   *  than swallowed: a reader who is told "3 of 30 could not be found" knows
+   *  what to look for, one who is told nothing loses three highlights.
+   */
+  unlocated: number;
+  bookmarks: number;
+  progress: boolean;
+};
 
 /**  What one page contributed. */
 export type OcrPage = {

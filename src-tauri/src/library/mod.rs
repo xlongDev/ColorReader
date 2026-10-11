@@ -13,6 +13,7 @@ pub mod guide;
 pub mod import;
 pub mod markup;
 pub mod mdict;
+pub mod migrate;
 pub mod ocr;
 pub mod pack;
 pub mod rag;
