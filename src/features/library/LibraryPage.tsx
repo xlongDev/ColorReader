@@ -26,6 +26,7 @@ import { DeleteBookDialog } from "@/features/library/BookCard";
 import { pickContinueReading, sortOptions, titleForFilter } from "@/features/library/format";
 import { shelfSections } from "@/features/library/group";
 import { batchNeedsPassword } from "@/features/library/pack";
+import { editionTwins, type Edition } from "@/features/library/migrate";
 import {
   buildBookQuery,
   resolveTagFilter,
@@ -50,6 +51,8 @@ import {
   useSetFavorites,
   useUpdateBook,
 } from "@/hooks/useLibrary";
+import { useMigrateEdition } from "@/hooks/useMigrateEdition";
+import { showToast } from "@/stores/toasts";
 import { DURATION, useMotion } from "@/lib/motion";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { useBookHandoff } from "@/stores/book-handoff";
@@ -74,6 +77,12 @@ const ClippingsDialog = lazy(() =>
 );
 const BookMetaDialog = lazy(() =>
   import("@/features/library/BookMetaDialog").then((m) => ({ default: m.BookMetaDialog })),
+);
+/** Only ever shown after a successful import, so it is worth its own chunk. */
+const MigrateEditionDialog = lazy(() =>
+  import("@/features/library/MigrateEditionDialog").then((m) => ({
+    default: m.MigrateEditionDialog,
+  })),
 );
 
 /**
@@ -220,6 +229,11 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   /** The book whose metadata sheet is open; one book at a time, since a title
    *  is not something a multi-selection could share. */
   const [metaTarget, setMetaTarget] = useState<BookSummary | null>(null);
+  /** A re-import the shelf thinks is a new edition of something already here.
+   *  One at a time: it is a question about one book, and a queue of them would
+   *  be a queue of decisions the reader did not ask to make. */
+  const [edition, setEdition] = useState<Edition | null>(null);
+  const [editionError, setEditionError] = useState<string | null>(null);
 
   const tags = useTags();
   /** The label this shelf is narrowed to; see `resolveTagFilter` for why a
@@ -236,6 +250,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const assignTags = useAssignTags();
   const importBooks = useImportBooks();
   const importFiles = useImportFiles();
+  const migrateEdition = useMigrateEdition();
   const exportPack = useExportPack();
   const exportFile = useExportBookFile();
   const deleteBook = useDeleteBook();
@@ -320,7 +335,60 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
       return;
     }
     setLockedBatch(null);
-    importBooks.mutate({ paths, password }, { onSuccess: (outcomes) => setLastOutcomes(outcomes) });
+    importBooks.mutate(
+      { paths, password },
+      {
+        onSuccess: (outcomes) => {
+          setLastOutcomes(outcomes);
+          void offerMigration(outcomes);
+        },
+      },
+    );
+  };
+
+  /**
+   * Whether the run just made a second edition of a book already on the shelf,
+   * and if so, ask before anything is merged.
+   *
+   * The shelf is refetched here rather than read from `books.data`: the import
+   * invalidated it, and the new rows are what the match needs — their authors
+   * are half of it.
+   */
+  const offerMigration = async (outcomes: ImportOutcome[]) => {
+    const created = outcomes
+      .filter(
+        (outcome): outcome is Extract<ImportOutcome, { kind: "imported" }> =>
+          outcome.kind === "imported",
+      )
+      .map((outcome) => outcome.id);
+    if (created.length === 0) return;
+    const { data: rows } = await books.refetch();
+    const all = rows ?? [];
+    const [first] = editionTwins(
+      all.filter((book) => created.includes(book.id)),
+      all,
+    );
+    if (first) setEdition(first);
+  };
+
+  const keepBoth = () => {
+    setEdition(null);
+    setEditionError(null);
+  };
+
+  const runMigration = (pair: Edition) => {
+    setEditionError(null);
+    migrateEdition.mutate(
+      { from: pair.from.id, to: pair.to.id },
+      {
+        onSuccess: (moved) => {
+          setEdition(null);
+          const lost = moved.unlocated > 0 ? `，有 ${moved.unlocated} 条在新版本里找不到原文` : "";
+          showToast("success", `已迁移 ${moved.annotations} 条标注${lost}`);
+        },
+        onError: (error) => setEditionError(String(error)),
+      },
+    );
   };
 
   // Tauri intercepts native drops and reports absolute file paths.
@@ -533,6 +601,18 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
           onCancel={() => setLockedBatch(null)}
           onConfirm={(password) => importPaths(lockedBatch, password)}
         />
+      )}
+
+      {edition && (
+        <Suspense fallback={null}>
+          <MigrateEditionDialog
+            edition={edition}
+            busy={migrateEdition.isPending}
+            error={editionError}
+            onMigrate={runMigration}
+            onKeepBoth={keepBoth}
+          />
+        </Suspense>
       )}
 
       {exportTarget && (
