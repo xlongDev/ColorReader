@@ -2655,8 +2655,13 @@ export function ReaderPage() {
         <EmptyState
           className="h-full"
           icon={<BookOpen size={26} weight="duotone" />}
+          // Two ways a book can be unopenable and only one of them is the
+          // app's fault: the index may have failed to build, or the file the
+          // index was built from may no longer be in the data directory (a
+          // move, or a restore that did not finish). Both are answered from
+          // the shelf, and the backend says which one it is when it can.
           title="这本书打不开"
-          description="章节索引加载失败，回到书库重新导入试试。"
+          description="章节索引加载失败。若这本书的文件已不在数据目录里，可从备份恢复或重新导入；否则回到书库再试一次。"
           action={
             <GlassButton variant="subtle" onClick={goBack}>
               {backLabel}
