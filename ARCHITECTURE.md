@@ -420,7 +420,11 @@ Tauri 命令名在 Rust 里是 snake_case，前端通过 `src/lib/ipc.ts` 的单
 
 ### 绑定由 Rust 生成（tauri-specta）
 
-80 个命令里 77 个由 `#[specta::specta]` 标注生成，3 个例外见下。生成产物 `src/lib/bindings.ts`
+**命令的总数不抄在本文档里。** 2026-09-28 把「71 / 69 / 2」改成「80 / 77 / 3」，2026-10-11 又是
+82 / 79 —— 两次都是同一件事，手写的数字必然漂。事实来源有三处，都在仓库里自己说话：
+`src-tauri/src/lib.rs` 的 `generate_handler!`（派发，也就是实际可调用的命令）、同一文件里的
+`collect_commands!`（生成 TS 绑定的那些）、`ls src-tauri/src/commands/`（命令域，目录本身就是清单）。
+**例外恒定为 3 条**（二进制通道），见下。生成产物 `src/lib/bindings.ts`
 **要提交**，改动 Rust 签名后重新生成：
 
 ```sh
