@@ -74,9 +74,21 @@ annotation_tombstones / bookmark_tombstones（删除墓碑，供 WebDAV 同步�
 
 内嵌图片统一记成带内标记段落（`\u{FFFC}` + 容器内的可寻址名字），阅读时按需经 `book.asset` 取字节：EPUB / CBZ 按 ZIP 条目名，FB2 按 `#<binary id>`（base64 内联），其余格式没有内嵌资源。
 
-**PDF 是唯一的固定版式例外**：阅读器不走文字段落，而是用 pdf.js（懒加载独立 chunk）把每页原样画到 canvas，`book.source_file` 返回整份文件字节。提取的逐页文本仍落库，供全文检索、朗读与 AI 使用，但不负责显示。PDF 排版不走 prose 的 multicol 分栏（页盒画布进分栏必溢出一栏，读起来就是整页空白），由独立的固定高度容器承载。目录面板由 pdf.js `getOutline()` 解析（named dest、`/A` action、UTF-16 标题均已处理，映射到 0-based 页码）；没有书签的 PDF 回退到逐页列表。封面同理由前端渲染第 1 页成 PNG，经 `book.cover_save` 落盘（书库挂载时对缺封面的 PDF 自动补一次）。pdf.js 在画布之上渲染**文本层**，选区解析、划词高亮与问 AI 全走文本层：`pdfTextSelection.ts` 的 `resolveLayerSelection` / `paintPageHighlights` / `askAboutSelection` 负责选区→字符区间、`ReaderPage` 把 `onSelection` / `onAnnotationClick` / `annotations` 接给 `PdfPageView`，`createHighlight` 以 `chapterIdx = page - 1` 落库——**文字版 PDF 的标注与划词问 AI 已与 epub / 纯文本同权**（画布本身不可划选，但文本层可，二者不矛盾）。唯一的真缺口是**纯扫描件**：没有文字层，文本层为空，既不能划选也不能问 AI，OCR 不在本期范围。
+**PDF 是唯一的固定版式例外**：阅读器不走文字段落，而是用 pdf.js（懒加载独立 chunk）把每页原样画到 canvas，`book.source_file` 返回整份文件字节。提取的逐页文本仍落库，供全文检索、朗读与 AI 使用，但不负责显示。PDF 排版不走 prose 的 multicol 分栏（页盒画布进分栏必溢出一栏，读起来就是整页空白），由独立的固定高度容器承载。目录面板由 pdf.js `getOutline()` 解析（named dest、`/A` action、UTF-16 标题均已处理，映射到 0-based 页码）；没有书签的 PDF 回退到逐页列表。封面同理由前端渲染第 1 页成 PNG，经 `book.cover_save` 落盘（书库挂载时对缺封面的 PDF 自动补一次）。pdf.js 在画布之上渲染**文本层**，选区解析、划词高亮与问 AI 全走文本层：`pdfTextSelection.ts` 的 `resolveLayerSelection` / `paintPageHighlights` / `askAboutSelection` 负责选区→字符区间、`ReaderPage` 把 `onSelection` / `onAnnotationClick` / `annotations` 接给 `PdfPageView`，`createHighlight` 以 `chapterIdx = page - 1` 落库——**文字版 PDF 的标注与划词问 AI 已与 epub / 纯文本同权**（画布本身不可划选，但文本层可，二者不矛盾）。**纯扫描件**（PDF 的真缺口，见下「扫描页识别」）。
 
 阅读器**一次只加载一章**，整本书既不进 React State 也不进 DOM。全局进度 `0..1` 通过 `chars` 前缀和映射到章节与章内比例（`locateChapter` / `globalProgress`），定位时不需要加载任何正文。Phase 3 之前导入的书没有 `chapters` 行，`reader_toc` 在首次读取时用 `ensure_chapters`（`with_tx` 内二次检查，防并发重复插入）惰性补建索引。
+
+### 扫描页识别
+
+一张扫描页没有文字层，于是它进不了检索、进不了朗读、进不了 AI——整本书在那份 PDF 里等于不能读，只��翻。这个缺口用**已经配好的那个 AI 端点**补：它本来就兼容 OpenAI 的多模态消息格式，一个 vision 模型就是一次 OCR，且**不打包任何数据集**（本地模型仍在本机）。
+
+- 前端：`pdfOcr.ts::pageImageDataUrl` **重新渲染**这一页，而不是复用屏幕上那张——屏幕那张可能处在夜间配色、图片可能已被反相，而当前缩放也不保证可读。固定按长边 1600px 出 JPEG（`toDataURL` 也是各端点直接接受的形状）。
+- 入口在页面上而不是工具栏：`PdfPageView` 在 `textReady === false` 时才挂这个按钮，条件就是「这一页没有文字层」。
+- 后端：`ai/vision.rs::transcribe` 一次非流式请求；`library/ocr.rs` 把结果写成**那一章的正文**，于是 FTS 触发器、朗读、RAG 组块、阅读助手四条链路同时活——它们读的是同一份语料，不需要各自认识 OCR。
+- 两条拒绝都在**上传之前**：`prepare_page` 先看这一页有没有文字（有就不许覆盖，pdf.js 读出来的比模型强）、在不在这本书里（错页码没必要付一次上传）。答案里的 markdown 围栏与空行在 `normalise` 里剥掉再落库，否则空行会变成阅读器里的空段落。
+- 🔴 **划词仍然不可用**，这是设计而不是遗漏：选区需要每个字的位置，而 vision 模型给的是词不是框。恢复划词要的是坐标，那是另一件活、另一类模型。
+
+整本识别刻意没做：它是同一个调用循环一遍，但上面还差三样值得单独做的东西——进度事件、取消、以及读者在提交一百页之前能看见的花费。
 
 页码指示器有三种范围（隐藏 / 当前章 / 全书），「当前章」永远是排版**实测**的页数，全书页数则按格式走两条不同的通路，因为两种渲染器能测到的东西本就不同。**foliate 的书（EPUB / MOBI）用 foliate 自己给的位置编号**：`SectionProgress` 把书的字节切成固定刻度（1500 字节一格），relocate 带出 `location = { current, next, total }`，`bookPageFromLocation` 只需去掉 0-based 并夹住上界（`current + 1`，封顶 `total`）。这一串数字是**书的属性**——总量只由书的字节数决定，位置只增不减，既不随翻页变也不随字号变，因此**不带「约」**；readest 展示的也正是这个计数器（只有书自带 paper page-list 时才换用真页码）。**「当前章」那一档数的是列，也就是实际页数**：relocate 另外带出节内计数 `page = { current, total }`，而 foliate 给的 `fraction` 是**列**偏移、`size` 是一次翻页覆盖的比例，所以 `total = columnCount / size` 正好等于这一节的列数，`current = round(fraction / size) × columnCount + 1` 是当前这屏的第一列 —— 单页排版列数 1、一次翻一列，双页排版一屏两列、**一次翻页走过两页，页码也跟着走两格**（翻页单位与 readest 相同：都是一屏；差别只在这张计数器换算成了实际页数，而不是让一屏算一页）。**纯文本 / Markdown 没有这种刻度**，只能靠测：`bookPagesOf` 把「已读过的章」按实测页数计入，未读的章按已测章得出的「每页多少字」估一个页数（下限一页），所以总量随阅读**收敛**而不是随光标摆动，这也是唯一带「约」的一路。**章即页的格式**（PDF、CBZ：一章恰好一个渲染单元）两者都不用，直接读 `章节序号 / 章数`。历史：最早从屏幕上那**一个**单元直接外推（`total = 单元页数 / 单元占比`），同一本 EPUB 因此报过 493、977、805、2202、939 页；随后改成「Σ实测页数 / Σ占比」，量到的占比不足 2%（封面、扉页）时退回单元页码——它不再乱摆，但对未读的章仍靠占比摊派，短章会因为「末页永远不满」把总量拖走一页。排版指纹（字号 / 行距 / 段距 / 缩进 / 页边距 / 排版模式）一变，旧高度量出来的页数属于一个已经消失的排版，纯文本那张表整表作废重来；foliate 的刻度与排版无关，不必作废。
 
@@ -606,7 +618,7 @@ capability 只放行实际用到的三条：`updater:allow-check`、`updater:all
 
 - 笔记导出到 Anki（`.apkg`）/ Obsidian（`[[wikilink]]`）
 - 知识图谱力导向可视化深化（`GraphPanel` 已有基础）
-- 金句卡片分享图 · PDF 扫描件 OCR · 快捷键自定义 · 多窗口对照 · i18n（en）
+- 金句卡片分享图 · 扫描页整本识别 · 快捷键自定义 · 多窗口对照 · i18n（en）
 
 ### 明确不做
 
