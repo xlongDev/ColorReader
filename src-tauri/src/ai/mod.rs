@@ -13,6 +13,7 @@ pub mod chat;
 pub mod embeddings;
 pub mod lookup;
 pub mod rerank;
+pub mod vision;
 
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};

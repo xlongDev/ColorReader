@@ -1,8 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { PDFDocumentProxy, PDFPageProxy } from "pdfjs-dist";
 
 import { cn } from "@/lib/cn";
 import { loadDoc } from "@/lib/pdf";
+import { ipc, isDesktopRuntime } from "@/lib/ipc";
+import { showToast } from "@/stores/toasts";
+import { GlassButton } from "@/components/glass/button";
 import type { Annotation } from "@/types/ipc";
 
 import {
@@ -14,6 +18,7 @@ import {
   rasterKeyOf,
   takeRaster,
 } from "./pdfCanvas";
+import { pageImageDataUrl } from "./pdfOcr";
 import { installNightContext } from "./pdfNightContext";
 import {
   clearPageHighlights,
@@ -114,7 +119,9 @@ export function PdfPageView({
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const layerRef = useRef<HTMLDivElement>(null);
+  const queryClient = useQueryClient();
   const [state, setState] = useState<RenderState>("loading");
+  const [recognising, setRecognising] = useState(false);
   /** Fitted CSS size at zoom 1; zoom rescales it in JSX. */
   const [base, setBase] = useState<{ w: number; h: number } | null>(null);
   /** The text layer exists and matches the current page render. */
@@ -529,6 +536,29 @@ export function PdfPageView({
   // re-raster writes, so a zoomed page can't be re-rendered back down to fit.
   const shown = base ? displaySize(base, zoom) : null;
 
+  // A page with no text layer is a scan, and until it is recognised the reader
+  // cannot search it, read it aloud or ask about it. That is the only thing
+  // this button is for, so it appears on exactly those pages.
+  const recognise = useCallback(async () => {
+    if (recognising) return;
+    setRecognising(true);
+    try {
+      const image = await pageImageDataUrl(bookId, pageNumber);
+      const done = await ipc.ocrPage(bookId, pageNumber - 1, image);
+      // The page just gained text: the chapter index carries its character
+      // count, and the page counter and read-aloud both read from it.
+      await queryClient.invalidateQueries({ queryKey: ["reader", "toc", bookId] });
+      showToast(
+        "success",
+        `第 ${done.page} 页已识别（${done.chars} 字）。全书检索与朗读现在能覆盖这一页；划词仍然不可用——识别给的是文字，不是每个字的位置。`,
+      );
+    } catch (error) {
+      showToast("error", String(error instanceof Error ? error.message : error));
+    } finally {
+      setRecognising(false);
+    }
+  }, [bookId, pageNumber, queryClient, recognising]);
+
   return (
     <div ref={wrapRef} data-pdf-page={pageNumber} className="relative h-full w-full">
       {/* Canvas and text layer share one centred box so the layer always sits
@@ -568,6 +598,16 @@ export function PdfPageView({
           <p className="text-text-3 text-sm">
             {state === "loading" ? "正在渲染页面…" : "这一页渲染失败"}
           </p>
+        </div>
+      )}
+      {state === "ready" && !textReady && isDesktopRuntime && (
+        <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center">
+          <div className="glass-solid pointer-events-auto flex items-center gap-3 rounded-full px-4 py-2">
+            <span className="text-text-2 text-xs">这一页是扫描件，没有文字层</span>
+            <GlassButton variant="subtle" disabled={recognising} onClick={() => void recognise()}>
+              {recognising ? "正在识别…" : "识别这一页"}
+            </GlassButton>
+          </div>
         </div>
       )}
     </div>

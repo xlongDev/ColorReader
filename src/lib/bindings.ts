@@ -314,6 +314,15 @@ export const commands = {
     __TAURI_INVOKE<WebDefinition[]>("lookup_wiktionary", { term }),
   /**  `lookup.urban` — Urban Dictionary's top slang definitions, key-free. */
   lookupUrban: (term: string) => __TAURI_INVOKE<WebDefinition[]>("lookup_urban", { term }),
+  /**
+   *  `ocr.page` — recognise one page and store it as that chapter's body.
+   *
+   *  `image` is a base64 data URL, not raw bytes: the provider takes it in that
+   *  form anyway, so decoding it here would only be a second copy of a page
+   *  that may be a megabyte.
+   */
+  ocrPage: (bookId: string, page: number, image: string) =>
+    __TAURI_INVOKE<OcrPage>("ocr_page", { bookId, page, image }),
   /**  `rag.status` — what the AI drawer needs to decide which controls to show. */
   ragStatus: (bookId: string) => __TAURI_INVOKE<RagStatus>("rag_status", { bookId }),
   /**  `rag.indexBook` — rebuilds the embedding index for one book. */
@@ -995,6 +1004,14 @@ export type Lookup =
    *  unfulfilled and fail the gate.
    */
   | { status: "unavailable" };
+
+/**  What one page contributed. */
+export type OcrPage = {
+  /**  1-based, the number the reader is looking at. */
+  page: number;
+  /**  Characters now stored for it, which is what search and read-aloud see. */
+  chars: number;
+};
 
 /**
  *  What the dialog renders: before the import as a preview, after it as the

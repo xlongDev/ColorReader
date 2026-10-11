@@ -15,6 +15,7 @@ pub mod font;
 pub mod graph;
 pub mod lookup;
 pub mod mini_bar;
+pub mod ocr;
 pub mod rag;
 pub mod reader;
 pub mod search;
