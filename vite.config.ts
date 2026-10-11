@@ -80,6 +80,19 @@ export default defineConfig({
       // background/page fixes. TS resolves the same specifiers through the
       // ambient declarations in src/types/foliate-js.d.ts.
       "foliate-js": fileURLToPath(new URL("./src/vendor/foliate-js", import.meta.url)),
+      // The web build (GitHub Pages, the only build with `PAGES_BASE` set)
+      // swaps the bundled webfont's stylesheet for an empty one. That package
+      // is 582 `@font-face` rules — 539 KB, the largest thing in the first
+      // paint — pointing at 29 MB of subsets that only ever download if a
+      // glyph falls in their range. The desktop bundle keeps them; a preview
+      // site with no backend behind it does not need to carry either.
+      ...(process.env.PAGES_BASE
+        ? {
+            "lxgw-wenkai-webfont/style.css": fileURLToPath(
+              new URL("./src/styles/no-bundled-font.css", import.meta.url),
+            ),
+          }
+        : {}),
     },
   },
   clearScreen: false,

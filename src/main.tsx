@@ -10,7 +10,8 @@ import "@/styles/globals.css";
 // reader's font picker, the notes editor, anywhere that reads a font stack
 // from `theme.ts`. The 29 MB of subset woff2 files only download when the
 // browser sees a glyph from the corresponding `unicode-range`, so the cost
-// of an unused font is zero.
+// of an unused font is zero. The web build swaps this import for an empty
+// sheet — see `vite.config.ts` — because the rules alone are 539 KB.
 import "lxgw-wenkai-webfont/style.css";
 
 const container = document.getElementById("root");

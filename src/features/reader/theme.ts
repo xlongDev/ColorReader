@@ -356,6 +356,21 @@ export function bundledFacesFor(key: string): string {
   return family ? bundledFontFaces(family) : "";
 }
 
+/**
+ * The stacks the picker may offer.
+ *
+ * A bundled face is only offered where its `@font-face` rules actually exist.
+ * The web build ships without the webfont package (see `vite.config.ts`), and
+ * offering 霞鹜文楷 there would fall through the stack to the system 楷体
+ * without a word — the same silent substitution that used to happen when an
+ * imported font was deleted while it was selected. Deciding from the rules
+ * rather than from a build flag keeps the two halves of that arrangement from
+ * drifting apart.
+ */
+export function offeredFontStacks(): FontOption[] {
+  return FONT_STACKS.filter((font) => !font.bundled || bundledFontFaces(font.bundled) !== "");
+}
+
 export const PAGE_TRANSITIONS: { key: PageTransition; label: string }[] = [
   { key: "none", label: "无" },
   { key: "pan", label: "左右平移" },

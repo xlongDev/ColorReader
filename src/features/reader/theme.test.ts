@@ -6,6 +6,7 @@ import {
   customFontFamily,
   customFontKey,
   fontFaceCss,
+  offeredFontStacks,
   resolveFont,
 } from "./theme";
 
@@ -175,5 +176,21 @@ describe("bundledFacesFor", () => {
     expect(bundledFacesFor("system")).toBe("");
     expect(bundledFacesFor("custom:7f1c")).toBe("");
     expect(bundledFacesFor("made-up")).toBe("");
+  });
+});
+
+describe("offeredFontStacks", () => {
+  it("withholds the bundled face when this build shipped no rules for it", () => {
+    // The web build swaps the webfont package's stylesheet out (see
+    // `vite.config.ts`). Offering 霞鹜文楷 there would fall through the stack
+    // to the system 楷体 without saying anything — the same silent
+    // substitution a deleted imported font used to cause.
+    expect(offeredFontStacks().map((font) => font.key)).not.toContain("lxgw");
+    expect(offeredFontStacks().map((font) => font.key)).toContain("kai");
+  });
+
+  it("offers it once the face is declared", () => {
+    install(face("LXGW WenKai", "400", "/assets/lxgw.woff2"));
+    expect(offeredFontStacks().map((font) => font.key)).toContain("lxgw");
   });
 });

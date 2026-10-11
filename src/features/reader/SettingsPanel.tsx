@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { CaretDown, ImageSquare, Plus, X } from "@phosphor-icons/react";
 import { motion, useReducedMotion } from "motion/react";
 
@@ -36,7 +36,7 @@ import { useFonts } from "@/hooks/useFonts";
 import { ZH_MODES } from "@/features/reader/zhConvert";
 import {
   customFontKey,
-  FONT_STACKS,
+  offeredFontStacks,
   LAYOUT_MODES,
   WRITING_MODES,
   PAGE_TRANSITIONS,
@@ -67,6 +67,10 @@ export function SettingsPanel({
   const settings = useReaderSettings();
   const { update } = settings;
   const fonts = useFonts().data ?? [];
+  // Which bundled faces this build actually carries. It reads the app's own
+  // stylesheets, so it is read once rather than on every keystroke-sized
+  // re-render of the panel.
+  const stacks = useMemo(() => offeredFontStacks(), []);
   const appTheme = useResolvedTheme();
   // The picker edits the surface of the appearance currently active — and
   // "active" now means what the page is wearing, which is the reader's own
@@ -112,7 +116,7 @@ export function SettingsPanel({
             // `resolveFont` derives the family from the key, which is what keeps
             // the picker a plain list of names.
             options={[
-              ...FONT_STACKS,
+              ...stacks,
               ...fonts.map((font) => ({ key: customFontKey(font.id), label: font.name })),
             ]}
             value={settings.fontFamily}
