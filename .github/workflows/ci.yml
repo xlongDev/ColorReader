@@ -86,6 +86,16 @@ jobs:
         run: |
           echo "## Bundle size" >> "$GITHUB_STEP_SUMMARY"
           du -k dist/assets/*.js | sort -rn | head -5 >> "$GITHUB_STEP_SUMMARY"
+      # The reader's own growth report, next to the bundle's. No threshold: a
+      # hard limit would only reward splitting code for the sake of the number,
+      # and `scripts/measure-reader-clusters.py` already ranks the candidates by
+      # the rule the architecture states (outputs ≤ ~2 per consumer). What this
+      # buys is that the numbers are on every pull request instead of in
+      # someone's memory when a file is about to be touched.
+      - name: Report ReaderPage clusters
+        run: |
+          echo "## ReaderPage clusters" >> "$GITHUB_STEP_SUMMARY"
+          python3 scripts/measure-reader-clusters.py | head -10 >> "$GITHUB_STEP_SUMMARY"
 
   rust:
     name: Rust gates
