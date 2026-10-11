@@ -479,6 +479,27 @@ async function rulerDrawn(page: Page): Promise<Drawn> {
   return last!;
 }
 
+/**
+ * The lines under the band, read until two of them agree.
+ *
+ * Same reasoning as {@link rulerDrawn}, one step later: the band and the text are
+ * read in two round trips, and a re-measure that lands between them moves the
+ * lines under a band that has not moved. Every geometry assertion in this file
+ * compares those two reads, so the comparison is only meaningful once both sides
+ * come from the same layout — hence one helper rather than a wait at each site.
+ */
+async function rulerLines(page: Page): Promise<Interval[]> {
+  let last = "";
+  for (let i = 0; i < 16; i += 1) {
+    const lines = (await page.evaluate(LINES)) as Interval[];
+    const key = JSON.stringify(lines);
+    if (key === last) return lines;
+    last = key;
+    await page.waitForTimeout(60);
+  }
+  return (await page.evaluate(LINES)) as Interval[];
+}
+
 /** How much of the reading area the parts add up to, along the reading axis. */
 const spanAlong = (drawn: Drawn) =>
   along(drawn.before.box, drawn.vertical) +
@@ -541,7 +562,7 @@ test("the band and its washes tile the reading area, at the parked fraction", as
   // And the band is as wide as the words it covers: a strip that runs on past
   // the text into the margins reads as if it had faded out before and after the
   // lines it marks.
-  const lines = (await page.evaluate(LINES)) as Interval[];
+  const lines = await rulerLines(page);
   expect(lines.length, "一个行盒都没量到").toBeGreaterThan(3);
   hugsText(drawn, coveredLines(drawn, lines).covered);
 });
@@ -560,7 +581,7 @@ test("the band's thickness follows the reader's line count", async ({ page }) =>
   const two = await setLines("2");
   const four = await setLines("4");
 
-  const lines = (await page.evaluate(LINES)) as Interval[];
+  const lines = await rulerLines(page);
   expect(lines.length, "一个行盒都没量到").toBeGreaterThan(3);
 
   // Counted, not measured: two lines asked for is two lines covered. A band that
@@ -599,7 +620,7 @@ test("a page with no words on it gets no band", async ({ page }) => {
   await enableRuler(page);
   await page.waitForTimeout(1200);
 
-  const lines = (await page.evaluate(LINES)) as Interval[];
+  const lines = await rulerLines(page);
   expect(lines.filter((l) => l.start >= 0).length, "插图页上竟然量到了行").toBe(0);
   await expect(
     page.locator("[data-ruler-band]"),
@@ -614,7 +635,7 @@ test("a page with no words on it gets no band", async ({ page }) => {
   await page.getByRole("button", { name: "下一章", exact: true }).first().click({ force: true });
   await page.waitForTimeout(2600);
   const drawn = await rulerDrawn(page);
-  const prose = (await page.evaluate(LINES)) as Interval[];
+  const prose = await rulerLines(page);
   const covered = prose.filter((line) => {
     const centre = (line.start + line.end) / 2;
     return centre > drawn.band.top && centre < drawn.band.bottom;
@@ -657,7 +678,7 @@ test("the band lands on the words, not the gap above them, on a chapter opener",
   /** The lines the band is on, and the width it drew itself to match them. */
   const on = async (label = "") => {
     const band = await rulerDrawn(page);
-    const lines = (await page.evaluate(LINES)) as Interval[];
+    const lines = await rulerLines(page);
     expect(lines.length, `${label}标题页一个字的行盒都没量到`).toBeGreaterThan(0);
     let covered = lines.filter((line) => {
       const centre = (line.start + line.end) / 2;
@@ -832,7 +853,7 @@ test("the band's padding comes off the page's own leading, not the setting's", a
    */
   const padding = async (label: string) => {
     const drawn = await rulerDrawn(page);
-    const lines = (await page.evaluate(LINES)) as Interval[];
+    const lines = await rulerLines(page);
     expect(lines.length, `${label}：一个字的行盒都没量到`).toBeGreaterThan(3);
     let covered = lines.filter((line) => {
       const centre = (line.start + line.end) / 2;
@@ -1002,7 +1023,7 @@ test("the band's padding never outgrows the air between the lines", async ({ pag
       // nothing to score, which is not a failure.
       const drawn = (await page.evaluate(DRAWN)) as Drawn | null;
       if (!drawn) continue;
-      const lines = (await page.evaluate(LINES)) as Interval[];
+      const lines = await rulerLines(page);
       const { vertical, band, host } = drawn;
       const low = vertical ? band.left : band.top;
       const high = vertical ? band.right : band.bottom;
@@ -1096,7 +1117,7 @@ test("the band still hugs the text when the sidebar leaves the pane", async ({ p
     await page.waitForTimeout(1600);
     const drawn = await rulerDrawn(page);
     await page.waitForTimeout(200);
-    const lines = (await page.evaluate(LINES)) as Interval[];
+    const lines = await rulerLines(page);
     expect(lines.length, `${label}：一个字的行盒都没量到`).toBeGreaterThan(3);
     // On whole lines, and as wide as the ones it is on.
     const covered = coveredLines(drawn, lines, `${label}：`);
@@ -1340,7 +1361,7 @@ test("the band lands on whole lines, on a real EPUB, and again after a page turn
 
   const onWholeLines = async (label: string) => {
     const drawn = await rulerDrawn(page);
-    const lines = (await page.evaluate(LINES)) as Interval[];
+    const lines = await rulerLines(page);
     expect(lines.length, `${label}：一个字的行盒都没量到`).toBeGreaterThan(3);
     return coveredLines(drawn, lines, `${label}：`);
   };
@@ -1358,7 +1379,7 @@ test("the band lands on whole lines, on a real EPUB, and again after a page turn
   // A turn is a page the reader *arrives on*, so the band meets it at its start
   // — the first block of the new page, not wherever the band was when the old
   // page left (that is the bottom of it, after a page read with the ruler).
-  const lines = (await page.evaluate(LINES)) as Interval[];
+  const lines = await rulerLines(page);
   const firstIndex = lines.findIndex((line) => line.start === after.first);
   expect(firstIndex, "翻页之后带没有回到下一页的顶部").toBeGreaterThanOrEqual(0);
   expect(firstIndex, "翻页之后带没有回到下一页的顶部").toBeLessThanOrEqual(3);
@@ -1398,7 +1419,7 @@ test("dragging the band moves it, follows the hand, and the place is remembered"
   // fraction it started at.
   await openBook(page, "/?demo=1", /我们为什么会生病/);
   const remembered = await rulerDrawn(page);
-  const lead = advanceOf((await page.evaluate(LINES)) as Interval[]);
+  const lead = advanceOf(await rulerLines(page));
   expect(remembered.band.top, "重新打开之后带回到了默认位置").toBeGreaterThan(before.band.top + 80);
   expect(
     Math.abs(remembered.band.top - dragged.band.top),
@@ -1469,7 +1490,7 @@ test("vertical type turns the band into a column, as tall as the text it washes"
   // throughout: 🔴 reading one of them host-relative and the other in window
   // coordinates puts them 108px apart when they are 10px apart, which is how this
   // first went red against a band that was already correct.
-  const firstLines = (await page.evaluate(LINES)) as Interval[];
+  const firstLines = await rulerLines(page);
   // At least one column, i.e. the probe reads columns in vertical at all — not
   // "several": this book puts the short column on a page of its own, so how many
   // columns the page *starts* with is the fixture's arrangement, not the contract.
@@ -1489,7 +1510,7 @@ test("vertical type turns the band into a column, as tall as the text it washes"
   // is what gets there: whether it takes one step or a dozen is the book's
   // arrangement, and the page the band starts on may not even hold a short one.
   let drawn = await rulerDrawn(page);
-  let lines = (await page.evaluate(LINES)) as Interval[];
+  let lines = await rulerLines(page);
   let covered = under(drawn, lines);
   const shortest = Math.min(...lines.map((line) => line.crossTo - line.crossFrom));
   for (let step = 0; step < 12; step += 1) {
@@ -1498,7 +1519,7 @@ test("vertical type turns the band into a column, as tall as the text it washes"
     await page.keyboard.press("ArrowDown");
     await page.waitForTimeout(600);
     drawn = await rulerDrawn(page);
-    lines = (await page.evaluate(LINES)) as Interval[];
+    lines = await rulerLines(page);
     covered = under(drawn, lines);
   }
   console.log(
@@ -1635,7 +1656,7 @@ test("in vertical type the band lands on columns, inside the type", async ({ pag
         .click({ force: true });
       await page.waitForTimeout(2200);
     }
-    const lines = (await page.evaluate(LINES)) as Interval[];
+    const lines = await rulerLines(page);
     if (lines.length <= 3) {
       console.log(`${label}: no lines in the window, skipped`);
       continue;
@@ -1749,7 +1770,7 @@ test("an arrow steps the band a whole block at a time, and the step is a move", 
   await page.waitForTimeout(800);
   const stepped = await rulerDrawn(page);
 
-  const lines = (await page.evaluate(LINES)) as Interval[];
+  const lines = await rulerLines(page);
   const lead = advanceOf(lines);
   const moved = stepped.band.top - start.band.top;
   // One block down: two lines of the reader's setting, and no further.
@@ -1771,7 +1792,7 @@ test("an arrow steps the band a whole block at a time, and the step is a move", 
   await page.waitForTimeout(1600);
 
   const end = await rulerDrawn(page);
-  const endLead = advanceOf((await page.evaluate(LINES)) as Interval[]);
+  const endLead = advanceOf(await rulerLines(page));
   const thickness = end.band.bottom - end.band.top;
   expect(thickness, "走到底之后带变薄了").toBeGreaterThan(endLead * 1.4);
   expect(thickness, "走到底之后带变厚了").toBeLessThan(endLead * 4);
@@ -1977,7 +1998,7 @@ test("in the scrolled layout the arrows walk the band, and the page follows past
   await page.keyboard.press("ArrowDown");
   await page.waitForTimeout(700);
   const held = await rulerDrawn(page);
-  const lines = (await page.evaluate(LINES)) as Interval[];
+  const lines = await rulerLines(page);
   const lead = advanceOf(lines);
   expect(Math.abs(held.band.top - heldTop), "联动后标尺没有停在原地").toBeLessThan(lead / 2);
   expect(await scrollOf(), "联动后页面没有前进一块").toBeGreaterThan(heldScroll);
@@ -2052,7 +2073,7 @@ test("on a real EPUB the absorbed steps hold the band on consecutive blocks", as
   }
   expect(crossed, "带子越过触发线后页面没有开始联动").toBe(true);
   const heldTop = parked.band.top;
-  const lead = advanceOf((await page.evaluate(LINES)) as Interval[]);
+  const lead = advanceOf(await rulerLines(page));
 
   // The box changing is a change the reader is looking at: a parked band holds
   // its place, but each new block is taller or shorter and reaches further
@@ -2081,7 +2102,7 @@ test("on a real EPUB the absorbed steps hold the band on consecutive blocks", as
     );
     expect(await scrollOf(), `第${i + 1}次联动后页面没有前进`).toBeGreaterThan(scrolled);
     scrolled = await scrollOf();
-    const fresh = (await page.evaluate(LINES)) as Interval[];
+    const fresh = await rulerLines(page);
     expect(coveredLines(held, fresh).count, `第${i + 1}次联动后带没有盖住整行`).toBe(2);
   }
   expect(
@@ -2114,12 +2135,12 @@ test("on a chapter opener the first step lands on the paragraph, not past it", a
       lines.reduce((best, line) => (line.end - line.start > best.end - best.start ? line : best)),
     );
   const coveredIndices = async (drawn: Drawn) => {
-    const lines = (await page.evaluate(LINES)) as Interval[];
+    const lines = await rulerLines(page);
     return coveredLines(drawn, lines).covered.map((line) => lines.indexOf(line));
   };
 
   const start = await rulerDrawn(page);
-  const lines = (await page.evaluate(LINES)) as Interval[];
+  const lines = await rulerLines(page);
   const title = titleIndexOf(lines);
   expect(
     lines[title]!.end - lines[title]!.start,

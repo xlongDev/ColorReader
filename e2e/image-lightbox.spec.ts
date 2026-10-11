@@ -69,6 +69,27 @@ async function bookImage(page: Page, position: number) {
 /** What the lightbox says it is showing: the picture's own filename. */
 const shown = (page: Page) => page.getByRole("link", { name: /保存图片/ });
 
+/**
+ * Clicks a picture and returns once the viewer is actually open.
+ *
+ * A column the paginator is still moving cannot be clicked: the click lands on
+ * nothing and fails silently, so the spec would go on to assert about a viewer
+ * that never opened. Verifying-and-retrying is the fix that needs no knowledge
+ * of the paginator's timing — and pressing again while the viewer is closed is
+ * harmless, which is what makes the retry safe rather than a second flake.
+ */
+async function openViewerOn(page: Page, position: number): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        await (await bookImage(page, position)).click();
+        return (await shown(page).count()) > 0;
+      },
+      { timeout: 15_000, message: `点了第 ${position + 1} 张图但灯箱没开` },
+    )
+    .toBe(true);
+}
+
 /** Imports the fixture onto an empty shelf. */
 async function importBook(page: Page): Promise<void> {
   await page.goto("/");
@@ -152,7 +173,7 @@ test("clicking a picture opens the viewer on that picture, and the arrows walk t
   await importBook(page);
   await openBook(page);
 
-  await (await bookImage(page, THIRD)).click();
+  await openViewerOn(page, THIRD);
 
   await expect(shown(page), "点开的是第三张，就该是第三张").toHaveAttribute("download", "fig3.png");
   await expect(page.getByText("3 / 3", { exact: true }).first()).toBeVisible();
