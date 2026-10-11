@@ -7,6 +7,7 @@ mod dictionary;
 mod document;
 mod error;
 mod library;
+mod net;
 mod resource;
 mod state;
 mod tts;

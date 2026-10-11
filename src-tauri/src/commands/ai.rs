@@ -78,7 +78,7 @@ pub async fn ai_test(config: AiConfig) -> AppResult<()> {
     // Validate the shape locally first: a malformed URL should not need a round
     // trip to be reported.
     let checked = AiConfig {
-        base_url: crate::ai::normalize_base_url(&config.base_url)?,
+        base_url: crate::net::secure_base_url(&config.base_url, "接口地址")?,
         model: config.model.trim().to_string(),
         api_key: config.api_key.trim().to_string(),
         system_prompt: config.system_prompt,

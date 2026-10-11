@@ -86,7 +86,7 @@ pub fn config(library: &Library) -> AppResult<AiConfig> {
 /// Writes the config back. `api_key` is validated by the caller's test call,
 /// not here: any non-empty string is a syntactically valid key.
 pub fn set_config(library: &Library, next: &AiConfig) -> AppResult<()> {
-    let base = normalize_base_url(&next.base_url)?;
+    let base = crate::net::secure_base_url(&next.base_url, "接口地址")?;
     let model = next.model.trim().to_string();
     if model.is_empty() {
         return Err(AppError::InvalidArgument("模型名称不能为空".into()));
@@ -117,25 +117,6 @@ pub fn set_config(library: &Library, next: &AiConfig) -> AppResult<()> {
 /// the test call is for.
 pub fn is_ready(config: &AiConfig) -> bool {
     !config.model.trim().is_empty() && !config.base_url.trim().is_empty()
-}
-
-/// Trims whitespace and trailing slashes so path joining never produces `//v1`.
-pub(crate) fn normalize_base_url(raw: &str) -> AppResult<String> {
-    let trimmed = raw.trim().trim_end_matches('/');
-    if trimmed.is_empty() {
-        return Err(AppError::InvalidArgument("接口地址不能为空".into()));
-    }
-    // Local models are plain HTTP on loopback; anything else must be TLS, or the
-    // key travels in clear text across a network the user does not control.
-    let is_loopback_http = trimmed.starts_with("http://localhost")
-        || trimmed.starts_with("http://127.0.0.1")
-        || trimmed.starts_with("http://[::1]");
-    if !trimmed.starts_with("https://") && !is_loopback_http {
-        return Err(AppError::InvalidArgument(
-            "接口地址必须是 https，本地模型可用 http://localhost".into(),
-        ));
-    }
-    Ok(trimmed.to_string())
 }
 
 /// `…/chat/completions`, without duplicating a slash.
@@ -218,15 +199,6 @@ mod tests {
         let result =
             set_config(&harness.library, &AiConfig { model: "   ".into(), ..AiConfig::default() });
         assert!(matches!(result, Err(AppError::InvalidArgument(_))), "{result:?}");
-    }
-
-    #[test]
-    fn clear_text_http_is_only_allowed_on_loopback() {
-        assert!(normalize_base_url("http://localhost:11434/v1").is_ok());
-        assert!(normalize_base_url("http://127.0.0.1:1234/v1").is_ok());
-        assert!(normalize_base_url("http://example.com/v1").is_err(), "外网必须走 https");
-        assert!(normalize_base_url("ftp://x").is_err());
-        assert!(normalize_base_url("   ").is_err());
     }
 
     #[test]

@@ -75,9 +75,11 @@ impl SourceDef {
         if self.name.trim().is_empty() {
             return Err(AppError::InvalidArgument("书源名称不能为空".into()));
         }
-        if self.base_url.trim().is_empty() {
-            return Err(AppError::InvalidArgument("书源地址不能为空".into()));
-        }
+        // A source is a third-party definition the reader pasted; its base URL
+        // is where every search term they type ends up. Same rule as the AI
+        // endpoint, same code (`crate::net`) — the opener plugin's URL
+        // allowlist does not reach a reqwest request made from here.
+        crate::net::secure_base_url(&self.base_url, "书源地址")?;
         for (label, rule) in [
             ("搜索地址", &self.search.url),
             ("搜索结果列表", &self.search.list),
@@ -661,6 +663,25 @@ mod tests {
         broken.content.paragraphs = "  ".into();
         let err = broken.validate().expect_err("missing content rule");
         assert!(err.to_string().contains("正文"), "{err}");
+    }
+
+    #[test]
+    fn a_clear_text_base_url_is_refused_at_save_time() {
+        // The rule the AI endpoint already follows: a source is pasted from
+        // somewhere, and its base URL is where every search term the reader
+        // types ends up. Rejecting it at `validate` means no round trip has
+        // happened yet when the reader is told.
+        for base in ["http://example.com/api", "http://192.168.1.10/api", "ftp://x"] {
+            let mut unsafe_def = def();
+            unsafe_def.base_url = base.into();
+            let err = unsafe_def.validate().expect_err("clear-text base URL");
+            assert!(err.to_string().contains("书源地址"), "{base}: {err}");
+        }
+        for base in ["https://example.com/api", "http://localhost:8080/api"] {
+            let mut local = def();
+            local.base_url = base.into();
+            assert!(local.validate().is_ok(), "{base} should be allowed");
+        }
     }
 
     #[test]
