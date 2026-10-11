@@ -11,15 +11,27 @@ use crate::state::AppState;
 ///
 /// The destination extension picks the format (`.md` or `.csv`), the same
 /// contract `pack.export` follows: what the save dialog promised is what gets
-/// written. The write happens off the main thread because it reads the whole
-/// annotation list and touches the disk — small work, but the reader is waiting
-/// on a button.
+/// written. `flavor` picks the Markdown *dialect* without touching the
+/// extension, because Obsidian only ever indexes `.md` — see
+/// [`crate::library::export::OBSIDIAN`]. The write happens off the main thread
+/// because it reads the whole annotation list and touches the disk — small work,
+/// but the reader is waiting on a button.
 #[tauri::command]
 #[specta::specta]
-pub async fn notes_export(state: State<'_, AppState>, id: String, path: String) -> AppResult<()> {
+pub async fn notes_export(
+    state: State<'_, AppState>,
+    id: String,
+    path: String,
+    flavor: Option<String>,
+) -> AppResult<()> {
     let library = state.library.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::library::export::export(&library, &id, PathBuf::from(&path).as_path())
+        crate::library::export::export(
+            &library,
+            &id,
+            PathBuf::from(&path).as_path(),
+            flavor.as_deref(),
+        )
     })
     .await
     .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?
@@ -39,6 +51,7 @@ pub async fn notes_export_selection(
     book_ids: Vec<String>,
     ids: Vec<String>,
     path: String,
+    flavor: Option<String>,
 ) -> AppResult<()> {
     let library = state.library.clone();
     tauri::async_runtime::spawn_blocking(move || {
@@ -47,6 +60,7 @@ pub async fn notes_export_selection(
             &book_ids,
             &ids,
             PathBuf::from(&path).as_path(),
+            flavor.as_deref(),
         )
     })
     .await

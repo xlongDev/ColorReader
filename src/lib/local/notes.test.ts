@@ -105,6 +105,41 @@ describe("the link format", () => {
   });
 });
 
+describe("the Obsidian dialect", () => {
+  it("carries properties a query can read", () => {
+    // Mirrors `library/export.rs` — change one side and the other goes red.
+    const rendered = renderMarkdown(notes([entry("a1", 0, "你好", "伏笔")]), "obsidian");
+    expect(rendered).toBe(
+      "---\n" +
+        'title: "《三体》标注与笔记"\n' +
+        'authors: ["刘慈欣"]\n' +
+        "progress: 0.50\n" +
+        "tags:\n" +
+        "  - ColorReader\n" +
+        "---\n\n" +
+        "# [[三体]] 标注与笔记\n\n" +
+        "刘慈欣 · 1 条标注 · 1 条有笔记 · 阅读进度 50%\n\n" +
+        "## 第 1 章\n\n" +
+        "> [!quote]\n> 你好\n\n" +
+        "伏笔\n\n" +
+        "[在 ColorReader 中打开](colorreader://book/b1?annotation=a1)\n",
+    );
+  });
+
+  it("quotes a title that would otherwise end the mapping", () => {
+    const rendered = renderMarkdown(
+      { ...notes([entry("a1", 0, "你好")]), title: '三体："引用"版' },
+      "obsidian",
+    );
+    expect(rendered).toContain('title: "《三体：\\"引用\\"版》标注与笔记"');
+  });
+
+  it("leaves the plain dialect exactly as it was", () => {
+    // A reader who is not writing into a vault must not find YAML in their file.
+    expect(renderMarkdown(notes([entry("a1", 0, "你好")]), "plain")).not.toContain("---");
+  });
+});
+
 describe("renderCsv", () => {
   it("is one row per highlight, with a byte-order mark", () => {
     expect(renderCsv(notes([entry("a1", 0, "你好", "伏笔")]))).toBe(

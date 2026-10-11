@@ -256,7 +256,10 @@ export function useExportNotes() {
        *  whose file goes to a download instead — and takes `name`. */
       path: string | null;
       format: string;
-    }) => (path === null ? ipc.notesSave(id, name, format) : ipc.notesExport(id, path)),
+    }) =>
+      path === null
+        ? ipc.notesSave(id, name, format)
+        : ipc.notesExport(id, path, format === "obsidian" ? "obsidian" : null),
   });
 }
 
@@ -288,6 +291,6 @@ export function useExportNotesSelection() {
     }) =>
       path === null
         ? ipc.notesSaveSelection(bookIds, ids, name, format)
-        : ipc.notesExportSelection(bookIds, ids, path),
+        : ipc.notesExportSelection(bookIds, ids, path, format === "obsidian" ? "obsidian" : null),
   });
 }

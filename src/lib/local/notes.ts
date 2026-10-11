@@ -77,11 +77,41 @@ function summaryMany(books: Notes[]): string {
   return parts.join(" · ");
 }
 
+/** Which flavour of Markdown a file is written in. The desktop's `Dialect`,
+ *  spelled the same way because the two are pinned to each other by these
+ *  tests — see the note at the top of this file. */
+export type Dialect = "plain" | "obsidian";
+
+/** Obsidian's properties block. This is the whole of that dialect's value:
+ *  without it a vault holds the highlights as prose, and no query can ask which
+ *  book a note came from, who wrote it, or how far in the reader was. */
+function frontmatter(books: Notes[]): string {
+  const fields = [
+    books.length === 1
+      ? `title: ${yaml(`《${books[0]!.title}》标注与笔记`)}`
+      : `title: ${yaml(`笔记导出（${books.length} 本书）`)}`,
+  ];
+  // Author and progress belong to one book and mean nothing across several.
+  if (books.length === 1) {
+    const [only] = books;
+    if (only!.authors.length > 0) {
+      fields.push(`authors: [${only!.authors.map(yaml).join(", ")}]`);
+    }
+    fields.push(`progress: ${only!.progress.toFixed(2)}`);
+  }
+  fields.push("tags:", "  - ColorReader");
+  return `---\n${fields.join("\n")}\n---`;
+}
+
+/** A YAML scalar, quoted — a title carrying a colon or a quote would otherwise
+ *  end the mapping somewhere it was not meant to. */
+const yaml = (value: string): string => `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
 /** One book's highlights, chapter by chapter, pushed onto `blocks`.
  *
  *  A heading is emitted when the chapter actually changes: the list is already
  *  in reading order, so a group never needs buffering. */
-function body(notes: Notes, heading: string, blocks: string[]): void {
+function body(notes: Notes, heading: string, dialect: Dialect, blocks: string[]): void {
   if (notes.entries.length === 0) blocks.push("这本书还没有标注。");
   let chapter: number | null = null;
   for (const entry of notes.entries) {
@@ -89,7 +119,7 @@ function body(notes: Notes, heading: string, blocks: string[]): void {
       chapter = entry.chapterIdx;
       blocks.push(`${heading} 第 ${entry.chapterIdx + 1} 章`);
     }
-    blocks.push(quote(entry.text));
+    blocks.push(dialect === "obsidian" ? `> [!quote]\n${quote(entry.text)}` : quote(entry.text));
     if (entry.note !== null) blocks.push(entry.note);
     // The way back in. A link rather than a bare URL: note apps render the one
     // and leave the other as text that has to be copied out by hand.
@@ -97,9 +127,16 @@ function body(notes: Notes, heading: string, blocks: string[]): void {
   }
 }
 
-export function renderMarkdown(notes: Notes): string {
-  const blocks = [`# 《${notes.title}》标注与笔记`, summary(notes)];
-  body(notes, "##", blocks);
+export function renderMarkdown(notes: Notes, dialect: Dialect = "plain"): string {
+  // The properties block is a property of the file rather than one of its
+  // blocks, so it rides on the first one instead of standing in the list where
+  // it would be joined by a blank line like everything else.
+  const title =
+    dialect === "obsidian"
+      ? `${frontmatter([notes])}\n\n# [[${notes.title}]] 标注与笔记`
+      : `# 《${notes.title}》标注与笔记`;
+  const blocks = [title, summary(notes)];
+  body(notes, "##", dialect, blocks);
   // Trailing newline: the file is meant to be opened by other tools, and a text
   // file that ends without one makes every one of them complain.
   return `${blocks.join("\n\n")}\n`;
@@ -108,12 +145,18 @@ export function renderMarkdown(notes: Notes): string {
 /** Several books as one page, a section each. The book heading and the chapter
  *  headings differ by a level: two `##`s in a row would read as two of the same
  *  thing, and one of them is a book. */
-export function renderMarkdownMany(books: Notes[]): string {
-  const blocks = ["# 笔记导出", summaryMany(books)];
+export function renderMarkdownMany(books: Notes[], dialect: Dialect = "plain"): string {
+  // One properties block for the file, at the top. A second one part-way down
+  // would be a YAML mapping in the middle of a Markdown document, which is not
+  // a thing any reader of either one wants.
+  const blocks = [
+    dialect === "obsidian" ? `${frontmatter(books)}\n\n# 笔记导出` : "# 笔记导出",
+    summaryMany(books),
+  ];
   for (const notes of books) {
-    blocks.push(`## 《${notes.title}》`);
+    blocks.push(dialect === "obsidian" ? `## [[${notes.title}]]` : `## 《${notes.title}》`);
     if (notes.authors.length > 0) blocks.push(notes.authors.join("、"));
-    body(notes, "###", blocks);
+    body(notes, "###", dialect, blocks);
   }
   return `${blocks.join("\n\n")}\n`;
 }

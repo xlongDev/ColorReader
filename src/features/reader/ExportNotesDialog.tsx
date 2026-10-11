@@ -8,23 +8,38 @@ import { isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
 import { filename } from "@/lib/filename";
 
-/** The two shapes the backend can write, and what each one is good for. */
+/** The three shapes the backend can write, and what each one is good for.
+ *
+ *  Obsidian is a Markdown *dialect*, not a format: its vault only ever indexes
+ *  `.md`, so what the reader picks is a dialect and the file still lands as
+ *  Markdown — which is why the extension is resolved separately below. */
 const FORMATS = [
   {
     key: "md",
     label: "Markdown",
     hint: "按章节引用原文，笔记写在下面，适合放进笔记软件",
     icon: FileText,
+    extension: "md",
+  },
+  {
+    key: "obsidian",
+    label: "Obsidian",
+    hint: "同样存成 .md，但带上书名、作者与阅读进度的属性，书库里可以直接查询",
+    icon: FileText,
+    extension: "md",
   },
   {
     key: "csv",
     label: "CSV 表格",
     hint: "一行一条标注，带上原文、笔记和颜色，可用 Excel 打开",
     icon: Table,
+    extension: "csv",
   },
 ] as const;
 
 type Format = (typeof FORMATS)[number]["key"];
+
+const chosen = (key: Format) => FORMATS.find((format) => format.key === key)!;
 
 interface ExportNotesDialogProps {
   /** What the dialog talks about: `《三体》` for one book, `这 3 本书` for a
@@ -79,10 +94,11 @@ export function ExportNotesDialog({
       onConfirm(null, format);
       return;
     }
+    const { extension } = chosen(format);
     const path = await choosePath({
       title: "导出标注与笔记",
-      defaultPath: `${filename(name, "标注与笔记")}.${format}`,
-      filters: [{ name: format === "md" ? "Markdown" : "CSV 表格", extensions: [format] }],
+      defaultPath: `${filename(name, "标注与笔记")}.${extension}`,
+      filters: [{ name: extension === "csv" ? "CSV 表格" : "Markdown", extensions: [extension] }],
     });
     if (path === null) return;
     onConfirm(path, format);

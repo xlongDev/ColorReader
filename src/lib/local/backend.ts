@@ -44,6 +44,7 @@ import { filename } from "@/lib/filename";
 import type { LocalDictionary, LocalFont } from "@/types/ipc";
 import * as mdict from "@/lib/local/mdict";
 import {
+  type Dialect,
   renderCsv,
   renderCsvMany,
   renderMarkdown,
@@ -1091,16 +1092,25 @@ async function notesOf(bookId: string): Promise<Notes | null> {
 const notesType = (format: string): string =>
   format === "csv" ? "text/csv;charset=utf-8" : "text/markdown;charset=utf-8";
 
+/** What the file is called on disk. Obsidian is a Markdown dialect rather than
+ *  a format — its vault only ever indexes `.md` — so what the reader picks
+ *  travels under Markdown's extension. The desktop's save panel says the same
+ *  thing from the same list of formats. */
+const notesExtension = (format: string): string => (format === "csv" ? "csv" : "md");
+
+/** The dialect the reader asked for, as the renderer names it. */
+const notesDialect = (format: string): Dialect => (format === "obsidian" ? "obsidian" : "plain");
+
 /** One book's highlights as a download. The desktop's command takes a path and
  *  reads the format off its extension; here the name the file gets is the one
  *  its save panel would have offered. */
 export async function notesSave(bookId: string, name: string, format: string): Promise<null> {
   const notes = await notesOf(bookId);
   if (!notes) throw new Error("这本书不在库里");
-  const body = format === "csv" ? renderCsv(notes) : renderMarkdown(notes);
+  const body = format === "csv" ? renderCsv(notes) : renderMarkdown(notes, notesDialect(format));
   downloadBytes(
     new Blob([body], { type: notesType(format) }),
-    `${filename(name, "标注与笔记")}.${format}`,
+    `${filename(name, "标注与笔记")}.${notesExtension(format)}`,
   );
   return null;
 }
@@ -1122,10 +1132,11 @@ export async function notesSaveSelection(
     notes.entries = notes.entries.filter((entry) => wanted.has(entry.id));
     if (notes.entries.length > 0) books.push(notes);
   }
-  const body = format === "csv" ? renderCsvMany(books) : renderMarkdownMany(books);
+  const body =
+    format === "csv" ? renderCsvMany(books) : renderMarkdownMany(books, notesDialect(format));
   downloadBytes(
     new Blob([body], { type: notesType(format) }),
-    `${filename(name, "笔记")}.${format}`,
+    `${filename(name, "笔记")}.${notesExtension(format)}`,
   );
   return null;
 }

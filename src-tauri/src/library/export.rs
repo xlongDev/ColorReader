@@ -41,6 +41,14 @@ const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
 /// Extension that selects CSV.
 const CSV_EXT: &str = "csv";
 
+/// The one word the caller passes to ask for Obsidian's dialect.
+///
+/// It is a word and not an enum because the browser side writes the same file
+/// with the same word, and the two implementations are pinned to each other by
+/// their tests (see `src/lib/local/notes.ts`). A third Markdown flavour is the
+/// thing that would want a shared type; two dialects do not.
+pub const OBSIDIAN: &str = "obsidian";
+
 /// A byte-order mark, so Excel opens the file as UTF-8 instead of guessing the
 /// system code page — the difference between 三体 and mojibake.
 const CSV_BOM: &str = "\u{feff}";
@@ -90,15 +98,53 @@ fn link(book_id: &str, annotation_id: &str) -> String {
     format!("{SCHEME}://book/{book_id}?annotation={annotation_id}")
 }
 
+/// Which flavour of Markdown a file is written in.
+///
+/// Two, because there are two audiences: a renderer that displays what it is
+/// given, and a vault that *indexes* it. Obsidian only ever reads `.md`, so its
+/// dialect cannot be a different file — it is the same file with a YAML block
+/// at the top, the book as a wikilink, and the quotes as callouts, so a query
+/// over the vault can find a highlight and its metadata at all.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Dialect {
+    Plain,
+    Obsidian,
+}
+
+impl Dialect {
+    fn of(flavor: Option<&str>) -> Self {
+        match flavor {
+            Some(OBSIDIAN) => Self::Obsidian,
+            _ => Self::Plain,
+        }
+    }
+
+    fn quote(self, text: &str) -> String {
+        match self {
+            Self::Plain => quote(text),
+            Self::Obsidian => format!("> [!quote]\n{}", quote(text)),
+        }
+    }
+}
+
 /// Writes one book's highlights and notes to `dest`.
 ///
 /// The format follows the extension: `.md` (or `.markdown`) for prose, `.csv`
 /// for a table. Anything else is refused rather than guessed at, because
 /// writing the wrong shape into a file the reader chose is worse than saying no.
-pub fn export(library: &Library, book_id: &str, dest: &Path) -> AppResult<()> {
+///
+/// `flavor` names a Markdown variant without changing the extension — see
+/// [`OBSIDIAN`]. It never turns a `.csv` into anything else: the extension is
+/// what the reader chose, and a vault is not a spreadsheet.
+pub fn export(
+    library: &Library,
+    book_id: &str,
+    dest: &Path,
+    flavor: Option<&str>,
+) -> AppResult<()> {
     let notes = gather(library, book_id)?;
     let rendered = if has_extension(dest, &MARKDOWN_EXTENSIONS) {
-        markdown(&notes)
+        markdown_page(&notes, Dialect::of(flavor))
     } else if has_extension(dest, &[CSV_EXT]) {
         csv(&notes)
     } else {
@@ -106,6 +152,43 @@ pub fn export(library: &Library, book_id: &str, dest: &Path) -> AppResult<()> {
     };
     std::fs::write(dest, rendered)?;
     Ok(())
+}
+
+/// Obsidian's properties block.
+///
+/// This is the whole of that dialect's value: without it a vault holds the
+/// highlights as prose, and no query can ask which book a note came from, who
+/// wrote it, or how far in the reader was.
+fn frontmatter(books: &[&Notes]) -> String {
+    let mut fields = vec![match books {
+        [only] => format!("title: {}", yaml(&format!("《{}》标注与笔记", only.title))),
+        many => format!("title: {}", yaml(&format!("笔记导出（{} 本书）", many.len()))),
+    }];
+    // Author and progress belong to one book and mean nothing across several.
+    if let [only] = books {
+        if !only.authors.is_empty() {
+            fields.push(format!(
+                "authors: [{}]",
+                only.authors.iter().map(|a| yaml(a)).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        fields.push(format!("progress: {:.2}", only.progress));
+    }
+    fields.push("tags:".to_string());
+    fields.push("  - ColorReader".to_string());
+    let mut out = String::from("---\n");
+    for field in fields {
+        out.push_str(&field);
+        out.push('\n');
+    }
+    out.push_str("---");
+    out
+}
+
+/// A YAML scalar, quoted — a title carrying a colon or a quote would otherwise
+/// end the mapping somewhere it was not meant to.
+fn yaml(value: &str) -> String {
+    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn gather(library: &Library, book_id: &str) -> AppResult<Notes> {
@@ -151,6 +234,7 @@ pub fn export_selection(
     book_ids: &[String],
     ids: &[String],
     dest: &Path,
+    flavor: Option<&str>,
 ) -> AppResult<()> {
     if ids.is_empty() {
         return Err(AppError::InvalidArgument("没有可导出的标注".into()));
@@ -166,7 +250,7 @@ pub fn export_selection(
     }
 
     let rendered = if has_extension(dest, &MARKDOWN_EXTENSIONS) {
-        markdown_many(&books)
+        markdown_many(&books, Dialect::of(flavor))
     } else if has_extension(dest, &[CSV_EXT]) {
         csv_many(&books)
     } else {
@@ -177,9 +261,20 @@ pub fn export_selection(
 }
 
 /// The whole file as one page of Markdown.
-fn markdown(notes: &Notes) -> String {
-    let mut blocks = vec![format!("# 《{}》标注与笔记", notes.title), summary(notes)];
-    markdown_body(notes, "##", &mut blocks);
+fn markdown_page(notes: &Notes, dialect: Dialect) -> String {
+    let title = match dialect {
+        Dialect::Plain => format!("# 《{}》标注与笔记", notes.title),
+        Dialect::Obsidian => format!("# [[{}]] 标注与笔记", notes.title),
+    };
+    // The properties block is a property of the file rather than one of its
+    // blocks, so it rides on the first one instead of standing in the list
+    // where it would be joined by a blank line like everything else.
+    let title = match dialect {
+        Dialect::Plain => title,
+        Dialect::Obsidian => format!("{}\n\n{title}", frontmatter(&[notes])),
+    };
+    let mut blocks = vec![title, summary(notes)];
+    markdown_body(notes, "##", dialect, &mut blocks);
     // Trailing newline: the file is meant to be opened by other tools, and a
     // text file that ends without one makes every one of them complain.
     format!("{}\n", blocks.join("\n\n"))
@@ -190,14 +285,24 @@ fn markdown(notes: &Notes) -> String {
 /// The book heading and the chapter headings differ by a level here, where the
 /// single-book file has only the chapters: two `##`s in a row would read as two
 /// of the same thing, and one of them is a book.
-fn markdown_many(books: &[Notes]) -> String {
+fn markdown_many(books: &[Notes], dialect: Dialect) -> String {
     let mut blocks = vec!["# 笔记导出".to_string(), summary_many(books)];
+    // One properties block for the file, at the top, naming what it holds. A
+    // second one part-way down would be a YAML mapping in the middle of a
+    // Markdown document, which is not a thing any reader of either one wants.
+    if dialect == Dialect::Obsidian {
+        let refs: Vec<&Notes> = books.iter().collect();
+        blocks[0] = format!("{}\n\n{}", frontmatter(&refs), blocks[0]);
+    }
     for notes in books {
-        blocks.push(format!("## 《{}》", notes.title));
+        blocks.push(match dialect {
+            Dialect::Plain => format!("## 《{}》", notes.title),
+            Dialect::Obsidian => format!("## [[{}]]", notes.title),
+        });
         if !notes.authors.is_empty() {
             blocks.push(notes.authors.join("、"));
         }
-        markdown_body(notes, "###", &mut blocks);
+        markdown_body(notes, "###", dialect, &mut blocks);
     }
     format!("{}\n", blocks.join("\n\n"))
 }
@@ -206,7 +311,7 @@ fn markdown_many(books: &[Notes]) -> String {
 ///
 /// A heading is emitted when the chapter actually changes: the list is already
 /// in reading order, so a group never needs to be buffered.
-fn markdown_body(notes: &Notes, heading: &str, blocks: &mut Vec<String>) {
+fn markdown_body(notes: &Notes, heading: &str, dialect: Dialect, blocks: &mut Vec<String>) {
     if notes.entries.is_empty() {
         blocks.push("这本书还没有标注。".to_string());
     }
@@ -217,7 +322,7 @@ fn markdown_body(notes: &Notes, heading: &str, blocks: &mut Vec<String>) {
             chapter = Some(entry.chapter_idx);
             blocks.push(format!("{heading} 第 {} 章", entry.chapter_idx + 1));
         }
-        blocks.push(quote(&entry.text));
+        blocks.push(dialect.quote(&entry.text));
         if let Some(note) = entry.note.as_deref() {
             blocks.push(note.to_string());
         }
@@ -406,7 +511,7 @@ mod tests {
 
     fn write(harness: &Harness, id: &str, name: &str) -> String {
         let dest = harness.dir.join(name);
-        export(&harness.library, id, &dest).expect("export");
+        export(&harness.library, id, &dest, None).expect("export");
         std::fs::read_to_string(dest).expect("read back")
     }
 
@@ -449,11 +554,14 @@ mod tests {
 
     #[test]
     fn markdown_groups_by_chapter_and_puts_notes_under_their_quote() {
-        let rendered = markdown(&notes(vec![
-            entry("a1", 0, "你好", Some("第三章的伏笔")),
-            entry("a2", 0, "再见", None),
-            entry("a3", 2, "最后一段", Some("记一笔")),
-        ]));
+        let rendered = markdown_page(
+            &notes(vec![
+                entry("a1", 0, "你好", Some("第三章的伏笔")),
+                entry("a2", 0, "再见", None),
+                entry("a3", 2, "最后一段", Some("记一笔")),
+            ]),
+            Dialect::Plain,
+        );
 
         assert_eq!(
             rendered,
@@ -491,14 +599,48 @@ mod tests {
     }
 
     #[test]
+    fn the_obsidian_dialect_carries_properties_a_query_can_read() {
+        let rendered =
+            markdown_page(&notes(vec![entry("a1", 0, "你好", Some("伏笔"))]), Dialect::Obsidian);
+
+        // The properties block is the whole reason for the dialect: without it
+        // a vault holds the highlights as prose and cannot answer a question
+        // about them.
+        assert!(rendered.starts_with("---\n"), "{rendered}");
+        assert!(rendered.contains("title: \"《三体》标注与笔记\""), "{rendered}");
+        assert!(rendered.contains("authors: [\"刘慈欣\"]"), "{rendered}");
+        assert!(rendered.contains("progress: 0.50"), "{rendered}");
+        assert!(rendered.contains("  - ColorReader"), "{rendered}");
+        // And the parts a vault treats as links rather than text.
+        assert!(rendered.contains("# [[三体]] 标注与笔记"), "{rendered}");
+        assert!(rendered.contains("> [!quote]\n> 你好"), "{rendered}");
+        // The way back into this app is the same one it always was.
+        assert!(rendered.contains("[在 ColorReader 中打开](colorreader://book/b1?annotation=a1)"));
+    }
+
+    #[test]
+    fn a_title_with_yaml_in_it_cannot_break_the_properties_block() {
+        let mut awkward = notes(vec![entry("a1", 0, "你好", None)]);
+        awkward.title = "三体：\"引用\"版".into();
+        let rendered = markdown_page(&awkward, Dialect::Obsidian);
+        let front = rendered.split("\n---").next().unwrap_or_default();
+        assert!(front.contains("title: \"《三体：\\\"引用\\\"版》标注与笔记\""), "{front}");
+        // Exactly the six lines the block should have. An unescaped quote
+        // would have ended the scalar early and spilled the rest of the title
+        // onto a line of its own, which YAML reads as garbage.
+        assert_eq!(front.lines().count(), 6, "{front}");
+    }
+
+    #[test]
     fn markdown_keeps_a_multiline_quote_a_single_block() {
-        let rendered = markdown(&notes(vec![entry("a1", 0, "第一行\n第二行", None)]));
+        let rendered =
+            markdown_page(&notes(vec![entry("a1", 0, "第一行\n第二行", None)]), Dialect::Plain);
         assert!(rendered.contains("> 第一行\n> 第二行"), "{rendered}");
     }
 
     #[test]
     fn markdown_says_so_when_there_is_nothing_to_export() {
-        let rendered = markdown(&notes(vec![]));
+        let rendered = markdown_page(&notes(vec![]), Dialect::Plain);
         assert!(rendered.contains("这本书还没有标注。"), "{rendered}");
         assert!(rendered.contains("0 条标注"), "{rendered}");
     }
@@ -507,7 +649,7 @@ mod tests {
     fn a_book_without_an_author_keeps_the_summary_line_clean() {
         let mut notes = notes(vec![entry("a1", 0, "你好", None)]);
         notes.authors.clear();
-        let rendered = markdown(&notes);
+        let rendered = markdown_page(&notes, Dialect::Plain);
         assert!(rendered.contains("\n1 条标注 · 阅读进度 50%\n"), "{rendered}");
     }
 
@@ -571,14 +713,14 @@ mod tests {
     fn an_unknown_extension_is_refused_rather_than_guessed() {
         let harness = Harness::new("export-unknown-ext");
         let id = seed_book(&harness);
-        let err = export(&harness.library, &id, &harness.dir.join("notes.pdf"));
+        let err = export(&harness.library, &id, &harness.dir.join("notes.pdf"), None);
         assert!(matches!(err, Err(AppError::InvalidArgument(_))), "不认识的扩展名要拒绝");
     }
 
     #[test]
     fn exporting_a_book_that_is_not_on_the_shelf_is_not_found() {
         let harness = Harness::new("export-missing-book");
-        let err = export(&harness.library, "nope", &harness.dir.join("notes.md"));
+        let err = export(&harness.library, "nope", &harness.dir.join("notes.md"), None);
         assert!(matches!(err, Err(AppError::NotFound(_))));
     }
 
@@ -603,7 +745,10 @@ mod tests {
         second.authors.clear();
         second.progress = 0.0;
 
-        let rendered = markdown_many(&[notes(vec![entry("a1", 0, "你好", Some("伏笔"))]), second]);
+        let rendered = markdown_many(
+            &[notes(vec![entry("a1", 0, "你好", Some("伏笔"))]), second],
+            Dialect::Plain,
+        );
 
         assert_eq!(
             rendered,
@@ -666,8 +811,14 @@ mod tests {
 
         // The middle highlight only, as a search on this page would leave it.
         let dest = harness.dir.join("selection.md");
-        export_selection(&harness.library, std::slice::from_ref(&id), &[ids[1].clone()], &dest)
-            .expect("export");
+        export_selection(
+            &harness.library,
+            std::slice::from_ref(&id),
+            &[ids[1].clone()],
+            &dest,
+            None,
+        )
+        .expect("export");
         let rendered = std::fs::read_to_string(&dest).expect("read back");
 
         assert!(rendered.contains("> 再见"), "{rendered}");
@@ -684,7 +835,7 @@ mod tests {
         let ids = annotation_ids(&harness, &id);
 
         let dest = harness.dir.join("ordered.csv");
-        export_selection(&harness.library, std::slice::from_ref(&id), &ids.clone(), &dest)
+        export_selection(&harness.library, std::slice::from_ref(&id), &ids.clone(), &dest, None)
             .expect("export");
         let rendered = std::fs::read_to_string(&dest).expect("read back");
         let rows: Vec<&str> = rendered.lines().skip(1).collect();
@@ -699,7 +850,7 @@ mod tests {
         let mut reversed = ids.clone();
         reversed.reverse();
         let dest = harness.dir.join("reversed.csv");
-        export_selection(&harness.library, std::slice::from_ref(&id), &reversed, &dest)
+        export_selection(&harness.library, std::slice::from_ref(&id), &reversed, &dest, None)
             .expect("export");
         assert_eq!(std::fs::read_to_string(&dest).expect("read back"), rendered);
     }
@@ -709,7 +860,7 @@ mod tests {
         let harness = Harness::new("export-selection-empty");
         let id = seed_book(&harness);
         let dest = harness.dir.join("nothing.md");
-        let err = export_selection(&harness.library, &[id], &[], &dest);
+        let err = export_selection(&harness.library, &[id], &[], &dest, None);
         assert!(matches!(err, Err(AppError::InvalidArgument(_))), "空选择要拒绝");
         assert!(!dest.exists(), "拒绝时不该留下一个空文件");
     }
@@ -719,7 +870,8 @@ mod tests {
         let harness = Harness::new("export-selection-ext");
         let id = seed_book(&harness);
         let ids = annotation_ids(&harness, &id);
-        let err = export_selection(&harness.library, &[id], &ids, &harness.dir.join("notes.rtf"));
+        let err =
+            export_selection(&harness.library, &[id], &ids, &harness.dir.join("notes.rtf"), None);
         assert!(matches!(err, Err(AppError::InvalidArgument(_))));
     }
 
@@ -803,7 +955,7 @@ mod tests {
 
         for name in ["notes.md", "notes.csv"] {
             let dest = source.dir.join(name);
-            export(&source.library, &id, &dest).expect("export");
+            export(&source.library, &id, &dest, None).expect("export");
             let text = std::fs::read_to_string(&dest).expect("read back");
             let parsed = match clippings::detect(&text) {
                 clippings::Shape::Markdown => clippings::parse_markdown(&text),

@@ -271,11 +271,14 @@ export const commands = {
    *
    *  The destination extension picks the format (`.md` or `.csv`), the same
    *  contract `pack.export` follows: what the save dialog promised is what gets
-   *  written. The write happens off the main thread because it reads the whole
-   *  annotation list and touches the disk — small work, but the reader is waiting
-   *  on a button.
+   *  written. `flavor` picks the Markdown *dialect* without touching the
+   *  extension, because Obsidian only ever indexes `.md` — see
+   *  [`crate::library::export::OBSIDIAN`]. The write happens off the main thread
+   *  because it reads the whole annotation list and touches the disk — small work,
+   *  but the reader is waiting on a button.
    */
-  notesExport: (id: string, path: string) => __TAURI_INVOKE<null>("notes_export", { id, path }),
+  notesExport: (id: string, path: string, flavor: string | null) =>
+    __TAURI_INVOKE<null>("notes_export", { id, path, flavor }),
   /**
    *  `notes.export_selection` — writes the highlights a screen is showing,
    *  across as many books as they come from.
@@ -285,8 +288,8 @@ export const commands = {
    *  is the order the screen put them in, which is the shelf's. Sending only the
    *  ids would lose the order; sending only the books would lose the narrowing.
    */
-  notesExportSelection: (bookIds: string[], ids: string[], path: string) =>
-    __TAURI_INVOKE<null>("notes_export_selection", { bookIds, ids, path }),
+  notesExportSelection: (bookIds: string[], ids: string[], path: string, flavor: string | null) =>
+    __TAURI_INVOKE<null>("notes_export_selection", { bookIds, ids, path, flavor }),
   /**  `font.list` — every imported font, in the order they were added. */
   fontList: () => __TAURI_INVOKE<Font_Serialize[]>("font_list"),
   /**  `font.import` — `path` is the font file the reader picked. */
