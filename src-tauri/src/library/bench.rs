@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use super::chapters;
 use super::import;
+use super::rag;
 use super::search;
 use crate::db::{Layout, Library};
 use crate::document::fixture::temp_dir;
@@ -192,5 +193,102 @@ fn pdf_import_bench() -> Result<(), Box<dyn std::error::Error>> {
     println!("import (page index only):  {import_ms:.1} ms");
     println!("toc (first open, owes text): {toc_ms:.1} ms");
     println!("backfill (text, deferred): {backfill_ms:.1} ms");
+    Ok(())
+}
+
+/// Vector width of the shipped embedding models (`text-embedding-3-small`).
+const DIMS: usize = 768;
+
+/// Chunks in this bench. The reference book above is ~3 400; 50 000 is roughly
+/// 50 long books, which is the point: the brute-force scan is linear in this
+/// number, and the design is only right while linear is fast enough.
+const RAG_CHUNKS: usize = 50_000;
+
+/// A Top-6 semantic query over the whole library, and the threshold above which
+/// the brute-force scan stops being the right answer.
+///
+/// `rag::search` is O(N × DIMS) with a BLOB deserialised per chunk, and the
+/// architecture deliberately says that stays until a number proves otherwise.
+/// This bench *is* that number: it prints the median and the P95, so the day the
+/// P95 crosses [`RAG_ANN_P95_MS`] the decision is made by a measurement instead
+/// of by an intuition. Until then, this is the evidence for leaving it alone.
+#[test]
+#[ignore = "benchmark: cargo test --release bench -- --ignored --nocapture"]
+fn rag_search_bench() -> Result<(), Box<dyn std::error::Error>> {
+    /// The line above which a full scan stops being imperceptible. Sized to the
+    /// interaction it sits behind: a reader waiting for six passages while
+    /// typing a question.
+    const RAG_ANN_P95_MS: f64 = 100.0;
+
+    let bench = Bench::new("bench-rag");
+    let layout = Layout::create(bench.dir.join("data")).expect("layout");
+    let library = Library::open(&layout.data_dir).expect("open library");
+    let book_id = "bench-book";
+    library
+        .with(|conn| {
+            Ok(conn.execute(
+                "INSERT INTO books (id, title, sort_title, format, content_hash, file_path, \
+                 file_size, added_at, updated_at) \
+                 VALUES (?1, '基准书', 'bench', 'txt', ?1, 'p', 1, 1, 1)",
+                [book_id],
+            )?)
+        })
+        .expect("insert book");
+
+    // Vectors, not text: the scan's cost is the deserialise plus the dot, and a
+    // fixture that skipped embedding rows would measure SQLite's row iteration
+    // instead. A deterministic pseudo-random fill is enough — this is a timing
+    // bench, not a relevance one.
+    library.with_tx(|tx| {
+        let mut stmt = tx.prepare(
+            "INSERT INTO chunks (book_id, chapter_idx, start_char, end_char, text, embedding, \
+             model, dims, updated_at) VALUES (?1, ?2, 0, 10, 'x', ?3, 'bench', ?4, 1)",
+        )?;
+        let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+        for i in 0..RAG_CHUNKS {
+            let mut vector: Vec<f32> = (0..DIMS)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                    ((seed >> 33) as f32 / u32::MAX as f32) * 2.0 - 1.0
+                })
+                .collect();
+            crate::ai::embeddings::normalize(&mut vector).expect("normalize");
+            stmt.execute(rusqlite::params![
+                book_id,
+                (i % 600) as i64,
+                crate::ai::embeddings::to_bytes(&vector),
+                DIMS as i64
+            ])?;
+        }
+        Ok(())
+    })?;
+
+    let mut query: Vec<f32> = (0..DIMS).map(|i| if i % 7 == 0 { 0.5 } else { -0.25 }).collect();
+    crate::ai::embeddings::normalize(&mut query).expect("normalize");
+
+    // 20 runs: the median is the number, the P95 is the guard, and both come
+    // from the same runs rather than from one lucky call.
+    let mut samples: Vec<f64> = (0..20)
+        .map(|_| {
+            let started = Instant::now();
+            let hits = library
+                .with(|conn| rag::search(conn, "bench", &query, None, 6))
+                .expect("rag search");
+            assert_eq!(hits.len(), 6);
+            ms(started.elapsed())
+        })
+        .collect();
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median = samples[samples.len() / 2];
+    let p95 = samples[samples.len() * 95 / 100];
+
+    println!("\nrag: {RAG_CHUNKS} chunks × {DIMS} dims");
+    println!("top-6 scan median (20 runs): {median:.2} ms");
+    println!("top-6 scan P95:              {p95:.2} ms");
+    if p95 > RAG_ANN_P95_MS {
+        println!("↑ P95 越过 {RAG_ANN_P95_MS} ms：暴力扫描不再是对的形状，该量一次 ANN 了");
+    } else {
+        println!("(P95 仍在 {RAG_ANN_P95_MS} ms 以下，暴力扫描是对的形状 —— 别动它)");
+    }
     Ok(())
 }
