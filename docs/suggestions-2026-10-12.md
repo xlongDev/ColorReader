@@ -1,0 +1,131 @@
+# ColorReader 新功能与优化建议
+
+> 日期：2026-10-12 · 方法：读源码 + 实测统计（目录规模、产物体积、配置）+ 与 `ARCHITECTURE.md §9` 待办清单交叉核对。技术栈不动，不推倒重写。
+> 所有数字均为本次重新量测，未从旧文档推算。
+>
+> **落地进展（同日）**：✅ **F2 更新角标** 与 ✅ **O3 桌面构建剔除字体** 已实现并过全量门禁；O3 实施中另发现并修复一个**存量 bug**（vite 别名从未生效，两个「已剔除」的构建一直打着 29 MB 字体），细节见该条。其余项未动。
+
+---
+
+## 一、现状分析
+
+### 1.1 定位与栈
+
+AI Native · Local First · High Performance 的跨平台（Tauri 2）电子书阅读器。三条取舍贯穿全局：联网能力全部可选、不打包任何数据集、整本书不进 React。栈：Rust（edition 2024，单 crate）+ React 19 / Vite 8 / Tailwind v4 / Zustand / TanStack Query / Motion + SQLite（WAL）+ FTS5(trigram) + pdf.js + vendored foliate-js；渲染走 foliate（EPUB/MOBI）与自建 pdf.js 通路两条。
+
+### 1.2 结构（实测）
+
+| 区域                  | 实测                                                                                                                  |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| 前端 `src/`           | 214 个 ts/tsx，约 5.5 万行（含测试）；最大 `ReaderPage.tsx` 2741、`FoliateBookView.tsx` 1757、`SettingsPage.tsx` 1351 |
+| Rust `src-tauri/src/` | 26,235 行；`commands/` 22 个域、`library/` **24 个文件平铺**、`document/` 9 个                                        |
+| IPC                   | 80+ 命令（3 条二进制通道手写），5 个事件，`src/lib/ipc.ts` 单一出口，类型由 tauri-specta 生成                         |
+| 测试                  | vitest 719 · cargo 426 · Playwright 96×2 引擎；pre-commit 跑 prettier/oxlint/tsc/rustfmt/clippy                       |
+| 产物                  | `dist` 35 MB（**29 MB 是 582 个 lxgw-wenkai woff2 子集**）；入口 chunk 351.6 kB，pdf chunk 431 kB，均在 500 kB 红线内 |
+
+### 1.3 主要业务流程
+
+```
+导入（book_import → SHA-256 去重 → 解析元数据/封面/章节 → 事务落库 + FTS 触发器）
+  → 阅读（foliate / pdf.js / 纯文本三条渲染通路，一次只加载一章；进度按 chars 前缀定位）
+  → 标注（章节不可变文本上的 UTF-16 区间，EPUB 走 CFI；migrate/bookmark/clippings 共用 haystack 锚定）
+  → 检索与 AI（FTS5+BM25 / RAG 暴力点积 Top-6 / 图谱 / 词典三级链 / Edge TTS 双引擎）
+  → 数据流转（.ctz 书档 / .ctzx 加密 / WebDAV 进度+标注+书签 LWW+墓碑 / 全库备份）
+```
+
+### 1.4 值得肯定的既有实现（不建议重做）
+
+- 标注 = 不可变字符区间 + `content_hash` 身份键，取消了一整类 re-location 问题；
+- 深链只带身份不带位置（三种位置模型互不通约）；
+- 错误处理干净：生产路径 `unwrap()/expect()`、`TODO/FIXME`、`console.*`、吞错的 `let _ =` **均为 0**；
+- 最小权限 capability、CSP `default-src 'self'`、Key 只存 Rust 侧、明文 http 仅 loopback；
+- 换版本迁移「先复制后删除」、OCR「写回章节正文以复用四条消费链路」——都是靠证据逼出来的设计。
+
+---
+
+## 二、新功能建议（5 项）
+
+### F1 · 快捷键自定义　【优先级 P1 · 中等改动】
+
+- **问题**：全仓带快捷键的命令只有 3 条（⌘K / ⌘B / ⌘,，见 `registerCoreCommands.tsx`），翻章翻页、RSVP、标尺步进散在 `ReaderChrome.tsx` / `RsvpPlayer.tsx` / `ReadingRuler.tsx` 各自的 keydown 里，读者改不了任何一个键。
+- **思路**：**先收编再面板**（文档已标注此为前提，顺序反了会给读者一个改不了他想改的键的面板）。① 把阅读器按键逐个搬进命令注册表（`Command.shortcut` 已有类型，`useHotkeys` 现成），是纯接线、有 e2e 兜底；② 再加一个设置面板：`stores/settings` 持久化「命令 id → Shortcut 覆盖」的 JSON，`useHotkeys` 匹配时先查覆盖表；③ 冲突检测（同一组合绑了两条命令）在保存时拦下。
+- **范围**：命令注册表 + 3 个阅读器组件 + 设置页一个面板 + 单测。
+
+### F2 · 自动更新角标　【优先级 P0 · 小改动 · ✅ 已落地 2026-10-12】
+
+- **问题**：`useUpdater.ts` 的注释自己写了「启动时检查需要一个能自己冒出来的通知面（横幅或角标），那个还不存在，而静默到达的更新比读者主动要的更新更糟」。结果：更新机制已落地，但只在设置页手动查，绝大多数装机永远收不到新版。
+- **实施**：`useUpdater` 从 hook 升级为 `stores/updater.ts`（设置行与横幅共享同一份状态机，SettingsPage 的调用签名不变）；新组件 `components/layout/UpdateBanner.tsx` 挂在 AppShell，launch 后 8 s 检查一次——只对「有新版」显示、可关闭、全屏阅读时不绘制、检查失败保持安静（没人要求过它）。**只发现、不安装**：安装永远是读者按的。
+- **测试**：19 条新单测。拆成两个文件是因为 motion 的全局帧循环活不过假时钟——时序测试（`UpdateBanner.check.test.tsx`）单独住，并套 `MotionConfig reducedMotion="always"`；渲染与关闭（`UpdateBanner.test.tsx`）全程真实时钟，直接驱动 store。
+
+### F3 · 整本扫描页 OCR　【优先级 P1 · 中偏大】
+
+- **问题**：纯扫描 PDF 是文档记录的真缺口。单页 OCR 链路已通（`ai/vision.rs::transcribe` + `library/ocr.rs` 写回章节正文，FTS/朗读/RAG/助手四条链路同时活），「整本识别刻意没做：差进度事件、取消、提交前可见的花费」（ARCHITECTURE 原话）。
+- **思路**：① 批量入口先统计无文字层页数并给出预估（页数 × 单页成本）；② 复用 `book://import-progress` 的事件模式加 `page://ocr-progress`（事件契约、specta 注册、`emit` 全都有现成样板）；③ 取消用 generation 计数器（与朗读 `cancel` 同款）；④ 继续走「结果写回章节正文」不变。
+- **范围**：Rust 一个命令 + 一个事件 + 阅读器一个面板入口。
+- **红线不变**：vision 模型给词不给框，**划词仍不可用**（ARCHITECTURE 已判「设计而不是遗漏」），文档需明示。
+
+### F4 · 金句卡片分享图　【优先级 P2 · 小到中等】
+
+- **问题**：P2 清单在列项；本地导出只有 md/csv，没有面向分享的单图。
+- **思路**：离屏 canvas 按 3:4（1080×1440）渲染：标注原文 + 书名/作者 + 阅读进度 + 右下角含深链的二维码（`export.rs::link` 的生成器已存在）。存盘走 `dialog:allow-save`（已授权）。**纯前端、无服务端**，符合 Local First。可复用霞鹜文楷字体链与 glass 材质语言。
+- **范围**：纯前端一个渲染模块 + 标注面板/灯箱一个入口 + 单测（换行与 CJK 度量需实测）。
+- **风险**：canvas 中 CJK 文本度量与 WebKit/Chromium 差异，e2e 双引擎各断言一次。
+
+### F5 · OPDS 1.2 目录订阅　【优先级 P2 · 较大】
+
+- **问题**：「在线找书」只有用户手写 JSON 规则的书源（规则刻意收窄、不支持 HTML）。OPDS 是电子书目的事实标准，公共图书馆/自建书站通用。
+- **思路**：用已有的 `reqwest` + `quick-xml`，**不新增依赖**；只收两类 feed——Navigation（目录浏览）与 Acquisition（条目+获取链接），分页/OpenSearch 收窄到 v1.2 最小集。下载产物**复用既有导入管线**（与书源完全同一条路：暂存文件 → `import_files`）。一个目录不配照样读，符合 Local First。
+- **范围**：新命令域 `catalog`（订阅管理 + feed 解析）+ 浏览 UI + 下载接线。
+- **不做**：OPDS 服务器端、认证之外的双向同步（与「自建云同步不做」一致）。
+
+---
+
+## 三、优化建议（7 项）
+
+### O1 · `ReaderPage.tsx` 仍是巨石，且比上次量测时又长了　【P1】
+
+- **证据**：现 2741 行，比 PR#10 后的 2565 长了 176——换版本迁移（`migrate`）、单页 OCR、周节奏三个功能都落在了页面里。`scripts/measure-reader-clusters.py` 与 CI 量测摘要在位，但**判定表是这三个功能之前量的**。
+- **方向**：重跑量测脚本，按新数据判断剩余簇（PDF / 翻页手势 / 位置导航此前被判「脊柱不是叶子」）；新功能拆出时优先「出口 ≤2、入口纯值」的簇（既有 PR#5/7/8 证明这把尺子可靠）。一次一笔、每笔全量 e2e。
+
+### O2 · Rust `library/` 越过自己定的拆分阈值　【P2 · 纯移动，风险极低】
+
+- **证据**：ARCHITECTURE 自定规则「单模块超约 800 行且两个以上变更理由即拆」。实测越线：`document/mobi.rs` 1809、`library/clippings.rs` 1590、`repository.rs` 1194、`export.rs` 1028、`sync.rs` 970；`library/` 是 24 文件平铺桶，内含词典解析 / 检索与 AI / 同步备份 / 导出 / 书源五类互不相关领域。
+- **方向**：先拆子目录不拆 crate——`library/{lookup, search, ai, sync, io}/`，`repository.rs` 按实体（books / chapters / tags）拆，`mobi.rs` 分 PDB 容器 / PalmDOC 解压 / EXTH 三模块。`mod` 声明 + 移动，编译器全量把关。
+
+### O3 · 29 MB 字体仍随安装包分发　【P2 · ✅ 已落地 2026-10-12】
+
+- **证据**：`dist` 35 MB 中 29 MB 是 582 个 lxgw-wenkai woff2；`frontendDist: ../dist` 且无 `resources` 排除 → Tauri 打包把它们收进 `.app` / 安装包。上一笔提交（`3260146`）只解决了首屏 CSS（620 KB → 66 KB），**没有解决体积**；霞鹜文楷是 5 个字体栈之一、默认值是「系统」。
+- **实施**：`scripts/build-app.mjs`（设 `CR_NO_BUNDLED_FONT` 后跑 `pnpm build`）经 `tauri.conf.json` 的 `beforeBuildCommand` 生效；`vite.config.ts` 在该变量或 `PAGES_BASE` 下把 `bundledFont` 模块与样式表换成空壳。**实测三种构建**：标准 35 MB / 582 子集（`pnpm dev` 与 CI、e2e 不变），两个打包构建各 **5.8 MB / 0 子集**；入口 chunk 338 KB、pdf chunk 430 KB，均在 500 kB 红线下。
+- **额外收获（存量 bug）**：原别名写在 `resolve.alias` 对象里、排在 `"@"` 之后——字符串别名按前缀匹配，`"@"` 先吞掉所有 `@/…` 导入，精确的模块别名与带 `?url` 的 CSS 别名**从未生效**，GitHub Pages 预览一直打着全部 29 MB。改为数组形式、按特异性排序，CSS 改用正则容忍 `?url`。坑已写进 `ARCHITECTURE.md`「自定义字体」一节。
+
+### O4 · 凭据在 SQLite 里明文　【P2】
+
+- **证据**：AI Key / DeepL Key / WebDAV 密码存 `settings` KV 表。全库备份已正确排除凭据（`7d5f500`），但数据目录里的 DB 文件本身是明文，能被同机任何进程读 profile 目录者拿到。
+- **方向**：**复用项目自己的 `.ctzx` 机制**（Argon2id 19 MiB + AES-256-GCM，构件事先写好、已实测）加密这几个 secret 行，零新依赖、零新原语。KDF 参数与 salt 仍作 GCM 的 AAD；解锁时一次性派生、会话内缓存。
+
+### O5 · vitest 无覆盖率可见性　【P3】
+
+- **证据**：无 coverage 配置（清单 1.6 已记）；`pdfCanvas` 这类只能靠 e2e 兜，盲区位置不可见。
+- **方向**：加 v8 provider 的 `--coverage`，**只报告不设门禁**，并接进 CI 摘要。目标不是追数字，是把「哪些模块改了没有对应测试」照出来。
+
+### O6 · React Compiler 未启用，但它的 lint 规则已在把关　【P3 · 需实测】
+
+- **证据**：`vite.config.ts` 只有 `@vitejs/plugin-react`，手写 memo 真实起作用，父组件 re-render 带整棵子树（ReaderPage 尤甚）；而 oxlint 的 React Compiler 规则已经在拦 `immutability` 违规（PR#8）。
+- **方向**：试启用编译器（react-compiler-runtime），**全量 e2e 验证行为等价**后再默认开启。预期收益是记忆化从「手写 + 审计」变成编译器保证；风险是插件对 foliate 桥这类命令式代码的行为差异，必须双引擎跑完再合。
+
+### O7 · 浏览器替身比真身还大；e2e 仍有 load 敏感 flake　【P2 / P3】
+
+- **证据**：`src/lib/local/backend.ts` 1250 行，比最大的 Rust 后端文件还长；`reading-ruler.spec.ts` 那条负载敏感的 flake 有完整机制记录（单独跑可复现红），归档清单给的候选改法（加重试 / 容差两行高放宽到三行 / 测量前等排版稳定）**未落地**。
+- **方向**：① 按 `LOCAL_COMMANDS` 分组拆 `local/{books, annotations, stats, search, ...}.ts`，`backend.ts` 只留 `fromLocal` 转发表——Rust 端与浏览器端从此同名同位；② 三选一治 flake，先加重试（最便宜）。
+
+---
+
+## 四、落地顺序建议
+
+| 批次                 | 项                                                 | 状态                                                  |
+| -------------------- | -------------------------------------------------- | ----------------------------------------------------- |
+| 第一批（小、高感知） | ~~F2 更新角标 → O3 构建剔除字体~~                  | ✅ **已落地**（2026-10-12，全量门禁绿，改动在工作区） |
+| 第二批（结构性）     | F1 快捷键自定义（先收编）→ O1 重跑 ReaderPage 量测 | 未动                                                  |
+| 第三批（数据与安全） | O4 凭据加密 → O2 library 分层（纯移动）            | 未动                                                  |
+| 第四批（按需）       | F3 整本 OCR → F4 金句卡片 → F5 OPDS                | 未动                                                  |
+| 随时                 | O5 覆盖率报告 → O7 拆 backend.ts / flake 加重试    | 未动                                                  |
