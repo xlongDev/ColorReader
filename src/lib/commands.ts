@@ -41,6 +41,47 @@ export type Shortcut = {
   readonly key: string;
 };
 
+/** The parts of a keyboard event a shortcut can care about.
+ *
+ * Structural rather than `KeyboardEvent` so the matching can be exercised
+ * without a DOM — the reader's key table is asserted against it directly. */
+export interface KeyStroke {
+  readonly key: string;
+  readonly altKey: boolean;
+  readonly shiftKey: boolean;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+}
+
+/**
+ * Whether a press is the shortcut.
+ *
+ * The modifier test is an equality, not a subset: a shortcut that says nothing
+ * about Shift means "without Shift", so Shift+Space is not Space. Key names
+ * compare case-insensitively, which is what makes `{ key: " " }` and the
+ * `MediaTrack*` names work unchanged.
+ */
+export function shortcutMatches(stroke: KeyStroke, shortcut: Shortcut): boolean {
+  if (stroke.altKey !== !!shortcut.alt) return false;
+  if (stroke.shiftKey !== !!shortcut.shift) return false;
+  if ((stroke.metaKey || stroke.ctrlKey) !== !!shortcut.mod) return false;
+  return stroke.key.toLowerCase() === shortcut.key.toLowerCase();
+}
+
+/**
+ * Whether the press landed in a field that owns its own keys.
+ *
+ * A key arriving from inside the book's iframe carries a `null` target, which
+ * is not an element and therefore not a field — the reader's keys keep working
+ * over the page.
+ */
+export function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
 /** Subsequence + start bonus scoring. Returns `null` when nothing matched. */
 export function scoreCommand(query: string, command: Command): number | null {
   const q = query.trim().toLowerCase();

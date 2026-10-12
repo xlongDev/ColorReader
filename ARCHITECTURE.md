@@ -403,6 +403,10 @@ Command（lib/commands.ts）
 
 `useHotkeys` 在可编辑元素（`input` / `textarea` / `[contenteditable]`）内不触发，避免与输入框抢键。
 
+**阅读器自己的键不在这张表里，但用的是同一套词汇。** `readerKeys.ts` 是一张纯表（`ReaderKeyBinding`：`id` / `title` / `keys` / `when(ctx, stroke)`），`resolveReaderKey` 按声明顺序取第一个命中且闸门放行的绑定，`ReaderPage` 只负责搭上下文、把 id 翻译成调用。**它们不能做成全局快捷键**：同一个键的含义取决于阅读器正在显示什么（翻页版式里左右键翻页、滚动版式里翻章，标尺开着时左右键归标尺，灯箱开着时它独占键盘），而注册表的 `shortcut` 语义是「这个键，在任何地方」——挂上去既会在阅读器外触发，又会让含义依赖注册顺序。灯箱是「换一张表」而不是给每条绑定加 `!lightboxOpen`，所以「模态期间别的绑定不许抢键」不可能被逐条漏掉。
+
+两个字段值得单独记住：`inEditable`（Escape 要在搜索框里也能用，它是抽屉的关法）与 `keepDefault`（Escape 不阻止默认行为——浏览器构建用的是真的 Fullscreen API，Esc 退出全屏是浏览器在做的事，拦下来会把读者困在全屏里）。🔴 这两条都属于 Escape，改动时别按「其他键怎么写就怎么写」照搬。
+
 ### 路由
 
 桌面应用没有地址栏，使用 `createMemoryRouter`。命令 → 路由跳转通过一个 `CustomEvent` 桥接（`useNavigationBridge`），因为命令注册表本身在 React Router 之外。
@@ -632,9 +636,7 @@ capability 只放行实际用到的三条：`updater:allow-check`、`updater:all
 - 知识图谱力导向可视化深化（`GraphPanel` 已有基础）
 - 金句卡片分享图 · 扫描页整本识别 · 快捷键自定义 · 多窗口对照 · i18n（en）
 
-🔴 **快捷键自定义的前置是收编阅读器自己的键**：全仓带快捷键的命令目前只有 3 条
-（⌘K / ⌘B / ⌘,，见 `registerCoreCommands.tsx`），而翻章翻页 / RSVP / 标尺步进**不在命令注册表里**。
-先改代码收编，再谈面板——顺序反了会给读者一个改不了他想改的键的面板。
+🔴 **快捷键自定义的前置是收编阅读器自己的键** —— **收编已完成（2026-10-12）**：`src/features/reader/readerKeys.ts` 是一张纯表，12 条绑定各有稳定 id 与中文标题（翻章翻页 / 标尺步进 / 灯箱 / 浮层关闭），`ReaderPage` 那 105 行分支换成「搭上下文 → 解一个 id → 翻译成调用」，`readerKeys.test.ts` 11 条用例把整张判定表钉住（改之前这块**一条单测都没有**，只有浏览器套件能碰到）。**剩下的才是面板**：把覆盖值写进 settings、`resolveReaderKey` 先查覆盖，再给设置页一块录制键的 UI。面板要动的是 `keys`，闸门（`when`）与 `inEditable` / `keepDefault` 都跟按键无关，不该被面板改到。
 
 ### 明确不做
 

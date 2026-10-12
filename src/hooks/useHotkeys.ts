@@ -1,28 +1,13 @@
 import { useEffect } from "react";
 
-import type { Shortcut } from "@/lib/commands";
+import { isEditableTarget, shortcutMatches } from "@/lib/commands";
 import { useCommandStore } from "@/stores/commands";
 
-function isMod(event: KeyboardEvent, mod?: boolean): boolean {
-  if (!mod) return !event.metaKey && !event.ctrlKey;
-  return event.metaKey || event.ctrlKey;
-}
-
-function matches(event: KeyboardEvent, shortcut: Shortcut): boolean {
-  if (event.altKey !== !!shortcut.alt) return false;
-  if (event.shiftKey !== !!shortcut.shift) return false;
-  if (!isMod(event, shortcut.mod)) return false;
-  return event.key.toLowerCase() === shortcut.key.toLowerCase();
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false;
-  if (target.isContentEditable) return true;
-  const tag = target.tagName;
-  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
-}
-
-/** Wire the command registry's shortcuts to the global keydown stream. */
+/** Wire the command registry's shortcuts to the global keydown stream.
+ *
+ *  This is the one place a *global* hotkey is matched. Keys whose meaning
+ *  depends on what the reader is showing are not global and do not live here —
+ *  they resolve through their own table (`features/reader/readerKeys.ts`). */
 export function useHotkeys(): void {
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -31,7 +16,7 @@ export function useHotkeys(): void {
       for (const command of commands) {
         if (!command.shortcut) continue;
         if (command.isEnabled && !command.isEnabled()) continue;
-        const hit = command.shortcut.some((s) => matches(event, s));
+        const hit = command.shortcut.some((s) => shortcutMatches(event, s));
         if (!hit) continue;
         event.preventDefault();
         event.stopPropagation();

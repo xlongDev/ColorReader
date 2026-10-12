@@ -39,8 +39,13 @@ import { ReaderFooterControls, ReaderHeaderBar } from "@/features/reader/ReaderC
 import { ReaderPanels } from "@/features/reader/ReaderPanels";
 import { ReaderChapterView } from "@/features/reader/ReaderChapterView";
 import { PullBookmark } from "@/features/reader/PullBookmark";
-import { ReadingRuler, rulerStepForKey } from "@/features/reader/ReadingRuler";
+import { ReadingRuler } from "@/features/reader/ReadingRuler";
 import type { ReadingRulerHandle } from "@/features/reader/ReadingRuler";
+import {
+  resolveReaderKey,
+  type ReaderKeyContext,
+  type ReaderKeyId,
+} from "@/features/reader/readerKeys";
 import { relayRulerLayout, relayRulerTurn } from "@/features/reader/rulerPointer";
 import { medianCpm } from "@/features/reader/pace";
 import {
@@ -101,6 +106,7 @@ import { sessionNow, useSpeechSession } from "@/stores/speech";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import { useChrome } from "@/stores/chrome";
 import { cn } from "@/lib/cn";
+import { isEditableTarget } from "@/lib/commands";
 import type { PdfOutlineItem } from "@/lib/pdf";
 import type { Annotation, BookFormat, Bookmark, ChapterMeta, LocalFont } from "@/types/ipc";
 
@@ -1268,136 +1274,117 @@ function ReaderView({
   );
 
   // Keyboard paging.
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (lightboxPath !== null) {
-        if (event.key === "Escape") {
+  //
+  // The decision table itself is in `readerKeys.ts` — pure, so the whole of
+  // "which key does what, and when" is asserted there instead of only being
+  // reachable through the browser suite. What is left here is the two jobs that
+  // need this component's own closure: build the context the gates read, and
+  // turn a binding's id into the call that does the work.
+  const runReaderKey = useCallback(
+    (id: ReaderKeyId): void => {
+      switch (id) {
+        case "reader.lightbox.close":
           closeLightbox();
-        } else if (event.key === "ArrowRight") {
+          return;
+        case "reader.lightbox.next":
           stepLightbox(1);
-        } else if (event.key === "ArrowLeft") {
+          return;
+        case "reader.lightbox.prev":
           stepLightbox(-1);
-        } else {
           return;
-        }
-        event.preventDefault();
-        return;
+        case "reader.dismiss":
+          // One floating surface at a time: a lookup closes before any panel.
+          if (lookup) {
+            setLookup(null);
+            return;
+          }
+          if (pending) {
+            window.getSelection()?.removeAllRanges();
+            setPending(null);
+            return;
+          }
+          // The drawer's own way out, cleanup and all. This used to be written
+          // out here — clear the query, set the panel to none — and it forgot
+          // the other half of what the search drawer leaves behind, so Escape
+          // closed it and left foliate's match highlights painted on the page.
+          if (closePanel()) return;
+          if (fullscreen) void toggleFullscreen();
+          return;
+        case "reader.ruler.forward":
+          stepAlongReading(1);
+          return;
+        case "reader.ruler.back":
+          stepAlongReading(-1);
+          return;
+        case "reader.page.next":
+          flip(1);
+          return;
+        case "reader.page.prev":
+          flip(-1);
+          return;
+        // Vertical type runs the other way, so the arrow on the right is the
+        // page before the one on screen: the keys follow the pages, not the
+        // screen. The binding is named for the key, so this is where the
+        // direction is decided.
+        case "reader.turn.right":
+          flip(readsLeftward ? -1 : 1);
+          return;
+        case "reader.turn.left":
+          flip(readsLeftward ? 1 : -1);
+          return;
+        case "reader.chapter.next":
+          stepChapter(1);
+          return;
+        case "reader.chapter.prev":
+          stepChapter(-1);
+          return;
       }
-      if (event.key === "Escape") {
-        // One floating surface at a time: a lookup closes before any panel.
-        if (lookup) {
-          setLookup(null);
-          return;
-        }
-        if (pending) {
-          window.getSelection()?.removeAllRanges();
-          setPending(null);
-          return;
-        }
-        // The drawer's own way out, cleanup and all. This used to be written
-        // out here — clear the query, set the panel to none — and it forgot
-        // the other half of what the search drawer leaves behind, so Escape
-        // closed it and left foliate's match highlights painted on the page.
-        if (closePanel()) return;
-        if (fullscreen) {
-          void toggleFullscreen();
-        }
-        return;
-      }
+    },
+    [
+      closeLightbox,
+      // Not `panel`: the dismiss cascade asks `closePanel()` whether it
+      // consumed the key, and that callback keeps one identity across renders —
+      // so this no longer re-makes every time a drawer opens or closes.
+      closePanel,
+      flip,
+      fullscreen,
+      lookup,
+      pending,
+      readsLeftward,
+      stepAlongReading,
+      stepChapter,
+      stepLightbox,
+      toggleFullscreen,
+    ],
+  );
+
+  // Re-binds only when something a gate reads changes. `settings.readingRuler`
+  // is in that list for the reason it always was: the band claims the arrows
+  // only while it is on, so without it the key that just turned the band on
+  // would keep turning pages until something else changed.
+  useEffect(() => {
+    const ctx: ReaderKeyContext = {
+      lightboxOpen: lightboxPath !== null,
+      rulerOn: settings.readingRuler,
+      paged,
+      readsLeftward,
+    };
+    const onKey = (event: KeyboardEvent) => {
+      const binding = resolveReaderKey(event, ctx);
+      if (!binding) return;
       // Don't hijack typing in any text field (search panel, etc.): a focused
       // input must keep its native caret/selection behaviour, and keys reaching
       // `window` from inside the book's iframe carry a `null` target so they are
-      // never mistaken for an editable field here.
-      const editing =
-        event.target instanceof HTMLElement &&
-        (event.target.isContentEditable ||
-          event.target.tagName === "INPUT" ||
-          event.target.tagName === "TEXTAREA" ||
-          event.target.tagName === "SELECT");
-      if (editing) return;
-      // The reading ruler owns the arrows while it is on, because that is what
-      // reading with it means: each press lays the band over the next block of
-      // lines, and in the scrolled layout the page follows the band past the
-      // trigger line — the arrows themselves never scroll instead of it. Only
-      // when the band runs out of page does the key move the reading instead.
-      //
-      // Left/Right are spoken for: by the page turns in vertical type, and by
-      // the chapter steps of the scroll layout (the band walks only up and down
-      // a continuous flow). Up/Down step the band in both.
-      if (settings.readingRuler) {
-        // Left/Right are spoken for: by the page turns in vertical type, and by
-        // the chapter steps of the scroll layout. Up/Down step the band in both.
-        const step = rulerStepForKey(event.key, readsLeftward || !paged);
-        if (step !== 0) {
-          stepAlongReading(step);
-          event.preventDefault();
-          return;
-        }
-      }
-      // Page-turner keys. A pedal that presents as a keyboard sends one of
-      // these: PageUp/PageDown on the ones that mimic a document reader, Space
-      // on the ones that mimic a clicker, and the media keys on the ones that
-      // mimic a remote. Space and the media keys are claimed here because in a
-      // paged layout they do nothing otherwise — in the scroll layout the
-      // browser's own Space and PageDown are the right answer and are left
-      // alone.
-      if (paged) {
-        const dir =
-          event.key === "PageDown" || event.key === "MediaTrackNext"
-            ? 1
-            : event.key === "PageUp" || event.key === "MediaTrackPrevious"
-              ? -1
-              : 0;
-        if (dir !== 0) {
-          flip(dir);
-          event.preventDefault();
-          return;
-        }
-        if (event.key === " " && !event.shiftKey) {
-          flip(1);
-          event.preventDefault();
-          return;
-        }
-      }
-      if (paged && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
-        const ahead = event.key === (readsLeftward ? "ArrowLeft" : "ArrowRight");
-        flip(ahead ? 1 : -1);
-        event.preventDefault();
-        return;
-      }
-      if (event.key === "ArrowRight") {
-        stepChapter(1);
-        event.preventDefault();
-      }
-      if (event.key === "ArrowLeft") {
-        stepChapter(-1);
-        event.preventDefault();
-      }
+      // never mistaken for an editable field here. Escape is the exception — it
+      // is how the drawer closes, and the caret is in that drawer's own field
+      // when it is pressed.
+      if (!binding.inEditable && isEditableTarget(event.target)) return;
+      runReaderKey(binding.id);
+      if (!binding.keepDefault) event.preventDefault();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [
-    flip,
-    fullscreen,
-    lightboxPath,
-    lookup,
-    closeLightbox,
-    // Not `panel`: the handler asks `closePanel()` whether it consumed the
-    // key, and that callback keeps one identity across renders — so this
-    // listener no longer re-binds every time a drawer opens or closes.
-    closePanel,
-    paged,
-    pending,
-    readsLeftward,
-    // The ruler claims the arrows only while it is on, so the handler has to
-    // re-bind when it is switched on — otherwise the key that just turned the
-    // band on would keep turning pages until something else changed.
-    settings.readingRuler,
-    stepAlongReading,
-    stepChapter,
-    stepLightbox,
-    toggleFullscreen,
-  ]);
+  }, [lightboxPath, paged, readsLeftward, runReaderKey, settings.readingRuler]);
 
   // One step of the page, whichever way this layout moves: a page turn in the
   // paged layouts, a chapter in the scrolled one — the same split the arrow

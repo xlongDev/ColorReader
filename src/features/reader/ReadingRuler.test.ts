@@ -5,9 +5,11 @@ import { rulerStepForKey } from "@/features/reader/ReadingRuler";
 /**
  * Which arrow keys the ruler claims while it is on.
  *
- * This is the whole keyboard contract, and it is one function because of it: the
- * page's own handler asks this first and only turns the page when the band says
- * there is no block left in that direction.
+ * This is the whole keyboard contract, and it is one function because of it:
+ * the reader's key table asks this before offering Left/Right to the page
+ * turns, so a key this answers 0 for is a key the band does not want and the
+ * turn below it takes. (`readerKeys.test.ts` is where that hand-off is
+ * asserted, alongside the rest of the table.)
  */
 describe("rulerStepForKey", () => {
   it("steps the band with all four arrows in horizontal type", () => {
