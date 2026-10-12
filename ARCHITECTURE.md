@@ -609,7 +609,7 @@ Liquid Glass 的代价是 `backdrop-filter`：**嵌套的玻璃会把模糊一�
 
 **自动更新已落地**（2026-09-15）。机制是 Tauri 的 updater + process 两个插件：`check()` 读 `plugins.updater.endpoints` 指向的 `latest.json`（GitHub Releases 的 `releases/latest/download/` 路径），验签通过后 `downloadAndInstall()`，再 `relaunch()` 换到新版本。**它的信任根是一对自己生成的 minisign 密钥**（`pnpm tauri signer generate`；公钥钉在 `tauri.conf.json`，私钥只进 GitHub Secrets）——与 Apple / 微软证书无关，所以没有平台证书也能做。
 
-capability 只放行实际用到的三条：`updater:allow-check`、`updater:allow-download-and-install`、`process:allow-restart` —— `relaunch()` 走的是 `plugin:process|restart`，`exit` 没有放行。入口在设置的「关于」区，**只做手动检查**：自动检查需要一个能自己冒出来的通知面（横幅或角标），那个还不存在，而静默到达的更新比读者主动要的更新更糟。
+capability 只放行实际用到的三条：`updater:allow-check`、`updater:allow-download-and-install`、`process:allow-restart` —— `relaunch()` 走的是 `plugin:process|restart`，`exit` 没有放行。**每次 launch 一次延迟检查（8 s 后）**，配 `UpdateBanner`（外壳顶层横幅，可关闭，只对「有新版」出现；检查失败不打扰任何人），这就是当初「缺一张能自己冒出来的通知面」的那个面（2026-10-12 落地）。状态住在 `stores/updater.ts`：设置的「关于」行与横幅两个写者、两个读者共享同一份状态机，谁安装都一起动。角标在全屏阅读时不绘制。**启动检查只发现、不安装**——安装永远是读者按的。
 
 两条必须成对记住的约束：① `releaseDraft` 必须是 `false` —— GitHub 的 `releases/latest` 明确跳过草稿，草稿发布会让已安装的客户端永远查不到东西；② **私钥丢失后，已经装出去的版本再也收不到更新**（只能换密钥 + 让用户手动重装），所以它是必须先备份的机密。
 

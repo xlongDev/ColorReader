@@ -5,6 +5,7 @@ import { CaretRight } from "@phosphor-icons/react";
 
 import { TitleBar } from "@/components/layout/TitleBar";
 import { NavList } from "@/components/layout/NavList";
+import { UpdateBanner } from "@/components/layout/UpdateBanner";
 import { CommandPalette } from "@/components/command/CommandPalette";
 import { GlassSidebar } from "@/components/glass/sidebar";
 import { GlassPanel } from "@/components/glass/panel";
@@ -207,6 +208,11 @@ export function AppShell() {
         <div className="app-backdrop" />
         <div className="app-grain" />
         {!readerFullscreen && <TitleBar />}
+        {/* The one place an update can appear without being asked for: one
+            delayed check per launch, and this bar is what it raises. Mounted
+            always (the check runs while the reader is fullscreen too); it
+            renders nothing in the immersive reader — see `UpdateBanner`. */}
+        <UpdateBanner />
         <div
           className={
             readerFullscreen ? "flex min-h-0 flex-1" : "flex min-h-0 flex-1 gap-3 px-3 pb-3"

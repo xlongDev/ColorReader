@@ -32,7 +32,7 @@ import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
 import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from "@/hooks/useSync";
 import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
 import { useDeleteFont, useFonts, useImportFont } from "@/hooks/useFonts";
-import { useUpdater, type UpdateState } from "@/hooks/useUpdater";
+import { useUpdater, type UpdateState } from "@/stores/updater";
 import { useExportBackup, useStageBackup } from "@/hooks/useBackup";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { acceptOf, pickFiles as pickBrowserFiles } from "@/lib/pickFile";
