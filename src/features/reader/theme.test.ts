@@ -92,6 +92,11 @@ function face(family: string, weight: string, url: string, display = "swap"): st
   return `@font-face { font-family: "${family}"; font-weight: ${weight}; font-display: ${display}; src: url("${url}") format("woff2"); }`;
 }
 
+/** Takes every stylesheet this file added back out, mid-test. */
+function removeSheets(): void {
+  for (const element of installed.splice(0)) element.remove();
+}
+
 afterEach(() => {
   for (const element of installed.splice(0)) element.remove();
 });
@@ -180,17 +185,21 @@ describe("bundledFacesFor", () => {
 });
 
 describe("offeredFontStacks", () => {
-  it("withholds the bundled face when this build shipped no rules for it", () => {
-    // The web build swaps the webfont package's stylesheet out (see
-    // `vite.config.ts`). Offering 霞鹜文楷 there would fall through the stack
-    // to the system 楷体 without saying anything — the same silent
-    // substitution a deleted imported font used to cause.
-    expect(offeredFontStacks().map((font) => font.key)).not.toContain("lxgw");
+  it("offers 霞鹜文楷 in this build, which ships it", () => {
+    // The desktop build carries the webfont package (lazily — see
+    // `useBundledFont`), so the picker may offer the face.
+    expect(offeredFontStacks().map((font) => font.key)).toContain("lxgw");
     expect(offeredFontStacks().map((font) => font.key)).toContain("kai");
   });
 
-  it("offers it once the face is declared", () => {
+  it("does not decide from whether the rules happen to be in the document", () => {
+    // 🔴 The regression this guards: deciding by asking the CSSOM made the
+    // picker hide 霞鹜文楷 as soon as the sheet became lazy, because the rules
+    // are absent until a reader picks the font — so picking it became
+    // impossible. The answer is a build-time alias (`bundledFont.ts`, aliased
+    // to `no-bundled-font.ts` for the web build) and nothing in the DOM.
     install(face("LXGW WenKai", "400", "/assets/lxgw.woff2"));
+    removeSheets();
     expect(offeredFontStacks().map((font) => font.key)).toContain("lxgw");
   });
 });

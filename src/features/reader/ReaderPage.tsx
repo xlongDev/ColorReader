@@ -66,6 +66,7 @@ import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionTo
 import type { AnnotationStyle } from "@/types/ipc";
 import { useTtsHost } from "@/features/reader/TtsHost";
 import { resolveFont, resolveSurface, readerGlassVars } from "@/features/reader/theme";
+import { useBundledFont } from "@/features/reader/useBundledFont";
 import {
   useAnnotations,
   useAnchorAnnotation,
@@ -1747,9 +1748,17 @@ function ReaderView({
 
   // Typography and palette handed to the foliate renderer: the book keeps its
   // own CSS, the injected stylesheet wins over it for the reading settings.
+  //
+  // `font` is the *effective* key, not the stored one: while 霞鹜文楷's bundled
+  // sheet is still being fetched the hook answers 楷体, because the rules that
+  // style the section are read out of the CSSOM and are not there yet. Both
+  // reading paths ask the same hook — they share one stylesheet's worth of
+  // rules, and each asking for a different answer would show the reader two
+  // fonts in one book.
+  const font = useBundledFont(settings.fontFamily);
   const foliateStyle = useFoliateStyle({
     fontSize,
-    font: settings.fontFamily,
+    font,
     lineHeightIdx,
     paraGapIdx,
     indent,
@@ -1827,7 +1836,7 @@ function ReaderView({
 
   const articleStyle: CSSProperties = {
     fontSize: `${fontSize}px`,
-    fontFamily: resolveFont(settings.fontFamily),
+    fontFamily: resolveFont(font),
     lineHeight: LINE_HEIGHTS[lineHeightIdx],
     // Wallpaper chapters read off the book's own paper art (light in both
     // themes), so the ink stays dark there instead of following the surface.

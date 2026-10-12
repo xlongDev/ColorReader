@@ -5,14 +5,14 @@ import { AppRouter } from "@/app/router";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { MiniBar } from "@/features/reader/MiniBar";
 import "@/styles/globals.css";
-// LXGW WenKai ships its own `@font-face` declarations. Importing the styles
-// here registers the family globally so it is available everywhere — the
-// reader's font picker, the notes editor, anywhere that reads a font stack
-// from `theme.ts`. The 29 MB of subset woff2 files only download when the
-// browser sees a glyph from the corresponding `unicode-range`, so the cost
-// of an unused font is zero. The web build swaps this import for an empty
-// sheet — see `vite.config.ts` — because the rules alone are 539 KB.
-import "lxgw-wenkai-webfont/style.css";
+// 🔴 LXGW WenKai is deliberately NOT imported here. Its 582 `@font-face` rules
+// are 539 KB — the single largest thing in the first paint — and the font is
+// the fifth option in a picker whose default is 「系统」, so almost every
+// session was paying to parse a family it never used. It loads on demand
+// instead: `useBundledFont` fetches the sheet when the reader picks it, and
+// nothing else in the app needs the rules in the document. The 29 MB of subset
+// woff2 were never the cost — they only download when a glyph falls in their
+// `unicode-range`, and a section fetches only the handful its own glyphs hit.
 
 const container = document.getElementById("root");
 if (!container) throw new Error("Root container #root not found");

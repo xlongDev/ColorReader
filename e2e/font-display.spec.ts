@@ -20,20 +20,47 @@ import { expect, test } from "@playwright/test";
  * `FontFace.display` is the descriptor as the engine parsed it, so this fails
  * if the plugin is dropped, if the package is upgraded into a sheet that
  * bypasses PostCSS, or if the family stops loading altogether.
+ *
+ * 🔴 The sheet is **not** in the document at startup any more: 582 rules
+ * (539 KB) load on the reader picking 霞鹜文楷 (`useBundledFont`). So this
+ * picks the font first and waits for `document.fonts` to report the family —
+ * reading the counters at startup would only measure the laziness. `document.fonts`
+ * only lists faces the engine has *parsed*, so its growing is the signal that
+ * the sheet arrived, and it is the same signal a real reader waits for.
  */
 test("霞鹜文楷 is held back rather than swapped in", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto("/?demo=1");
-  await expect(page.locator("[data-book-cover]").first()).toBeVisible();
+  await page
+    .getByRole("button", { name: /我们为什么会生病/ })
+    .first()
+    .click();
+  await expect(page.getByRole("button", { name: "阅读设置" }).first()).toBeVisible({
+    timeout: 15_000,
+  });
 
-  const faces = await page.evaluate(() => {
-    const out: Record<string, number> = {};
-    for (const face of document.fonts) {
-      const family = face.family.replace(/["']/g, "").trim();
-      if (family !== "LXGW WenKai") continue;
-      out[face.display] = (out[face.display] ?? 0) + 1;
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.waitForTimeout(700);
+  await page.getByRole("button", { name: "霞鹜文楷" }).first().click();
+
+  const faces = await page.evaluate(async () => {
+    const count = () => {
+      const out: Record<string, number> = {};
+      for (const face of document.fonts) {
+        const family = face.family.replace(/["']/g, "").trim();
+        if (family !== "LXGW WenKai") continue;
+        out[face.display] = (out[face.display] ?? 0) + 1;
+      }
+      return out;
+    };
+    // The sheet arrives as a separate stylesheet, so poll the engine's own
+    // view of it rather than sleeping a guessed interval.
+    for (let i = 0; i < 40; i += 1) {
+      const seen = count();
+      if ((seen.block ?? 0) > 0) return seen;
+      await new Promise((done) => setTimeout(done, 150));
     }
-    return out;
+    return count();
   });
 
   // 291 subsets today. Not pinned exactly, because the number belongs to the

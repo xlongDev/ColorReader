@@ -10,6 +10,7 @@
 
 import type { CSSProperties } from "react";
 
+import { BUNDLED_FONT_AVAILABLE } from "@/features/reader/bundledFont";
 import type { LocalFont } from "@/types/ipc";
 
 export interface ReadingSurface {
@@ -359,16 +360,21 @@ export function bundledFacesFor(key: string): string {
 /**
  * The stacks the picker may offer.
  *
- * A bundled face is only offered where its `@font-face` rules actually exist.
- * The web build ships without the webfont package (see `vite.config.ts`), and
- * offering 霞鹜文楷 there would fall through the stack to the system 楷体
- * without a word — the same silent substitution that used to happen when an
- * imported font was deleted while it was selected. Deciding from the rules
- * rather than from a build flag keeps the two halves of that arrangement from
- * drifting apart.
+ * A bundled face is only offered where this build ships it. The web build does
+ * not (see `vite.config.ts`), and offering 霞鹜文楷 there would fall through the
+ * stack to the system 楷体 without a word — the same silent substitution that
+ * used to happen when an imported font was deleted while it was selected.
+ *
+ * 🔴 Decided by [`BUNDLED_FONT_AVAILABLE`] rather than by asking the CSSOM
+ * whether the rules are there. It used to ask, and the moment the sheet became
+ * lazy (loaded on the reader picking the font) that answer flipped to "no face
+ * here", so the picker stopped offering the very font whose loading would have
+ * supplied the rules — a lock that shut itself. A build-time alias in
+ * `vite.config.ts` answers it where the sheet's own removal is decided, so the
+ * two halves are the same decision rather than two.
  */
 export function offeredFontStacks(): FontOption[] {
-  return FONT_STACKS.filter((font) => !font.bundled || bundledFontFaces(font.bundled) !== "");
+  return FONT_STACKS.filter((font) => !font.bundled || BUNDLED_FONT_AVAILABLE);
 }
 
 export const PAGE_TRANSITIONS: { key: PageTransition; label: string }[] = [
