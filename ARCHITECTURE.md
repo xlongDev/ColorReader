@@ -257,6 +257,8 @@ DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CO
 
 命名是这条链的关键一步：字体在 CSS 里叫 `cr-<id>`，设置里选中它用 `custom:<id>`，**两个名字都由 id 推出来**。这让 `resolveFont` 保持成一个对设置值的纯函数——选择器有列表，样式构建器没有。
 
+**霞鹜文楷是唯一一个「不导入也能用」的字面**，而且它只活在 `pnpm dev`：`lxgw-wenkai-webfont` 是 582 个 `@font-face` 规则加 29 MB 子集，凡是要打包出去的构建都不带它——GitHub Pages 预览（`PAGES_BASE`）与桌面安装包（`CR_NO_BUNDLED_FONT`，`scripts/build-app.mjs` 经 `beforeBuildCommand` 设置）都在 `vite.config.ts` 里把 `bundledFont` 模块与样式表换成空壳，选择器因此不再提供这个字体（`offeredFontStacks` 读 `BUNDLED_FONT_AVAILABLE`），而不是静默回退到系统楷体。实测三种构建：标准 35 MB / 582 子集，两个打包构建各 5.8 MB / 0 子集。🔴 别把这两条别名写成 `resolve.alias` 对象里排在 `"@"` 后面的条目：字符串别名按前缀匹配，`"@"` 会先吞掉所有 `@/…`，排在后面的精确别名永远不生效——这个坑真实存在过几个月，两个「已剔除」的构建一直打着全部 29 MB。
+
 `@font-face` 要**分别**声明在两处，因为书的一节是一个独立文档，应用文档里的声明进不去它：书的那份随注入的样式表一起进 section（`FoliateStyle.fontFaces`），应用侧这份在 `AppShell` 里渲染一个 `<style>`，覆盖 prose 通路与设置界面。`font-display: swap` 是必需的：默认行为会在字体下载完之前不显示文字，而中文面孔有几十兆。
 
 最后两处容易漏：CSP 的 `font-src` 必须放行资源协议的源，否则 iframe 里的字体被策略挡掉；删除一个正在使用的字体时，`useDeleteFont` 会把设置退回 `system` —— 否则阅读面会去请求一个再也没有 `@font-face` 声明过的族名，文字悄悄变成浏览器的兜底字体，屏幕上没有任何解释。

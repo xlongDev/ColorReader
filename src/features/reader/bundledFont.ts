@@ -1,27 +1,32 @@
 /**
- * The one thing the web build does not ship: LXGW WenKai.
+ * The one thing no shipping build carries: LXGW WenKai.
  *
  * The webfont package is 582 `@font-face` rules — 539 KB, the largest thing in
- * the first paint — pointing at 29 MB of subsets. GitHub Pages carries a UI
- * preview with no Rust behind it, so `vite.config.ts` swaps the stylesheet for
- * an empty sheet there. The desktop bundle keeps the package and now loads it
+ * the first paint — pointing at 29 MB of subsets. Both builds that ship leave
+ * them out (`vite.config.ts`): the GitHub Pages preview, which has no Rust
+ * behind it, and the desktop app bundle, which would carry 29 MB for a family
+ * that is the fifth option in a picker defaulting to 「系统」. Only `pnpm dev`
+ * resolves this module — the face is served from `node_modules` there, loaded
  * lazily (see `loadBundledFontCss`), so this file is the other half of that
- * arrangement: the *decision* whether the face exists at all, which CSSOM can no
- * longer answer once the sheet is no longer there at startup.
+ * arrangement: the *decision* whether the face exists at all, which CSSOM can
+ * no longer answer once the sheet is no longer there at startup.
  *
  * 🔴 Not a build flag read in two places — that is exactly how the two halves
- * drift. This module is aliased: the web build resolves it to
- * `no-bundled-font.ts`, so the answer is decided in `vite.config.ts` beside the
- * alias that removes the rules in the first place.
+ * drift. This module is aliased: the shipping builds resolve it to
+ * `no-bundled-font.ts`, so the answer is decided in `vite.config.ts` beside
+ * the alias that removes the rules in the first place.
  */
 
 /**
  * Whether this build carries the bundled webfont at all.
  *
- * Desktop: `true`, and the face is one stylesheet away. Web: `false`, and
- * offering 霞鹜文楷 would fall through the stack to the system 楷体 with no word
- * — the same silent substitution that used to happen when an imported font was
- * deleted while it was selected.
+ * Dev: `true`, and the face is one stylesheet away. Anything that ships:
+ * `false` — the GitHub Pages preview and the desktop app bundle both leave the
+ * package out (`vite.config.ts`), and offering 霞鹜文楷 would fall through the
+ * stack to the system 楷体 with no word — the same silent substitution that
+ * used to happen when an imported font was deleted while it was selected. The
+ * picker hides the option instead (`offeredFontStacks`), so there is no build
+ * where the offer exists and the rules do not.
  */
 export const BUNDLED_FONT_AVAILABLE = true;
 

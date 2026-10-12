@@ -73,36 +73,65 @@ export default defineConfig({
     },
   },
   resolve: {
-    alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
+    // An array, in this order, and the order is load-bearing: a string alias
+    // entry matches by prefix (`find` plus a `/`), so a bare `"@"` would
+    // prefix-match every `@/…` import — including the webfont swap below —
+    // and the swap would never fire. It did not, for months: the two entries
+    // here used to sit *after* `"@"` in an object, so both shipping builds
+    // resolved the real module and shipped all 29 MB of subsets while every
+    // comment said they did not. The CSS entry additionally has to tolerate
+    // the `?url` query the dynamic import carries — a string entry does not.
+    alias: [
+      ...(process.env.PAGES_BASE || process.env.CR_NO_BUNDLED_FONT
+        ? [
+            {
+              find: "@/features/reader/bundledFont",
+              replacement: fileURLToPath(
+                new URL("./src/features/reader/no-bundled-font.ts", import.meta.url),
+              ),
+            },
+          ]
+        : []),
+      {
+        find: "@",
+        replacement: fileURLToPath(new URL("./src", import.meta.url)),
+      },
       // The bare specifier imports the vendored readest fork of foliate-js
       // (MIT) instead of the npm package, so the paginator carries readest's
       // background/page fixes. TS resolves the same specifiers through the
       // ambient declarations in src/types/foliate-js.d.ts.
-      "foliate-js": fileURLToPath(new URL("./src/vendor/foliate-js", import.meta.url)),
-      // The web build (GitHub Pages, the only build with `PAGES_BASE` set)
-      // swaps the bundled webfont's stylesheet for an empty one. That package
-      // is 582 `@font-face` rules — 539 KB, the largest thing in the first
-      // paint — pointing at 29 MB of subsets that only ever download if a
-      // glyph falls in their range. The desktop bundle keeps them, loaded
-      // lazily (see `bundledFont.ts`); a preview site with no backend behind
-      // it does not need to carry either.
+      {
+        find: "foliate-js",
+        replacement: fileURLToPath(new URL("./src/vendor/foliate-js", import.meta.url)),
+      },
+      // Both builds that *ship* leave the bundled webfont out — the GitHub
+      // Pages preview (`PAGES_BASE`, no backend behind it) and the desktop app
+      // bundle (`CR_NO_BUNDLED_FONT`, set by `scripts/build-app.mjs` through
+      // Tauri's beforeBuildCommand). That package is 582 `@font-face` rules
+      // — 539 KB, the largest thing in the first paint — pointing at 29 MB of
+      // subsets; a reader who wants the face imports their own file, the way
+      // every other font in this reader works. Only `pnpm dev` keeps it,
+      // served from `node_modules` with nothing emitted.
       //
-      // The second alias is the other half of the same decision: it swaps the
-      // module that *answers* whether the face exists, because once the sheet
-      // is no longer in the document at startup, CSSOM cannot answer it. Both
-      // live here so they cannot drift apart.
-      ...(process.env.PAGES_BASE
-        ? {
-            "lxgw-wenkai-webfont/style.css": fileURLToPath(
-              new URL("./src/styles/no-bundled-font.css", import.meta.url),
-            ),
-            "@/features/reader/bundledFont": fileURLToPath(
-              new URL("./src/features/reader/no-bundled-font.ts", import.meta.url),
-            ),
-          }
-        : {}),
-    },
+      // The first alias is the decision: it swaps the module that *answers*
+      // whether the face exists, because once the sheet is gone CSSOM can no
+      // longer answer it — `offeredFontStacks` offers the face only where
+      // `BUNDLED_FONT_AVAILABLE`, and the dynamic `import(…?url)` lives in the
+      // module being swapped, so the stylesheet never enters the graph at all.
+      // This regex is the backstop for any *other* import of the sheet, with
+      // or without a query, and it is a RegExp precisely because a string
+      // entry does not match `…/style.css?url`.
+      ...(process.env.PAGES_BASE || process.env.CR_NO_BUNDLED_FONT
+        ? [
+            {
+              find: /^lxgw-wenkai-webfont\/style\.css(\?.*)?$/,
+              replacement: fileURLToPath(
+                new URL("./src/styles/no-bundled-font.css", import.meta.url),
+              ),
+            },
+          ]
+        : []),
+    ],
   },
   clearScreen: false,
   envPrefix: ["VITE_", "TAURI_ENV_"],

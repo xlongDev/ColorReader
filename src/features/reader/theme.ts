@@ -360,9 +360,10 @@ export function bundledFacesFor(key: string): string {
 /**
  * The stacks the picker may offer.
  *
- * A bundled face is only offered where this build ships it. The web build does
- * not (see `vite.config.ts`), and offering 霞鹜文楷 there would fall through the
- * stack to the system 楷体 without a word — the same silent substitution that
+ * A bundled face is only offered where this build ships it. No shipping build
+ * does — the web preview and the desktop app bundle both leave the package out
+ * (see `vite.config.ts`) — and offering 霞鹜文楷 there would fall through the
+ * stack to the system 楷体 without a word, the same silent substitution that
  * used to happen when an imported font was deleted while it was selected.
  *
  * 🔴 Decided by [`BUNDLED_FONT_AVAILABLE`] rather than by asking the CSSOM

@@ -1,13 +1,15 @@
-/* Stands in for `lxgw-wenkai-webfont/style.css` in the web build only — see
+/* Stands in for `lxgw-wenkai-webfont/style.css` in the shipping builds — see
    `vite.config.ts`.
 
    That package is 582 `@font-face` rules (539 KB of CSS, the single largest
-   thing in the first paint) pointing at 29 MB of subset woff2. Both are worth
-   carrying in the desktop bundle, where the reader can pick 霞鹜文楷 and the
-   fonts are served off disk. Neither is worth carrying to GitHub Pages, which
-   ships a UI preview with no Rust backend behind it.
+   thing in the first paint) pointing at 29 MB of subset woff2. Carrying them
+   is worth it only in `pnpm dev`, where they are served from `node_modules`:
+   the GitHub Pages preview ships a UI preview with no Rust backend behind it,
+   and the desktop app bundle would pay 29 MB for a family that is the fifth
+   option in a picker defaulting to 「系统」— a reader who wants 霞鹜文楷
+   imports their own file, the way every other font in this reader works.
 
-   Nothing else changes: the picker decides what to offer from whether the
-   `@font-face` rules exist (`offeredFontStacks`), so a build without this
+   Nothing else changes: the picker decides what to offer from
+   `BUNDLED_FONT_AVAILABLE` (`offeredFontStacks`), so a build without this
    file simply stops offering the face instead of silently falling through to
    the system 楷体. */
