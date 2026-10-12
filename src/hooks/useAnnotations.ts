@@ -71,7 +71,15 @@ export function useAnnotationsByBook(bookIds: readonly string[]) {
         const id = bookIds[index];
         if (id !== undefined) byBook.set(id, result.data ?? []);
       });
-      return { byBook, loading: results.some((result) => result.isPending) };
+      // The read failure, folded the same way `loading` is: callers surface it
+      // through <QueryError> rather than each writing their own empty state.
+      const error = results.find((result) => result.isError)?.error;
+      return {
+        byBook,
+        loading: results.some((result) => result.isPending),
+        error,
+        refetch: () => results.forEach((result) => void result.refetch()),
+      };
     },
   });
 }

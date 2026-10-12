@@ -3,6 +3,7 @@ import { motion } from "motion/react";
 import { ClockCounterClockwise, MagnifyingGlass, X } from "@phosphor-icons/react";
 
 import { GlassInput } from "@/components/glass/input";
+import { QueryError } from "@/components/common/QueryError";
 import { hitLocation, parseSnippet } from "@/features/search/snippet";
 import { useSearch } from "@/hooks/useSearch";
 import { cn } from "@/lib/cn";
@@ -208,7 +209,13 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
             ))}
           </div>
         ) : query.isError ? (
-          <p className="text-danger text-[13px] leading-relaxed">检索失败：{String(query.error)}</p>
+          <QueryError
+            error={query.error}
+            onRetry={() => void query.refetch()}
+            icon={<MagnifyingGlass size={26} weight="duotone" />}
+            title="检索失败"
+            description="这次检索没有返回结果。可以重试一次，或换个关键词再试。"
+          />
         ) : rows.length === 0 ? (
           <p className="text-text-3 text-[13px] leading-relaxed">没有找到「{trimmed}」。</p>
         ) : (

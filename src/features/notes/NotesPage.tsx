@@ -41,6 +41,7 @@ import { GlassDialog, OverlayPortal } from "@/components/glass/overlay";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { NoteCell } from "@/features/reader/AnnotationNote";
 import { EmptyState } from "@/components/common/EmptyState";
+import { QueryError } from "@/components/common/QueryError";
 import { authorLine } from "@/features/library/format";
 import {
   exportPayload,
@@ -98,7 +99,7 @@ export function NotesPage() {
   const books = useBooks(SHELF_QUERY);
   const bookIds = useMemo(() => (books.data ?? []).map((book) => book.id), [books.data]);
   const annotations = useAnnotationsByBook(bookIds);
-  const { byBook } = annotations;
+  const { byBook, error: notesError, refetch: retryNotes } = annotations;
 
   // What the list is narrowed to, from the settings store: following a
   // highlight into its book unmounts this page, and a reader who narrows to
@@ -147,6 +148,14 @@ export function NotesPage() {
   // reading only their flag would flash "还没有标注" over a library that has
   // plenty, which is a lie the reader has no way to tell from the truth.
   const loading = books.isPending || annotations.loading;
+  // The read failure, surfaced the same way the shelf does: a human sentence
+  // plus the one action that can help (re-ask both halves). A quiet empty
+  // shelf is NOT an error and must never become a toast — <QueryError> only.
+  const readError = books.error ?? notesError;
+  const retryRead = () => {
+    void books.refetch();
+    void retryNotes();
+  };
 
   const total = tally(everything);
   const visible = tally(shown);
@@ -284,7 +293,16 @@ export function NotesPage() {
           />
 
           <div className="min-h-0 flex-1 overflow-y-auto">
-            {loading && everything.length === 0 ? (
+            {readError ? (
+              <QueryError
+                error={readError}
+                onRetry={retryRead}
+                icon={<Notebook size={26} weight="duotone" />}
+                title="笔记读不出来"
+                description="标注或书库这次没有读出来。先重试一次；如果还是不行，多半是本地的数据库文件出了问题。"
+                className="min-h-[40vh]"
+              />
+            ) : loading && everything.length === 0 ? (
               <p className="text-text-3 flex h-full items-center justify-center text-[13px]">
                 正在读取标注…
               </p>

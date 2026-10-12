@@ -1,9 +1,10 @@
-import { Clock, Fire, CalendarBlank, TrendUp, BookOpen } from "@phosphor-icons/react";
+import { Clock, Fire, CalendarBlank, TrendUp, BookOpen, ChartLineUp } from "@phosphor-icons/react";
 import { motion } from "motion/react";
 import { useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { EmptyState } from "@/components/common/EmptyState";
+import { QueryError } from "@/components/common/QueryError";
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassPanel } from "@/components/glass/panel";
@@ -312,8 +313,15 @@ function TopBooks({ books, onOpen }: { books: TopBook[]; onOpen: (bookId: string
 export function StatsPage() {
   const m = useMotion();
   const navigate = useNavigate();
-  const { data, isPending } = useReadingStats();
+  const { data, isPending, error: readingError, refetch: refetchReading } = useReadingStats();
   const library = useLibraryStats();
+  // The read failure, surfaced the same way the shelf does. A first-open with
+  // no reading yet is NOT an error and must never become a toast.
+  const readError = readingError ?? library.error;
+  const retryStats = () => {
+    void refetchReading();
+    void library.refetch();
+  };
   const clear = useClearReadingStats();
   const toast = useToasts((state) => state.push);
   const [clearOpen, setClearOpen] = useState(false);
@@ -348,7 +356,16 @@ export function StatsPage() {
       />
 
       <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-8 pb-8">
-        {isPending ? (
+        {readError ? (
+          <QueryError
+            error={readError}
+            onRetry={retryStats}
+            icon={<ChartLineUp size={26} weight="duotone" />}
+            title="统计读不出来"
+            description="阅读记录这次没有读出来。先重试一次；如果还是不行，多半是本地的数据库文件出了问题。"
+            className="min-h-[40vh]"
+          />
+        ) : isPending ? (
           <GlassPanel className="h-[92px] animate-pulse" />
         ) : (
           // `lg`, not `md`: at 768px the pane is ~500px and four columns are
