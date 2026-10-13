@@ -9,7 +9,6 @@ import {
   type CSSProperties,
 } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import type { FoliateHandle } from "./FoliateBookView";
 import { BookOpen, CaretLeft, CaretRight } from "@phosphor-icons/react";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 
@@ -22,17 +21,16 @@ import {
   IMAGE_PARAGRAPH_PREFIX,
   LINK_PARAGRAPH_PREFIX,
   WALLPAPER_PARAGRAPH_PREFIX,
-  isProseParagraph,
-  parseLinkParagraph,
 } from "@/features/reader/chapterText";
-import { usePdfZoom } from "@/features/reader/usePdfZoom";
-import { useFoliateBook } from "@/features/reader/useFoliateBook";
+import { useFoliateReading } from "@/features/reader/useFoliateReading";
 import { useZhConverter } from "@/features/reader/zhConvert";
 import { useFoliateStyle } from "@/features/reader/useFoliateStyle";
 import { useReaderFullscreen } from "@/features/reader/useReaderFullscreen";
 import { FULLSCREEN_MARGIN_BONUS, useReaderLayout } from "@/features/reader/useReaderLayout";
 import { applyPosition, columnPitch, flipPage } from "@/features/reader/paging";
-import { snapshotPdfTurn } from "@/features/reader/pdfTurn";
+import { usePdfReading } from "@/features/reader/usePdfReading";
+import { useProseReading } from "@/features/reader/useProseReading";
+import { setTtsWashRule } from "@/features/reader/pdfTextSelection";
 import type { CurlTurn } from "@/features/reader/pdfCurl";
 import { ImageLightbox } from "@/features/reader/ImageLightbox";
 import { ReaderFooterControls, ReaderHeaderBar } from "@/features/reader/ReaderChrome";
@@ -56,21 +54,18 @@ import {
   totalChars,
 } from "@/features/reader/progress";
 import {
-  highlightSegments,
-  inkWash,
   paragraphAt,
   resolveSelection,
   selectionBottom,
   type PendingSelection,
   type TextRange,
 } from "@/features/reader/selection";
-import { setTtsWashRule } from "@/features/reader/pdfTextSelection";
 import { washCss, washRule } from "@/features/reader/ttsWash";
 import { RsvpPlayer } from "@/features/reader/RsvpPlayer";
 import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionToolbar";
 import type { AnnotationStyle } from "@/types/ipc";
 import { useTtsHost } from "@/features/reader/TtsHost";
-import { resolveFont, resolveSurface, readerGlassVars } from "@/features/reader/theme";
+import { resolveSurface, readerGlassVars } from "@/features/reader/theme";
 import { useBundledFont } from "@/features/reader/useBundledFont";
 import {
   useAnnotations,
@@ -90,7 +85,6 @@ import {
   useBook,
   useBookImages,
   useChapter,
-  usePdfOutline,
   useReaderToc,
   useSetProgress,
 } from "@/hooks/useReader";
@@ -101,14 +95,13 @@ import { usePageCounter } from "@/hooks/usePageCounter";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
 import { useReaderPanels } from "@/hooks/useReaderPanels";
-import { LINE_HEIGHTS, PARA_GAPS, useReaderSettings, HIGHLIGHT_COLORS } from "@/stores/reader";
+import { LINE_HEIGHTS, PARA_GAPS, useReaderSettings } from "@/stores/reader";
 import { useSettings } from "@/stores/settings";
 import { sessionNow, useSpeechSession } from "@/stores/speech";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import { useChrome } from "@/stores/chrome";
 import { cn } from "@/lib/cn";
 import { isEditableTarget } from "@/lib/commands";
-import type { PdfOutlineItem } from "@/lib/pdf";
 import type { Annotation, BookFormat, Bookmark, ChapterMeta, LocalFont } from "@/types/ipc";
 
 /** Notes export reaches for the native save dialog; kept out of the reader's
@@ -157,13 +150,6 @@ const SCRUB_COMMIT = 0.35;
  * per render would rebuild the stylesheet handed to foliate on every render.
  */
 const NO_FONTS: LocalFont[] = [];
-
-/**
- * Stand-in for a PDF's bookmark outline before (or without) the query. A fresh
- * `[]` per render would re-seed the TOC panel's fold state on every re-render,
- * collapsing whatever the reader had opened.
- */
-const EMPTY_OUTLINE: PdfOutlineItem[] = [];
 
 /** Which side panel is open. Only one at a time, so they never stack. */
 /** Which side panel is open lives with the panels themselves: see
@@ -318,11 +304,6 @@ function ReaderView({
   // database are the same either way, so search, TTS and AI never care which
   // renderer is on screen.
   const useFoliate = isFoliateFormat(format);
-  // A foliate position is a CFI, an opaque string our (chapter, fraction)
-  // progress model cannot express. It rides in `books.location`; the
-  // localStorage key it used to park in is read once as a fallback and
-  // cleared the moment the database has the value.
-  const cfiKey = `colorreader:foliate:${bookId}`;
   // The highlight a followed `colorreader://` link names. A link carries an id,
   // not a position, so the row has to be in hand before anything can be
   // anchored to it.
@@ -333,17 +314,6 @@ function ReaderView({
         : ((annotations ?? []).find((annotation) => annotation.id === initialAnnotation) ?? null),
     [annotations, initialAnnotation],
   );
-  // foliate opens at a CFI or not at all, and a link's CFI only exists once the
-  // annotation list has landed — the route holds the reader back until it has,
-  // so this is settled by the time the view mounts. A link whose highlight is
-  // gone, deleted, or never anchored falls through to the saved position,
-  // which is the right degradation: the book still opens.
-  const startCfi = useMemo(() => {
-    if (!useFoliate) return null;
-    return deepLinkTarget?.cfi ?? initialCfi ?? localStorage.getItem(cfiKey);
-  }, [deepLinkTarget, initialCfi, useFoliate, cfiKey]);
-  const outlineQuery = usePdfOutline(bookId, isPdf);
-  const outline = outlineQuery.data ?? EMPTY_OUTLINE;
   // The selection the toolbar is showing, and where to put it. The shape is
   // shared rather than declared here: four renderers build one, two of them the
   // foliate view's own callbacks (see `PendingSelection`).
@@ -396,7 +366,9 @@ function ReaderView({
    * Aliased to the names the page and the view already used, so no consumer
    * changed. `useFoliateToc` is the one exception: it is not a hook call, it is
    * a question about the TOC, and next to `useFoliate` and `useFoliateStyle` it
-   * read like one.
+   * read like one. The wiring around the book — the view's handle, the two
+   * calls the ruler makes into it, the axis a vertical book reads along and the
+   * CFI it opens at — is `useFoliateReading`'s.
    */
   const {
     toc: foliateToc,
@@ -411,13 +383,21 @@ function ReaderView({
     select: onFoliateSelection,
     annotationClick: onFoliateAnnotationClick,
     anchor: onFoliateAnchor,
-  } = useFoliateBook({
+    ref: foliateRef,
+    clearPaintedMatches,
+    rulerLines: foliateRulerLines,
+    readsLeftward,
+    startCfi,
+  } = useFoliateReading({
+    bookId,
+    deepLinkTarget,
+    initialCfi,
+    writingMode: settings.writingMode,
     useFoliate,
     chapters,
     setChapterIdx,
     setDisplayProgress,
     setProgress,
-    cfiKey,
     setPending,
     setLookup,
     annotations,
@@ -426,31 +406,10 @@ function ReaderView({
 
   /** Continuous scroll vs paged single/double spread. */
   const paged = layoutMode !== "scroll";
-  /**
-   * Whether the next page lies to the left.
-   *
-   * A vertical column is read top-to-bottom and the columns run right-to-left,
-   * so the page after this one is the column on its *left*: the arrow keys
-   * have to point at where the next page comes from, not at a fixed side.
-   * foliate reads the axis the same way — a `vertical-rl` section turns pages
-   * on the horizontal-rtl convention — and only a foliate book can be vertical
-   * at all. A right-to-left horizontal book belongs here too; that would need
-   * the book's own `dir` plumbed out of the renderer.
-   */
-  const readsLeftward = useFoliate && settings.writingMode === "vertical";
   const scrollRef = useRef<HTMLDivElement>(null);
   // The reading viewport: the box the reading ruler is positioned against,
   // which is the pane below the header rather than the window.
   const viewportRef = useRef<HTMLDivElement>(null);
-  // The foliate view, driven imperatively (see flip /
-  // stepChapter): paging and sections never touch our chapter index.
-  const foliateRef = useRef<FoliateHandle | null>(null);
-  /** Drops the match highlights foliate painted into the pages. Stable,
-   *  because the panels hook keeps `close` identity-stable for the key
-   *  handler's dependency list. */
-  const clearPaintedMatches = useCallback(() => {
-    if (useFoliate) foliateRef.current?.clearSearch();
-  }, [useFoliate]);
   /**
    * Which panel is open, and the search drawer's query.
    *
@@ -467,11 +426,6 @@ function ReaderView({
     setSearch,
     close: closePanel,
   } = useReaderPanels(initialQuery, clearPaintedMatches);
-  // The reading ruler's lines, asked of the book rather than read from here:
-  // a foliate book's words are in section iframes, and only the view knows
-  // where those sections currently sit. Stable, because the ruler measures on
-  // it and an unstable prop would re-measure on every render.
-  const foliateRulerLines = useCallback(() => foliateRef.current?.rulerLines() ?? null, []);
   /**
    * Scrolls the reading flow by one measured distance, in the scrolled layout,
    * and reports how far it actually went.
@@ -493,7 +447,7 @@ function ReaderView({
       el.scrollTop = before + delta;
       return el.scrollTop - before;
     },
-    [useFoliate],
+    [useFoliate, foliateRef],
   );
   // The reading ruler, driven imperatively for the same reason the foliate view
   // is: an arrow key has to ask the band to step *before* it becomes a page turn,
@@ -535,7 +489,7 @@ function ReaderView({
     }
     const box = foliateRef.current?.selectionBox();
     if (box) setPending((prev) => (prev?.cfi ? { ...prev, ...box } : prev));
-  }, []);
+  }, [foliateRef]);
 
   const toolbarOpen = pending !== null;
   useEffect(() => {
@@ -588,41 +542,36 @@ function ReaderView({
       indent,
       fontFamily: settings.fontFamily,
     });
-  // Scroll-layout PDF bookkeeping: the slot height reported by PdfScrollView
-  // maps pages to scroll offsets, the label follows the scrolled page, and the
-  // suppress flag stops a page-jump's chapter load from re-applying position 0.
-  const pdfSlotH = useRef(0);
-  const suppressPdfPending = useRef(false);
-  const [pdfScrollPage, setPdfScrollPage] = useState<number | null>(null);
+
+  // The PDF path's own bookkeeping — the scroll slots, the pinch zoom, a page
+  // jump's position, the turn's snapshot and the view's three callbacks —
+  // lives in `usePdfReading`. Every input is a ref or a flag the page already
+  // has at this point, so the page keeps reading the same names below.
   const {
     zoom: pdfZoom,
     animated: pdfZoomAnimated,
     step: stepPdfZoom,
-  } = usePdfZoom(scrollRef, isPdf);
-  // The scrolled-page label only means something in the scroll layout; reset
-  // it when the layout flips (render-time adjust, the ImageLightbox pattern).
-  const [prevPaged, setPrevPaged] = useState(paged);
-  if (prevPaged !== paged) {
-    setPrevPaged(paged);
-    setPdfScrollPage(null);
-  }
-  const handlePdfLayout = useCallback(
-    (slotHeight: number) => {
-      pdfSlotH.current = slotHeight;
-      // The scroll view mounts lazily (Suspense), after the layout-switch
-      // effect has already run on an empty scroller; once the slots have real
-      // heights, re-anchor the fraction so entering scroll mode keeps the page.
-      if (slotHeight > 0 && layoutModeRef.current === "scroll") {
-        const el = scrollRef.current;
-        if (el) applyPosition(el, fractionRef.current, "scroll", marginRef.current);
-      }
-      // The PDF's text layer arrives with the pages, not with the chapter: tell
-      // the ruler the geometry changed, or its first placement measures whatever
-      // fragments happened to be painted when it asked.
-      relayRulerLayout(viewportRef.current);
-    },
-    [layoutModeRef, marginRef],
-  );
+    outline,
+    scrolledPage: pdfScrollPage,
+    claimPage: pdfClaimPage,
+    takeSuppressed: pdfTakeSuppressed,
+    trackScrolledPage: pdfTrackScrolledPage,
+    restoreScrollSlot: pdfRestoreScrollSlot,
+    turn: pdfTurn,
+    onSelection: onPdfSelection,
+    onAnnotationClick: onPdfAnnotationClick,
+    onLayout: handlePdfLayout,
+  } = usePdfReading({
+    bookId,
+    isPdf,
+    paged,
+    scrollRef,
+    viewportRef,
+    layoutModeRef,
+    marginRef,
+    fractionRef,
+    setPending,
+  });
   /** Folds each progress save into the reading-speed estimate. The hook owns
    *  the two refs that used to sit here — see `useReadingPace`. */
   const reportPace = useReadingPace();
@@ -819,20 +768,9 @@ function ReaderView({
       stop();
       setNav(clamped > chapterIdxRef.current ? 1 : -1);
       setChapterIdx(clamped);
-      if (isPdf) {
-        // A paged PDF has no scrollable overflow, so its fraction rides on
-        // the page index; a later mode switch re-anchors on the same page.
-        fractionRef.current = chapters.length > 1 ? clamped / (chapters.length - 1) : 0;
-        if (layoutModeRef.current === "scroll" && pdfSlotH.current > 0) {
-          const el = scrollRef.current;
-          if (el) {
-            // Position is set directly on the uniform slots; the upcoming
-            // chapter load must not re-apply fraction 0 over it.
-            suppressPdfPending.current = true;
-            el.scrollTop = clamped * pdfSlotH.current;
-          }
-        }
-      }
+      // A paged PDF has no scrollable overflow, so its fraction rides on the
+      // page index; a later mode switch re-anchors on the same page.
+      if (isPdf) pdfClaimPage(clamped, chapters.length);
       pendingScroll.current = 0;
       if (!isPdf) fractionRef.current = 0;
       const progress = globalProgress(chapters, clamped, 0);
@@ -842,7 +780,17 @@ function ReaderView({
       stopAutoScroll();
       if (debounceRef.current !== null) window.clearTimeout(debounceRef.current);
     },
-    [chapterIdxRef, chapters, isPdf, layoutModeRef, setProgress, stop, stopAutoScroll, useFoliate],
+    [
+      chapterIdxRef,
+      chapters,
+      isPdf,
+      pdfClaimPage,
+      setProgress,
+      stop,
+      stopAutoScroll,
+      useFoliate,
+      foliateRef,
+    ],
   );
 
   /** Jumps to a fraction inside a chapter, used by bookmarks. */
@@ -868,7 +816,7 @@ function ReaderView({
       // `goTo` resets the pending fraction; restore ours after it.
       pendingScroll.current = target;
     },
-    [chapterIdx, chapters, goTo, layoutModeRef, marginRef, useFoliate],
+    [chapterIdx, chapters, goTo, layoutModeRef, marginRef, useFoliate, foliateRef],
   );
 
   const onChapterEnd = useCallback(() => {
@@ -959,10 +907,7 @@ function ReaderView({
     (el: HTMLDivElement) => {
       // A PDF page jump already scrolled the uniform slots directly; the
       // chapter load that follows must not land fraction 0 on top of it.
-      if (suppressPdfPending.current) {
-        suppressPdfPending.current = false;
-        return;
-      }
+      if (pdfTakeSuppressed()) return;
       const focus = pendingFocus.current;
       pendingFocus.current = null;
       // The voice's landing, when this page was opened by a session that was
@@ -990,16 +935,10 @@ function ReaderView({
         el.querySelector(`[data-para-idx="${target}"]`)?.scrollIntoView({ block: "center" });
         return;
       }
+      // A PDF's scroll layout is a stack of uniform page slots, and the saved
+      // position is a *page index* — see `usePdfReading.restoreScrollSlot`.
       if (isPdf && layoutModeRef.current === "scroll") {
-        // A PDF's scroll layout is a stack of uniform page slots, and the saved
-        // position is a *page index*: the chapter fraction inside a page is
-        // always zero, so the fraction that lands on the page is the page's own
-        // share of the book. Without this the book reopens at its first page.
-        if (pdfSlotH.current > 0) {
-          el.scrollTop = chapterIdx * pdfSlotH.current;
-          return;
-        }
-        applyPosition(el, globalProgress(chapters, chapterIdx, 0), "scroll", marginRef.current);
+        pdfRestoreScrollSlot(el, chapterIdx, chapters);
         return;
       }
       applyPosition(el, frac, layoutModeRef.current, marginRef.current);
@@ -1011,6 +950,8 @@ function ReaderView({
       isPdf,
       layoutModeRef,
       marginRef,
+      pdfRestoreScrollSlot,
+      pdfTakeSuppressed,
       // `playFromStart` carries the queue and `onChapterEnd` in its own
       // identity, so neither is listed again here.
       playFromStart,
@@ -1074,34 +1015,20 @@ function ReaderView({
       // turn's own relay lands (see `flipPage` / the settle notice in `onScroll`).
       rulerDirRef.current = dir;
       relayRulerTurn(el, dir);
+      // A PDF page fills the viewport exactly — there is no column to slide,
+      // so a flip is a page step, and the page being left has to be copied out
+      // before the step. Those are the PDF branch's own (see
+      // `usePdfReading.turn`); what is left here is the turn's shared preamble.
       if (isPdf) {
-        // A PDF page fills the viewport exactly — there is no column to
-        // slide, so a flip is a page step (two at a time in the spread).
-        //
-        // The page being left has to be copied out before the step: it lives
-        // in the canvas pdf.js is about to redraw, so once the number changes
-        // there is nothing left to animate. The copy rides over the incoming
-        // page until the turn is done (see `pdfTurn.ts`). Scroll layout skips
-        // it — there the step is a scroll through a continuous strip.
-        const step = layoutModeRef.current === "double" ? 2 : 1;
-        const turn =
-          layoutModeRef.current !== "scroll"
-            ? snapshotPdfTurn(viewportRef.current, dir, pageTransition, reduce)
-            : null;
-        goTo(chapterIdx + dir * step);
-        if (!turn) return null;
-        // Held open for a gesture. Letting go without committing puts the page
-        // back: `chapterIdx` is where this turn started, and the revert runs
-        // while the sheet still covers the page, so the reader never watches it
-        // re-render.
-        if (!scrub) {
-          turn.finish(true);
-          return null;
-        }
-        return {
-          set: turn.set,
-          finish: (commit: boolean) => turn.finish(commit, () => goTo(chapterIdx)),
-        };
+        return pdfTurn({
+          dir,
+          scrub,
+          chapterIdx,
+          revert: () => goTo(chapterIdx),
+          goTo,
+          pageTransition,
+          reduce,
+        });
       }
       const max = el.scrollWidth - el.clientWidth;
       const pos = el.scrollLeft;
@@ -1127,7 +1054,18 @@ function ReaderView({
       flipPage(el, Math.max(0, Math.min(target, max)), pageTransition, dir, reduce);
       return null;
     },
-    [chapterIdx, goTo, isPdf, layoutModeRef, marginRef, useFoliate, pageTransition, reduce],
+    [
+      chapterIdx,
+      goTo,
+      isPdf,
+      layoutModeRef,
+      marginRef,
+      pdfTurn,
+      useFoliate,
+      foliateRef,
+      pageTransition,
+      reduce,
+    ],
   );
 
   /** Chapter step; foliate's sections replace our chapter index for foliate books. */
@@ -1139,7 +1077,7 @@ function ReaderView({
       }
       goTo(chapterIdx + dir);
     },
-    [chapterIdx, goTo, useFoliate],
+    [chapterIdx, goTo, useFoliate, foliateRef],
   );
 
   /**
@@ -1440,11 +1378,7 @@ function ReaderView({
     setDisplayProgress(globalProgress(chapters, chapterIdx, frac));
     // In a scroll-layout PDF the page indicator follows the slot under the
     // top edge; chapterIdx stays pinned to the page it was entered from.
-    const slot = pdfSlotH.current;
-    if (isPdf && !pagedNow && slot > 0) {
-      const page = Math.min(chapters.length, Math.floor(el.scrollTop / slot) + 1);
-      setPdfScrollPage((prev) => (prev === page ? prev : page));
-    }
+    if (isPdf && !pagedNow) pdfTrackScrolledPage(el, chapters.length);
     if (pagedNow && showPages) {
       const pitch = columnPitch(el, layoutModeRef.current, marginRef.current);
       if (pitch > 0) {
@@ -1481,6 +1415,7 @@ function ReaderView({
     isPdf,
     layoutModeRef,
     marginRef,
+    pdfTrackScrolledPage,
     saveProgress,
     showPages,
   ]);
@@ -1651,34 +1586,6 @@ function ReaderView({
     setPending(null);
   };
 
-  /** PDF text-layer selection: same pill, page-local offsets. */
-  const onPdfSelection = useCallback(
-    (range: TextRange, rect: DOMRect, pageNumber: number, bottom: number) => {
-      setPending({
-        range,
-        x: rect.left + rect.width / 2,
-        y: rect.top,
-        bottom,
-        chapterIdx: pageNumber - 1,
-      });
-    },
-    [],
-  );
-
-  /** Click on annotated text in the PDF: opens the pill in remove mode. */
-  const onPdfAnnotationClick = useCallback(
-    (annotation: Annotation, x: number, y: number, pageNumber: number) => {
-      setPending({
-        range: { start: annotation.startChar, end: annotation.endChar, text: annotation.text },
-        x,
-        y,
-        annotationId: annotation.id,
-        chapterIdx: pageNumber - 1,
-      });
-    },
-    [],
-  );
-
   /**
    * Landing the reader on a position named by a search hit or an AI citation:
    * here, after the chapter it names lands, or in another book.
@@ -1824,112 +1731,27 @@ function ReaderView({
           : "chapter-paper-back"
         : "";
 
-  const articleStyle: CSSProperties = {
-    fontSize: `${fontSize}px`,
-    fontFamily: resolveFont(font),
-    lineHeight: LINE_HEIGHTS[lineHeightIdx],
-    // Wallpaper chapters read off the book's own paper art (light in both
-    // themes), so the ink stays dark there instead of following the surface.
-    color: wallpaperPath ? "#3f3629" : surface.fg,
-    paddingInline: margin,
-    paddingBlock: blockMargin,
-    ...(columnWidth !== undefined
-      ? {
-          height: "100%",
-          columnWidth,
-          columnGap: margin,
-          columnFill: "auto",
-          // Page box for the `.paged-prose` image cap (see globals.css):
-          // the measured scroller height beats any 100vh estimate. Only
-          // inject a real measurement — a 0 would clamp the img cap to 0
-          // and silently hide every picture.
-          "--page-block": `${blockMargin}px`,
-          ...(viewportH > 0 ? { "--page-h": `${viewportH}px` } : {}),
-        }
-      : {}),
-    // Sidebar spring: frozen at the pre-animation width so the per-frame pane
-    // resize never re-wraps the chapter (mx-auto keeps it centred).
-    ...(pinnedW !== null ? { width: pinnedW } : {}),
-  };
-
-  // Split the chapter into paragraph segments, wrapping the parts covered by an
-  // annotation, a search match or the reading voice in a highlight. Keys are
-  // built here (outside the JSX map) so the render lists never use a raw index
-  // key. Only the paragraph the voice is on gets the extra cut, so a word-level
-  // wash re-renders one paragraph, not the chapter.
-  const renderedParagraphs = useMemo(() => {
-    const paragraphs = displayChapterData?.paragraphs ?? [];
-    const chapterAnnotations = (annotations ?? []).filter((a) => a.chapterIdx === chapterIdx);
-    const wash = speechSpan && isProseParagraph(paragraphs[speechSpan.source]) ? speechSpan : null;
-    return paragraphs.map((paragraph, idx) => ({
-      idx,
-      key: `${chapterIdx}-${idx}`,
-      // An image marker renders as the referenced picture; it has no text.
-      imagePath: paragraph.startsWith(IMAGE_PARAGRAPH_PREFIX)
-        ? paragraph.slice(IMAGE_PARAGRAPH_PREFIX.length)
-        : null,
-      // A link marker renders as a tappable entry that jumps to the target
-      // chapter (in-book tables of contents).
-      link: paragraph.startsWith(LINK_PARAGRAPH_PREFIX) ? parseLinkParagraph(paragraph) : null,
-      segments: highlightSegments(
-        paragraphs,
-        idx,
-        chapterAnnotations,
-        search,
-        wash?.source === idx ? wash : undefined,
-      ).map((segment, position) => {
-        // Annotation-backed runs carry their own ink; the toolbar's palette
-        // decides what they look like.
-        const owned = segment.annotationId
-          ? annotations?.find((a) => a.id === segment.annotationId)
-          : undefined;
-        return {
-          key: `${chapterIdx}-${idx}-${position}`,
-          text: segment.text,
-          highlighted: segment.highlighted,
-          annotationId: segment.annotationId,
-          tts: segment.tts,
-          color: owned?.color ?? null,
-          style: owned?.style ?? null,
-        };
-      }),
-    }));
-  }, [displayChapterData, chapterIdx, annotations, search, speechSpan]);
-
-  /**
-   * Inline ink for one prose-path annotation run: the translucent wash, the
-   * straight line or the squiggle, in the annotation's colour. `null` colour
-   * means a legacy highlight — the palette's marker yellow.
-   */
-  const markInk = useCallback(
-    (color: string | null, style: AnnotationStyle | null): CSSProperties => {
-      const hex = color ?? HIGHLIGHT_COLORS[0]!.hex;
-      if ((style ?? "highlight") === "underline") {
-        return {
-          textDecoration: "underline",
-          textDecorationColor: hex,
-          textDecorationThickness: 2,
-          textUnderlineOffset: "3px",
-        };
-      }
-      if (style === "squiggly") {
-        return {
-          textDecoration: "underline wavy",
-          textDecorationColor: hex,
-          textDecorationThickness: 1.5,
-          textUnderlineOffset: "3px",
-        };
-      }
-      // Dark paper needs a lighter hand; the foliate overlay uses the same
-      // two alphas, so one highlight reads the same on every path.
-      return {
-        backgroundColor: inkWash(hex, surface.mode === "dark" ? 0.26 : 0.36),
-        borderRadius: 2,
-      };
-    },
-    [surface.mode],
-  );
-
+  // The prose path composes the page itself, from the chapter text, the
+  // annotations, the search matches and the voice's wash — the flow's style,
+  // the paragraph split and the ink a highlight is drawn with are
+  // `useProseReading`'s.
+  const { articleStyle, renderedParagraphs, markInk } = useProseReading({
+    displayChapterData,
+    annotations,
+    chapterIdx,
+    search,
+    speechSpan,
+    fontSize,
+    font,
+    lineHeightIdx,
+    margin,
+    blockMargin,
+    columnWidth,
+    viewportH,
+    pinnedW,
+    wallpaperPath,
+    surface,
+  });
   // The wash the voice draws, in the three shapes the paths need it: a value
   // for foliate's overlayer, inline style for the prose `<mark>`, and a
   // `::highlight` body for pdf.js's text layer. All three come from `washCss`,
