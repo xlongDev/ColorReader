@@ -44,6 +44,7 @@ import {
   type SectionId,
 } from "@/features/settings/section";
 import { KeymapSection } from "@/features/settings/KeymapSection";
+import { SecretsNotice } from "@/features/settings/SecretsNotice";
 import type { AiConfig, SyncChange, SyncConfig, SyncReport, SyncTally } from "@/types/ipc";
 import { cn } from "@/lib/cn";
 import { SPRING } from "@/lib/motion";
@@ -750,7 +751,10 @@ function AiForm({ initial }: { initial: AiConfig }) {
           spellCheck={false}
         />
       </Row>
-      <Row label="API Key" hint="只存在本地数据库，不会离开这台机器。本地模型可留空。">
+      <Row
+        label="API Key"
+        hint="只存在本地数据库，并用系统钥匙串加密保存，不会离开这台机器。本地模型可留空。"
+      >
         <GlassInput
           type="password"
           value={draft.apiKey}
@@ -823,6 +827,8 @@ function AiForm({ initial }: { initial: AiConfig }) {
         </GlassButton>
         <Feedback status={status} />
       </Actions>
+
+      <SecretsNotice />
     </SettingsGroup>
   );
 }
@@ -1180,7 +1186,10 @@ function SyncForm({ initial }: { initial: SyncConfig }) {
           spellCheck={false}
         />
       </Row>
-      <Row label="密码" hint="坚果云用「应用密码」，不是登录密码。">
+      <Row
+        label="密码"
+        hint="坚果云用「应用密码」，不是登录密码。密码与账号一样用系统钥匙串加密保存。"
+      >
         <GlassInput
           type="password"
           value={draft.password}
@@ -1202,6 +1211,8 @@ function SyncForm({ initial }: { initial: SyncConfig }) {
         </GlassButton>
         <Feedback status={status} />
       </Actions>
+
+      <SecretsNotice />
 
       {report && changes && (
         <div className="px-5 py-3.5">

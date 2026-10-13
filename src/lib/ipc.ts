@@ -6,7 +6,7 @@ import type { LocalDictionary, LocalFont } from "@/types/ipc";
 import type { SleepChoice, SleepTimer } from "@/hooks/useSleepTimer";
 import type { SpeechUnit } from "@/features/reader/speech";
 import type { Voice } from "@/features/reader/voice";
-import type { BackupSummary, Outcome } from "@/lib/bindings";
+import type { BackupSummary, Outcome, SecretsStatus } from "@/lib/bindings";
 import type {
   AiDelta,
   BarFace,
@@ -158,6 +158,23 @@ export const ipc = {
    */
   miniBarExpand(face: BarFace, minimal: boolean): Promise<void> {
     return isDesktopRuntime ? commands.miniBarExpand(face, minimal) : Promise.resolve();
+  },
+
+  /**
+   * Whether credentials can be sealed on this machine.
+   *
+   * The browser build answers for itself, and the answer is no: it has no OS
+   * credential store, and no AI or sync command to put a credential in either —
+   * its config is a constant and nothing is persisted. Saying `available: false`
+   * is the truth about this build; the settings page is what decides that a
+   * build with no credentials has nothing to warn about.
+   */
+  secretsStatus(): Promise<SecretsStatus> {
+    if (isDesktopRuntime) return commands.secretsStatus();
+    return Promise.resolve({
+      available: false,
+      detail: "浏览器构建没有系统钥匙串，且不保存任何凭据",
+    });
   },
 
   /** Raw bytes of one image inside a book's source EPUB (binary channel). */

@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 
 import { desktopQuery, ipc } from "@/lib/ipc";
-import type { SystemInfo } from "@/types/ipc";
+import type { SecretsStatus, SystemInfo } from "@/types/ipc";
 
 /** What the About panel shows when there is no Rust side to ask. It says
  *  `browser` rather than inventing a version, so a reader reading it knows it
@@ -26,5 +26,21 @@ export function useSystemInfo() {
     queryKey: ["system.info"],
     queryFn: desktopQuery(IN_BROWSER, () => ipc.systemInfo()),
     staleTime: 60_000,
+  });
+}
+
+/**
+ * Whether this machine can seal the credentials in the database.
+ *
+ * Asked once and kept: it is a fact about the machine, not about the library,
+ * and nothing in the app changes it. It cannot fail — "the credential store is
+ * unusable" is the answer, not an error — so there is no error branch to write
+ * and no way for a broken keychain to take the settings page down with it.
+ */
+export function useSecretsStatus() {
+  return useQuery<SecretsStatus>({
+    queryKey: ["system", "secrets"],
+    queryFn: () => ipc.secretsStatus(),
+    staleTime: Number.POSITIVE_INFINITY,
   });
 }
