@@ -1,29 +1,33 @@
 //! The library domain: sorting rules, cover URLs and book removal.
+//!
+//! Twenty-six modules used to sit flat in this directory, mixing five
+//! unrelated domains in one bucket — a dictionary parser next to a WebDAV
+//! client next to the shelf's own queries. They are grouped into
+//! subdirectories now, and every one is re-exported here, so
+//! `crate::library::<module>` still names the same thing it always did: the
+//! grouping is about which file to open, not about a new public path.
+//!
+//! The subdirectories are private for two reasons. `retrieval/` and
+//! `transfer/` are not the report's `search/` and `sync/` because
+//! `pub mod search;` next to `pub use search::search;` is `E0255` — a module
+//! and a re-export of a module cannot share a name. Keeping all seven private
+//! solves that uniformly instead of for two of them.
 
-pub mod annotations;
-pub mod backup;
-pub mod bookmarks;
-pub mod chapters;
-pub mod clippings;
-pub mod dictionaries;
-pub mod export;
-pub mod fonts;
-pub mod graph;
-pub mod guide;
-pub mod import;
-pub mod markup;
-pub mod mdict;
-pub mod migrate;
-pub mod ocr;
-pub mod pack;
-pub mod rag;
-pub mod repository;
-pub mod search;
-pub mod source;
-pub mod stardict;
-pub mod stats;
-pub mod sync;
-pub mod tags;
+mod assist;
+mod io;
+mod lookup;
+mod marks;
+mod retrieval;
+mod shelf;
+mod transfer;
+
+pub use assist::{graph, guide, ocr};
+pub use io::{clippings, export, import, pack, source};
+pub use lookup::{dictionaries, markup, mdict, stardict};
+pub use marks::{annotations, bookmarks, migrate};
+pub use retrieval::{rag, search};
+pub use shelf::{chapters, fonts, repository, stats, tags};
+pub use transfer::{backup, sync};
 
 #[cfg(test)]
 mod bench;

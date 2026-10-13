@@ -73,7 +73,7 @@ pub fn create(
         return Err(AppError::InvalidArgument("高亮范围无效".into()));
     }
     let style = validated_style(style)?;
-    let now = super::now_seconds();
+    let now = crate::library::now_seconds();
 
     let annotation = Annotation {
         id: uuid::Uuid::new_v4().to_string(),
@@ -125,7 +125,7 @@ pub fn update(
     let changed = conn.execute(
         "UPDATE annotations SET color = COALESCE(?2, color), style = COALESCE(?3, style), \
          updated_at = ?4 WHERE id = ?1",
-        params![id, color, style, super::now_seconds()],
+        params![id, color, style, crate::library::now_seconds()],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
@@ -146,7 +146,7 @@ pub fn anchor(conn: &Connection, id: &str, cfi: &str) -> AppResult<Annotation> {
     }
     let changed = conn.execute(
         "UPDATE annotations SET cfi = ?2, updated_at = ?3 WHERE id = ?1",
-        params![id, cfi.trim(), super::now_seconds()],
+        params![id, cfi.trim(), crate::library::now_seconds()],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
@@ -164,7 +164,7 @@ pub fn set_note(conn: &Connection, id: &str, note: Option<&str>) -> AppResult<An
     let note = note.map(str::trim).filter(|value| !value.is_empty());
     let changed = conn.execute(
         "UPDATE annotations SET note = ?2, updated_at = ?3 WHERE id = ?1",
-        params![id, note, super::now_seconds()],
+        params![id, note, crate::library::now_seconds()],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
@@ -224,7 +224,7 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
     tx.execute(
         "INSERT INTO annotation_tombstones (id, updated_at) VALUES (?1, ?2) \
          ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at",
-        params![id, super::now_seconds()],
+        params![id, crate::library::now_seconds()],
     )?;
     tx.commit()?;
     Ok(())
@@ -246,7 +246,7 @@ pub fn delete_many(conn: &Connection, ids: &[String]) -> AppResult<usize> {
         return Ok(0);
     }
     let tx = conn.unchecked_transaction()?;
-    let now = super::now_seconds();
+    let now = crate::library::now_seconds();
     let mut removed = 0;
     for id in ids {
         if tx.execute("DELETE FROM annotations WHERE id = ?1", params![id])? == 0 {
@@ -394,7 +394,7 @@ pub fn apply_remote(conn: &Connection, remote: &SyncAnnotation) -> AppResult<()>
             remote.color,
             remote.style,
             remote.note,
-            super::now_seconds(),
+            crate::library::now_seconds(),
             remote.updated_at,
         ],
     )?;

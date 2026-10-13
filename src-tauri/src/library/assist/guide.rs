@@ -68,7 +68,7 @@ pub fn store(conn: &Connection, book_id: &str, guide: &str) -> AppResult<()> {
         "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3) \
          ON CONFLICT (key) DO UPDATE SET value = excluded.value, \
                                          updated_at = excluded.updated_at",
-        params![cache_key(book_id), guide, super::now_seconds()],
+        params![cache_key(book_id), guide, crate::library::now_seconds()],
     )?;
     Ok(())
 }

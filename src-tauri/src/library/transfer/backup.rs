@@ -35,9 +35,9 @@ use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use super::now_seconds;
 use crate::db::{DB_FILE, Library};
 use crate::error::{AppError, AppResult};
+use crate::library::now_seconds;
 use crate::secrets::SECRET_FIELDS;
 
 /// Identifies the archive: a ZIP has no magic of its own, so this entry is

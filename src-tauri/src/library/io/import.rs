@@ -10,11 +10,11 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use super::pack;
-use super::repository::{self, NewBook};
 use crate::db::{Layout, Library};
 use crate::document::{self, BookFormat, detect_format};
 use crate::error::{AppError, AppResult};
+use crate::library::pack;
+use crate::library::repository::{self, NewBook};
 
 /// What happened to one file in the batch.
 #[derive(specta::Type, Debug, Clone, Serialize)]
@@ -188,7 +188,9 @@ fn import_book(library: &Library, layout: &Layout, path: &Path) -> AppResult<Imp
             library.with(|conn| repository::set_chapters_pending(conn, &id, true))?;
         } else {
             match document::read_chapters(path, format) {
-                Ok(raw) => library.with_tx(|tx| super::chapters::replace(tx, &id, &raw))?,
+                Ok(raw) => {
+                    library.with_tx(|tx| crate::library::chapters::replace(tx, &id, &raw))?
+                }
                 Err(err) => {
                     tracing::warn!(path = %path.display(), error = %err, "重复导入时刷新章节失败");
                 }
@@ -264,7 +266,7 @@ fn import_book(library: &Library, layout: &Layout, path: &Path) -> AppResult<Imp
                 authors: &metadata.authors,
             },
         )?;
-        super::chapters::insert(tx, &id, &chapters)?;
+        crate::library::chapters::insert(tx, &id, &chapters)?;
         if deferred {
             repository::set_chapters_pending(tx, &id, true)?;
         }
@@ -316,7 +318,7 @@ fn sha256_file(path: &Path) -> AppResult<String> {
         }
         hasher.update(&buffer[..read]);
     }
-    Ok(super::to_hex(&hasher.finalize()))
+    Ok(crate::library::to_hex(&hasher.finalize()))
 }
 
 #[cfg(test)]

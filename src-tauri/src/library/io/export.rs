@@ -34,7 +34,7 @@ use std::path::Path;
 use crate::db::Library;
 use crate::error::{AppError, AppResult};
 
-use super::{annotations, has_extension, repository};
+use crate::library::{annotations, has_extension, repository};
 
 /// Extensions that select Markdown.
 const MARKDOWN_EXTENSIONS: [&str; 2] = ["md", "markdown"];
@@ -458,7 +458,7 @@ mod tests {
         }
 
         fn import(&self, paths: &[PathBuf]) -> Vec<ImportOutcome> {
-            super::super::import::import_files(
+            crate::library::import::import_files(
                 &self.library,
                 &self.layout,
                 paths,

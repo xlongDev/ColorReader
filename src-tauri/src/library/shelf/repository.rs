@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 #[cfg(test)]
 use std::path::Path;
 
-use super::sort_key;
 use crate::document::BookFormat;
 use crate::error::{AppError, AppResult};
+use crate::library::sort_key;
 
 /// Everything needed to insert a book that has just been imported.
 pub struct NewBook<'a> {
@@ -259,7 +259,7 @@ pub fn get(conn: &Connection, id: &str) -> AppResult<Option<BookSummary>> {
 fn summary_from_row(row: &rusqlite::Row<'_>) -> AppResult<BookSummary> {
     let id: String = row.get("id")?;
     let has_cover = row.get::<_, Option<String>>("cover_path")?.is_some();
-    let cover_url = has_cover.then(|| super::cover_url(&id));
+    let cover_url = has_cover.then(|| crate::library::cover_url(&id));
     Ok(BookSummary {
         id,
         title: row.get("title")?,
@@ -423,8 +423,8 @@ pub fn insert(tx: &Transaction<'_>, book: &NewBook<'_>) -> AppResult<()> {
             book.file_path,
             book.file_size,
             book.cover_path,
-            super::now_seconds(),
-            super::now_seconds(),
+            crate::library::now_seconds(),
+            crate::library::now_seconds(),
         ],
     )?;
 
@@ -508,7 +508,7 @@ pub fn find_by_hash(conn: &Connection, hash: &str) -> AppResult<Option<(String, 
 fn set_favorite_one(conn: &Connection, id: &str, favorite: bool) -> AppResult<()> {
     let changed = conn.execute(
         "UPDATE books SET favorite = ?1, updated_at = ?2 WHERE id = ?3",
-        params![i64::from(favorite), super::now_seconds(), id],
+        params![i64::from(favorite), crate::library::now_seconds(), id],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
@@ -545,7 +545,7 @@ pub fn set_favorite_many(tx: &Transaction<'_>, ids: &[String], favorite: bool) -
 pub fn set_format(conn: &Connection, id: &str, format: BookFormat) -> AppResult<()> {
     let changed = conn.execute(
         "UPDATE books SET format = ?1, updated_at = ?2 WHERE id = ?3",
-        params![format.as_str(), super::now_seconds(), id],
+        params![format.as_str(), crate::library::now_seconds(), id],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
@@ -603,7 +603,7 @@ pub fn update_metadata(tx: &Transaction<'_>, id: &str, patch: &BookMetadataPatch
             blank_to_none(patch.description.as_deref()),
             blank_to_none(patch.language.as_deref()),
             blank_to_none(patch.publisher.as_deref()),
-            super::now_seconds(),
+            crate::library::now_seconds(),
             id,
         ],
     )?;
@@ -627,7 +627,7 @@ pub fn update_metadata(tx: &Transaction<'_>, id: &str, patch: &BookMetadataPatch
 pub fn set_cover(conn: &Connection, id: &str, cover_path: &str) -> AppResult<()> {
     let changed = conn.execute(
         "UPDATE books SET cover_path = ?1, updated_at = ?2 WHERE id = ?3",
-        params![cover_path, super::now_seconds(), id],
+        params![cover_path, crate::library::now_seconds(), id],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));
@@ -652,7 +652,7 @@ pub fn set_progress(
          SET progress = ?1, last_read_at = ?2, updated_at = ?2, \
              location = COALESCE(?3, location) \
          WHERE id = ?4",
-        params![progress, super::now_seconds(), location, id],
+        params![progress, crate::library::now_seconds(), location, id],
     )?;
     if changed == 0 {
         return Err(AppError::NotFound(id.to_string()));

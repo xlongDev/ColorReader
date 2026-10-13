@@ -21,11 +21,11 @@ use serde::{Deserialize, Serialize};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
-use super::annotations;
-use super::repository;
-use super::tags;
 use crate::db::Library;
 use crate::error::{AppError, AppResult};
+use crate::library::annotations;
+use crate::library::repository;
+use crate::library::tags;
 
 /// Extensions the import pipeline hands to this module.
 pub const PACK_EXTENSIONS: [&str; 2] = ["ctz", "ctzx"];
@@ -102,7 +102,7 @@ pub struct Unpacked {
 
 /// `true` when `path` names a book pack rather than a raw book.
 pub fn is_pack(path: &Path) -> bool {
-    super::has_extension(path, &PACK_EXTENSIONS)
+    crate::library::has_extension(path, &PACK_EXTENSIONS)
 }
 
 /// Writes one book to `dest`.
@@ -115,7 +115,7 @@ pub fn export(
     dest: &Path,
     password: Option<&str>,
 ) -> AppResult<()> {
-    let encrypted = super::has_extension(dest, &[ENCRYPTED_EXT]);
+    let encrypted = crate::library::has_extension(dest, &[ENCRYPTED_EXT]);
     if encrypted && password.is_none() {
         return Err(AppError::InvalidArgument("加密书档需要设置密码".into()));
     }
@@ -123,7 +123,7 @@ pub fn export(
     let book = library
         .with(|conn| repository::get(conn, book_id))?
         .ok_or_else(|| AppError::NotFound(book_id.to_string()))?;
-    let (source_path, _) = super::book_files(library, book_id)?;
+    let (source_path, _) = crate::library::book_files(library, book_id)?;
     let source_path = source_path
         .ok_or_else(|| AppError::Message(format!("《{}》的源文件已丢失", book.title)))?;
 
@@ -161,7 +161,7 @@ pub fn export(
 /// Reads a pack, decrypting it first when the extension says it is encrypted.
 pub fn unpack(path: &Path, password: Option<&str>) -> AppResult<Unpacked> {
     let raw = std::fs::read(path)?;
-    let archive = if super::has_extension(path, &[ENCRYPTED_EXT]) {
+    let archive = if crate::library::has_extension(path, &[ENCRYPTED_EXT]) {
         let password = password
             .filter(|value| !value.is_empty())
             .ok_or_else(|| AppError::InvalidArgument("导入加密书档需要提供密码".into()))?;
@@ -324,13 +324,13 @@ impl Header {
             m: ARGON2_KIB,
             t: ARGON2_PASSES,
             p: ARGON2_LANES,
-            salt: super::to_hex(salt),
+            salt: crate::library::to_hex(salt),
         }
     }
 
     fn key(&self, password: &str) -> AppResult<[u8; 32]> {
-        let salt =
-            super::from_hex(&self.salt).ok_or_else(|| AppError::Parse("salt 非法".into()))?;
+        let salt = crate::library::from_hex(&self.salt)
+            .ok_or_else(|| AppError::Parse("salt 非法".into()))?;
         let params = Params::new(self.m, self.t, self.p, None)
             .map_err(|err| AppError::Message(format!("密钥派生参数非法：{err}")))?;
         let mut key = [0_u8; 32];
@@ -442,7 +442,7 @@ mod tests {
         }
 
         fn import(&self, paths: &[PathBuf]) -> Vec<ImportOutcome> {
-            super::super::import::import_files(
+            crate::library::import::import_files(
                 &self.library,
                 &self.layout,
                 paths,
@@ -635,9 +635,9 @@ mod tests {
     #[test]
     fn hex_round_trips_and_rejects_malformed_input() {
         let bytes = [0_u8, 15, 16, 255];
-        assert_eq!(super::super::to_hex(&bytes), "000f10ff");
-        assert_eq!(super::super::from_hex("000f10ff"), Some(bytes.to_vec()));
-        assert_eq!(super::super::from_hex("0f1"), None);
-        assert_eq!(super::super::from_hex("zz"), None);
+        assert_eq!(crate::library::to_hex(&bytes), "000f10ff");
+        assert_eq!(crate::library::from_hex("000f10ff"), Some(bytes.to_vec()));
+        assert_eq!(crate::library::from_hex("0f1"), None);
+        assert_eq!(crate::library::from_hex("zz"), None);
     }
 }

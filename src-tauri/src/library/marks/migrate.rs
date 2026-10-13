@@ -6,7 +6,7 @@
 //! data loss in this reader that happens when the reader does everything right.
 //!
 //! The anchor is the highlight's own text, which is exactly how a Kindle
-//! clipping is placed (see [`super::clippings`]) — and that pipeline is reused
+//! clipping is placed (see [`crate::library::clippings`]) — and that pipeline is reused
 //! rather than written again: the same haystacks, the same `locate`, the same
 //! signature used to skip a highlight already present. A new edition that
 //! reworded a paragraph simply fails to locate it, which the report says out
@@ -15,11 +15,11 @@
 use rusqlite::params;
 use serde::Serialize;
 
-use super::annotations;
-use super::bookmarks;
-use super::clippings;
 use crate::db::Library;
 use crate::error::{AppError, AppResult};
+use crate::library::annotations;
+use crate::library::bookmarks;
+use crate::library::clippings;
 
 /// What one migration moved.
 #[derive(specta::Type, Debug, Clone, Copy, Serialize)]
@@ -122,7 +122,7 @@ fn carry_progress(tx: &rusqlite::Transaction<'_>, from: &str, to: &str) -> AppRe
     };
     tx.execute(
         "UPDATE books SET progress = ?2, updated_at = ?3 WHERE id = ?1",
-        params![to, progress, super::now_seconds()],
+        params![to, progress, crate::library::now_seconds()],
     )?;
     Ok(true)
 }

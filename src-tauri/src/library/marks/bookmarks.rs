@@ -42,7 +42,7 @@ pub fn create(
         chapter_idx,
         fraction: fraction.clamp(0.0, 1.0),
         label: label.to_string(),
-        created_at: super::now_seconds(),
+        created_at: crate::library::now_seconds(),
     };
     conn.execute(
         "INSERT INTO bookmarks (id, book_id, chapter_idx, fraction, label, created_at, updated_at) \
@@ -94,7 +94,7 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<()> {
     tx.execute(
         "INSERT INTO bookmark_tombstones (id, updated_at) VALUES (?1, ?2) \
          ON CONFLICT (id) DO UPDATE SET updated_at = excluded.updated_at",
-        params![id, super::now_seconds()],
+        params![id, crate::library::now_seconds()],
     )?;
     tx.commit()?;
     Ok(())
@@ -185,7 +185,7 @@ pub fn apply_remote(conn: &Connection, remote: &SyncBookmark) -> AppResult<()> {
             remote.chapter_idx as i64,
             remote.fraction.clamp(0.0, 1.0),
             remote.label,
-            super::now_seconds(),
+            crate::library::now_seconds(),
             remote.updated_at,
         ],
     )?;
