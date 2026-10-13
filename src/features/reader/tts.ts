@@ -142,6 +142,11 @@ export function useTts({ trackBoundary = false }: Options = {}) {
     window.speechSynthesis.cancel();
     edgeRef.current?.stop();
     finishRef.current = undefined;
+    // The failure text belongs to the session stop ends. The pill is drawn
+    // while `status !== "idle" || error !== null`, so leaving it set made the
+    // close button dead exactly when the engine had failed — the one state a
+    // reader most needs it in.
+    setError(null);
     setStatus("idle");
     setUnit(null);
     setLoading(false);
