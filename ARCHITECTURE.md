@@ -45,6 +45,7 @@
 | `library/`    | 导入管线（去重、文件落盘、元数据提取）+ 书籍仓储（查询 / 统计）+ 章节仓储 + 标注仓储 + 全文检索 + 书档（导入 / 导出 / 加密）+ 笔记导出（Markdown / CSV）+ RAG（组块 / 索引 / 暴力检索）+ 知识图谱（LLM 抽取 / 存储 / 邻域查询）+ 书源（JSON 规则 / 搜索 / 下载）+ WebDAV 同步（进度 / LWW 合并）。**现在是一个 24 个文件的平铺桶**，里面至少五类互不相关的领域（词典解析 / 检索与 AI / 同步备份 / 导出 / 书源），按本文自己的模块标准已经该分层了 —— 见 `docs/archive/improvement-plan-2026-09-28.md` 的 P2-15 |
 | `document/`   | 七种格式的元数据、封面与章节正文提取：`epub`（OPF / spine）、`pdf`（逐页文本）、`mobi`（PDB 容器 + PalmDOC / HUFF-CDIC + EXTH）、`fb2`（XML，含 `.fb2.zip`）、`cbz`（图片页）、`plain`（TXT / Markdown），`html.rs` 为前三者共用的 HTML → 段落解析器                                                                                                                                                                                                                                                           |
 | `resource.rs` | `colorreader://` 自定义协议：封面图片按 id 从 Rust 流式返回                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `secrets.rs`  | 凭据落盘时的封装：32 字节随机主密钥交给系统凭据库（Keychain / Credential Manager / Secret Service）保管，`SECRET_FIELDS` 里的字段用 AES-256-GCM 逐字段封装。**这一条常量同时被备份的脱敏引用** —— 「被封装的」与「备份里被抹掉的」必须是同一批，见下                                                                                                                                                                                                                                                           |
 | `error.rs`    | `AppError`：thiserror 定义，实现 `Serialize`，统一转成 `{ message }` 交给前端                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `state.rs`    | `AppState`（启动时间、数据目录布局、书库句柄），通过 `app.manage` 注入                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 
@@ -61,12 +62,31 @@ books ─┬─ book_authors ── authors      作者多对多，按 position 
 
 chapters_fts（FTS5 外部内容表，内容指向 chapters，由触发器维护）
 
-settings（KV：AI / 同步凭据 / 词典与字体列表，migration v5）· chunks（RAG 向量，v6）
+settings（KV：AI / 同步凭据 / 词典与字体列表，migration v5；**凭据字段在 `secrets.rs` 里封装，见下**）· chunks（RAG 向量，v6）
 sources（书源规则，v8）· bookmarks（v9）· reading_sessions（阅读时长，v13）
 annotation_tombstones / bookmark_tombstones（删除墓碑，供 WebDAV 同步，v15）
 ```
 
 `chapters` 存的是**已提取的纯文本章节**，不是原始文件字节。主键 `(book_id, idx)` 保证一本书内章节顺序唯一；`chars` 是正文去空白后的字符数，用于进度定位。
+
+### 凭据落盘（`secrets.rs`，2026-10-13）
+
+AI Key、DeepL Key、WebDAV 账号与密码都住在 `settings` 这张 KV 表里，而它是一个普通 SQLite 文件 —— 能读 profile 目录的东西就能读它们。现在这些**字段**被单独封装：AES-256-GCM，密钥是 32 字节随机数，交给操作系统的凭据库保管（macOS Keychain / Windows 凭据管理器 / Linux Secret Service，走 `keyring` 的 `v1` 模式自动按平台选）。
+
+三条设计决定，都不是随手选的：
+
+- **这里没有 Argon2，`.ctzx` 才有。** Argon2 是用来拉伸**人类口令**的；主密钥本身就是 256 位均匀随机数，再拉一次要在每次保存时付出 19 MiB 的开销，换不到任何东西。两者的密钥来源不同，所以共用同一套 AEAD 而不共用 KDF。
+- **AAD 绑定「settings 行 key + 字段名」**，所以一个密文只在它被写入的那一行那一格里打得开：把 `deeplKey` 的密文手工拷到 `apiKey` 上，结果是 GCM 校验失败，而不是一个被悄悄调换的凭据。
+- **`SECRET_FIELDS` 是一条常量、两个消费者**：这里封装的字段，与 `library/backup.rs` 从备份里抹掉的字段，是同一批。加了一个凭据却只改一处，结果要么是明文落盘、要么是进了导出的归档，所以两处问的是同一个常量。
+
+读取路径上的两个反直觉之处，都是刻意的：
+
+- **旧明文行原样读出**（没有 `v1:` 前缀就当明文），写入时一律封装。启动时 `seal_existing` 补一遍，把升级前留下的明文立刻收掉；它在没事可做时**不碰凭据库**，所以除第一次以外每次启动都是零开销。
+- **打不开的凭据是错误，不是空串。** 交回一个空串看起来就是「没配过」，而读者下一次在那张表单上点保存，就会把空串写回去、把真凭据毁掉。报错把 Key 留在原处，并让他重新填。
+
+主密钥只取一次、缓存在进程内；取失败**不**缓存（钥匙串被锁上再解锁，不该需要重启）。`system.secretsStatus` 在读者动手之前就把「这台机器存不了凭据」说出来，设置页在 AI 与同步两块各渲染一行 —— 这个状态从输入框里是看不出来的。
+
+🔴 **单测里 `master_key()` 返回固定值**（`#[cfg(test)]`）：headless CI 上没有 Secret Service，一个需要真凭据库的测试套件只会挂在那里。这留下唯一一处没被单测钉住的东西 —— 凭据库本身的 I/O —— 由 `#[ignore]` 的 `keychain_round_trip` 覆盖（`cargo test keychain -- --ignored`）。它用的是 `probe-account` 而不是真的账号名，否则删掉的就是读者的真主密钥。
 
 ### 阅读引擎与进度模型
 
