@@ -30,11 +30,16 @@
 //!   constant stays on the build the v1 algorithm was pinned to.
 //! * A `Cookie: muid=<32 random hex>;` is required. Without it the handshake
 //!   is also refused with `403`.
+//! * One socket serves the whole reading session: the service answers
+//!   back-to-back requests on it, and reconnecting per sentence would pay a
+//!   full TCP + TLS + handshake — most of a second — on every clip of a
+//!   chapter. See `SESSION`.
 //! * Text frames and binary frames share one envelope: header lines, a blank
 //!   line, then the body. The body of `audio.metadata` is the only place the
 //!   per-word timings appear.
 
 use std::net::{IpAddr, Ipv4Addr};
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -44,11 +49,12 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::net::{TcpStream, lookup_host};
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Error as WsError;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::handshake::client::Request as WsRequest;
-use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue, Response};
+use tokio_tungstenite::tungstenite::http::{HeaderName, HeaderValue, Response, StatusCode};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, client_async_tls};
 
 use crate::error::{AppError, AppResult};
@@ -108,6 +114,20 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(15);
 /// own. A refusal carries the server's own `Date`, which is enough to learn the
 /// offset; `edge-tts` carries the same correction for the same reason.
 static CLOCK_SKEW: AtomicI64 = AtomicI64::new(0);
+
+type WsStream = WebSocketStream<MaybeTlsStream<TcpStream>>;
+
+/// The synthesis socket, kept warm between utterances.
+///
+/// The service answers back-to-back requests on one socket, and charges every
+/// *connection* a full TCP + TLS + handshake — most of a second — before the
+/// first audio frame. Until 2026-10-13 each sentence opened its own, so a
+/// chapter of a hundred sentences paid that a hundred times. The socket lives
+/// here instead and requests take turns over it. Only a turn that ended
+/// cleanly is put back; anything else — failure, timeout, cancellation —
+/// drops the socket, because a half-read turn left in it would have its
+/// frames misread as the next request's audio. See [`turn`].
+static SESSION: OnceLock<Mutex<Option<WsStream>>> = OnceLock::new();
 
 fn local_seconds() -> i64 {
     SystemTime::now()
@@ -282,14 +302,14 @@ pub async fn speak(text: &str, voice: &str) -> AppResult<EdgeClip> {
     }
     check_voice(voice)?;
 
-    let run = tokio::time::timeout(SPEAK_TIMEOUT, attempt(text, voice));
+    let run = tokio::time::timeout(SPEAK_TIMEOUT, turn(text, voice));
     match run.await {
         Ok(Ok(clip)) => Ok(clip),
         // One correction, then give up: a second rejection is not a clock.
         Ok(Err(Attempt::Clock(server))) => {
             CLOCK_SKEW.store(server - local_seconds(), Ordering::Relaxed);
             tracing::info!(skew = server - local_seconds(), "corrected clock for Edge TTS");
-            match tokio::time::timeout(SPEAK_TIMEOUT, attempt(text, voice)).await {
+            match tokio::time::timeout(SPEAK_TIMEOUT, turn(text, voice)).await {
                 Ok(result) => result.map_err(|failure| match failure {
                     Attempt::Failed(err) => err,
                     Attempt::Clock(_) => refused_error(),
@@ -553,10 +573,48 @@ fn handshake_request() -> Result<WsRequest, Attempt> {
     Ok(request)
 }
 
-/// One handshake, one request, one clip.
-async fn attempt(text: &str, voice: &str) -> Result<EdgeClip, Attempt> {
-    let mut socket = connect().await?;
+/// One utterance over the session socket.
+///
+/// The socket is *taken out* of the session for the request and only put back
+/// once its turn ended cleanly. That is what makes the timeout in `speak`
+/// safe: a request cancelled mid-turn drops its socket rather than returning
+/// it with a half-read turn inside, which the next request would misread as
+/// its own audio. A reused socket that dies mid-turn — the service dropping an
+/// idle connection is the usual cause — gets one fresh connection and one
+/// retry, because that is the service's doing, not the reader's.
+async fn turn(text: &str, voice: &str) -> Result<EdgeClip, Attempt> {
+    let mut slot = SESSION.get_or_init(|| Mutex::new(None)).lock().await;
+    let warm = slot.is_some();
+    let mut socket = match slot.take() {
+        Some(socket) => socket,
+        None => connect().await?,
+    };
+    match exchange(&mut socket, text, voice).await {
+        Ok(clip) => {
+            *slot = Some(socket);
+            Ok(clip)
+        }
+        Err(failure) => {
+            // The socket is dropped here, not returned: a failed turn leaves
+            // unread frames, and a socket carrying them is worse than none.
+            if !warm {
+                return Err(failure);
+            }
+            let mut fresh = connect().await?;
+            let clip = exchange(&mut fresh, text, voice).await?;
+            *slot = Some(fresh);
+            Ok(clip)
+        }
+    }
+}
 
+/// One `speech.config`, one `ssml`, then read the turn to its end.
+///
+/// The turn must end on `turn.end`. A socket that closes first — the service
+/// dropping an idle connection, a route that gave up — has a partial clip
+/// inside it, and returning that would play half a sentence; the caller drops
+/// the socket instead.
+async fn exchange(socket: &mut WsStream, text: &str, voice: &str) -> Result<EdgeClip, Attempt> {
     socket
         .send(Message::text(speech_config()))
         .await
@@ -568,13 +626,17 @@ async fn attempt(text: &str, voice: &str) -> Result<EdgeClip, Attempt> {
 
     let mut audio: Vec<u8> = Vec::new();
     let mut words: Vec<EdgeWord> = Vec::new();
+    let mut ended = false;
     while let Some(message) = socket.next().await {
         match message.map_err(|err| Attempt::Failed(socket_error(err)))? {
             Message::Text(raw) => {
                 let (head, body) = split_frame(raw.as_bytes());
                 match header_value(head, "Path") {
                     Some("audio.metadata") => words.extend(parse_words(body)?),
-                    Some("turn.end") => break,
+                    Some("turn.end") => {
+                        ended = true;
+                        break;
+                    }
                     _ => {}
                 }
             }
@@ -589,6 +651,11 @@ async fn attempt(text: &str, voice: &str) -> Result<EdgeClip, Attempt> {
         }
     }
 
+    if !ended {
+        return Err(Attempt::Failed(AppError::Message(
+            "Edge 语音连接在合成途中断开，请重试".into(),
+        )));
+    }
     if audio.is_empty() {
         return Err(Attempt::Failed(AppError::Message(
             "Edge 语音没有返回音频，请重试或切换语音".into(),
@@ -604,6 +671,14 @@ fn classify(err: WsError) -> Attempt {
     let WsError::Http(response) = &err else {
         return Attempt::Failed(socket_error(err));
     };
+    // A rate limit is not a clock, and waiting is the answer to it: treating
+    // one as the other spent a full second attempt on a request the service
+    // had just asked us not to repeat, then showed the reader a message about
+    // the handshake. It carries a `Date` like any other refusal, so it has to
+    // be told apart before the clock is read out of it.
+    if response.status() == StatusCode::TOO_MANY_REQUESTS {
+        return Attempt::Failed(AppError::Message("Edge 语音请求过于频繁，请稍候再试".into()));
+    }
     match server_seconds(response) {
         Some(server) => Attempt::Clock(server),
         None => Attempt::Failed(refused_error()),
@@ -664,6 +739,25 @@ mod tests {
         let raw = "Fri, 11 Sep 2026 04:56:00 GMT";
         let parsed = chrono::DateTime::parse_from_rfc2822(raw).expect("RFC 2822 with GMT");
         assert_eq!(parsed.timestamp(), 1_789_102_560);
+    }
+
+    #[test]
+    fn a_rate_limit_is_not_a_clock() {
+        // A 429 carries a `Date` like every other refusal, so reading the clock
+        // first is what turned it into a pointless second attempt. It must be
+        // told apart before that read — measured against the live service,
+        // which answers a burst of connections with one.
+        let response = Response::builder()
+            .status(429)
+            .header("date", "Tue, 13 Oct 2026 09:00:00 GMT")
+            .body(None)
+            .expect("response");
+        match classify(WsError::Http(Box::new(response))) {
+            Attempt::Failed(AppError::Message(text)) => {
+                assert!(text.contains("频繁"), "{text}");
+            }
+            other => panic!("429 不能被当成别的：{other:?}"),
+        }
     }
 
     #[test]
@@ -753,15 +847,41 @@ mod tests {
         assert_eq!(display_name("oddity", "zh-CN"), "oddity");
     }
 
-    /// The two live checks. Everything above tests this file's own arithmetic;
+    /// The live checks. Everything above tests this file's own arithmetic;
     /// these test that the arithmetic is still the service's arithmetic, which
     /// no offline fixture can answer — Microsoft moves the version gate.
     ///
     /// `cargo test --release edge -- --ignored --nocapture`
+    ///
+    /// Egress to the new host goes through a shared, quota'd proxy — the
+    /// address it hands back for `api.msedgeservices.com` is a placeholder,
+    /// not Akamai — and it answers a third connection inside a few seconds
+    /// with the same `429` a real rate limit would. Waiting is also what the
+    /// reader is told to do, so the checks do it too: bounded, so a real
+    /// outage fails here instead of hanging, and only for the rate limit —
+    /// anything else is the answer the check came for.
+    fn waiting_out_the_egress_quota<T>(
+        what: &str,
+        mut call: impl FnMut() -> Result<T, AppError>,
+    ) -> T {
+        for attempt in 1..=4 {
+            match call() {
+                Ok(value) => return value,
+                Err(AppError::Message(ref message)) if message.contains("频繁") => {
+                    assert!(attempt < 4, "{what} 一直被限流：{message}");
+                    std::thread::sleep(Duration::from_secs(2 * attempt as u64));
+                }
+                Err(failure) => panic!("{what}：{failure:?}"),
+            }
+        }
+        unreachable!("循环只能以 return 或 panic 结束")
+    }
+
     #[test]
     #[ignore = "hits the live Edge service"]
     fn the_service_still_lists_yunjian() {
-        let voices = tauri::async_runtime::block_on(voices()).expect("voice list");
+        let voices =
+            waiting_out_the_egress_quota("voice list", || tauri::async_runtime::block_on(voices()));
         assert!(voices.len() > 100, "只有 {} 个语音", voices.len());
         let yunjian = voices
             .iter()
@@ -774,11 +894,12 @@ mod tests {
     #[test]
     #[ignore = "hits the live Edge service"]
     fn the_service_still_returns_audio_and_word_timings() {
-        let clip = tauri::async_runtime::block_on(speak(
-            "你好，这是 ColorReader 的语音引擎测试。",
-            "zh-CN-YunjianNeural",
-        ))
-        .expect("clip");
+        let clip = waiting_out_the_egress_quota("clip", || {
+            tauri::async_runtime::block_on(speak(
+                "你好，这是 ColorReader 的语音引擎测试。",
+                "zh-CN-YunjianNeural",
+            ))
+        });
         assert!(clip.audio.len() > 1_000, "音频太短：{}", clip.audio.len());
         assert!(!clip.words.is_empty(), "没有词边界");
         assert!(
@@ -788,5 +909,29 @@ mod tests {
         );
         let first = &clip.words[0];
         assert!(first.at < 0.5, "第一个词不该在 {}s 之后", first.at);
+    }
+
+    /// The session socket, proven against the service rather than against a
+    /// fixture: the second clip rides the connection the first one opened, so
+    /// its audio is a *different* clip's — a socket returned with a half-read
+    /// turn inside would hand back the first sentence again.
+    #[test]
+    #[ignore = "hits the live Edge service"]
+    fn one_socket_serves_more_than_one_utterance() {
+        let first = waiting_out_the_egress_quota("first clip", || {
+            tauri::async_runtime::block_on(speak(
+                "第一句话，用来打开这条连接。",
+                "zh-CN-YunjianNeural",
+            ))
+        });
+        let second = waiting_out_the_egress_quota("second clip", || {
+            tauri::async_runtime::block_on(speak(
+                "第二句话，复用同一条连接。",
+                "zh-CN-YunjianNeural",
+            ))
+        });
+        assert!(first.audio.len() > 1_000, "第一句音频太短：{}", first.audio.len());
+        assert!(second.audio.len() > 1_000, "第二句音频太短：{}", second.audio.len());
+        assert_ne!(first.audio, second.audio, "第二句必须是它自己的音频");
     }
 }

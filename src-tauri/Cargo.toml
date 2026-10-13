@@ -68,7 +68,7 @@ tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-native-roots"]
 # and rustls panics on `ClientConfig::builder()` when it cannot tell them apart.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 chrono = { version = "0.4.45", default-features = false, features = ["std", "clock"] }
-tokio = { version = "1.53.1", features = ["time"] }
+tokio = { version = "1.53.1", features = ["time", "sync"] }
 tauri-plugin-deep-link = "2.4.10"
 # Auto-update. The signature the updater insists on is a minisign keypair we
 # generate ourselves (`tauri signer generate`), **not** an Apple / Microsoft
