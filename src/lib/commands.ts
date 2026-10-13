@@ -41,6 +41,156 @@ export type Shortcut = {
   readonly key: string;
 };
 
+/**
+ * The reader's own bindings, keyed by command id.
+ *
+ * One flat record for both the registry's commands and the reader's key table,
+ * because the two id spaces do not overlap (`app.*` / `nav.*` / `reader.*`) and
+ * two records would mean two things to reset and two places for the settings
+ * page to write.
+ *
+ * An id that is absent keeps its own default; there is no way to bind *nothing*
+ * to an action, which is deliberate — a key with no default is a key the panel
+ * would have to render as an empty slot.
+ */
+export type KeyOverrides = Readonly<Record<string, readonly Shortcut[]>>;
+
+/** The keys something answers to, overrides included. */
+export function effectiveKeys(
+  id: string,
+  fallback: readonly Shortcut[] | undefined,
+  overrides: KeyOverrides,
+): readonly Shortcut[] | undefined {
+  return overrides[id] ?? fallback;
+}
+
+/**
+ * `⌘ ⇧ K` — the one spelling of a shortcut.
+ *
+ * Shared so the palette and the settings panel cannot disagree about what is
+ * bound; the panel's recorder writes through the same shape the matcher reads.
+ * The named keys are spelled the way a keyboard prints them rather than as the
+ * DOM names them, which is the whole reason this is not a blanket
+ * `key.toUpperCase()`: `ARROWRIGHT` is not a key.
+ */
+export function formatShortcut(shortcut: Shortcut): string {
+  const parts: string[] = [];
+  if (shortcut.mod) parts.push("⌘");
+  if (shortcut.shift) parts.push("⇧");
+  if (shortcut.alt) parts.push("⌥");
+  parts.push(KEY_LABELS[shortcut.key.toLowerCase()] ?? keycap(shortcut.key));
+  return parts.join(" ");
+}
+
+/** How a keycap prints the key.
+ *
+ *  A single character is a letter or a digit as the keyboard prints it —
+ *  capitals — while a name of several characters is left as the DOM spells it
+ *  rather than shouted (`F5`, not `F5`; `MediaTrackNext` was the old bug, and
+ *  it has a label of its own anyway). */
+function keycap(key: string): string {
+  return key.length === 1 ? key.toUpperCase() : key;
+}
+
+/** How a key is written on a keycap, for the ones a keycap cannot show. */
+const KEY_LABELS: Record<string, string> = {
+  " ": "空格",
+  escape: "Esc",
+  arrowleft: "←",
+  arrowright: "→",
+  arrowup: "↑",
+  arrowdown: "↓",
+  pageup: "PgUp",
+  pagedown: "PgDn",
+  mediatracknext: "媒体下一曲",
+  mediatrackprevious: "媒体上一曲",
+};
+
+/**
+ * The keys a recorder must not bind.
+ *
+ * A bare modifier is a key being *held* on the way to another one, so binding
+ * it would make the next press ambiguous; `Dead` and `Unidentified` are what
+ * an IME or an unmapped key reports, and neither names a key a reader could
+ * press on purpose. Escape is not here — the recorder is what refuses it, so
+ * that Escape can stay the way out of the recorder itself.
+ */
+const UNBINDABLE = new Set([
+  "Shift",
+  "Control",
+  "Alt",
+  "Meta",
+  "CapsLock",
+  "AltGraph",
+  "Dead",
+  "Unidentified",
+]);
+
+/** The shortcut a press would bind, or `null` for a press that is not a key. */
+export function shortcutFromStroke(stroke: KeyStroke): Shortcut | null {
+  if (UNBINDABLE.has(stroke.key)) return null;
+  const mod = stroke.metaKey || stroke.ctrlKey;
+  // Modifiers are written only when they are on, so a recorded binding reads
+  // like the hand-written defaults and survives a round trip through JSON.
+  return {
+    key: stroke.key,
+    ...(mod ? { mod: true } : {}),
+    ...(stroke.shiftKey ? { shift: true } : {}),
+    ...(stroke.altKey ? { alt: true } : {}),
+  };
+}
+
+/** One spelling per combination, so two bindings written differently still
+ *  compare equal (`K` and `k`, `mod` and `meta`). */
+function combinationId(shortcut: Shortcut): string {
+  return [
+    shortcut.mod ? "mod" : "",
+    shortcut.shift ? "shift" : "",
+    shortcut.alt ? "alt" : "",
+    shortcut.key.toLowerCase(),
+  ].join("+");
+}
+
+/** A combination more than one entry answers to. */
+export interface SharedShortcut {
+  /** The first spelling seen, for display. */
+  readonly shortcut: Shortcut;
+  readonly ids: readonly string[];
+  readonly titles: readonly string[];
+}
+
+/**
+ * The combinations that more than one entry answers to.
+ *
+ * Not a judgement — the reader's table has `ArrowRight` on two bindings on
+ * purpose, and its gates are what sort them. It is here because a *global*
+ * command has no gate to lose to, so a combination it shares with anything is
+ * two actions on one press; the caller decides which of these it cares about.
+ */
+export function sharedShortcuts(
+  entries: readonly { id: string; title: string; keys: readonly Shortcut[] }[],
+): readonly SharedShortcut[] {
+  // Keyed by id inside each combination: the question is "how many *entries*
+  // answer to this", so one entry that happens to list a key twice is not a
+  // clash with itself.
+  const byCombination = new Map<string, { shortcut: Shortcut; titles: Map<string, string> }>();
+  for (const entry of entries) {
+    for (const key of entry.keys) {
+      const id = combinationId(key);
+      const found = byCombination.get(id) ?? { shortcut: key, titles: new Map<string, string>() };
+      found.titles.set(entry.id, entry.title);
+      byCombination.set(id, found);
+    }
+  }
+  return [...byCombination.values()]
+    .filter((entry) => entry.titles.size > 1)
+    .map((entry) => ({
+      shortcut: entry.shortcut,
+      ids: [...entry.titles.keys()],
+      titles: [...entry.titles.values()],
+    }));
+}
+
 /** The parts of a keyboard event a shortcut can care about.
  *
  * Structural rather than `KeyboardEvent` so the matching can be exercised

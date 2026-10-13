@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { motion } from "motion/react";
 import { ArrowUDownLeft, MagnifyingGlass } from "@phosphor-icons/react";
 
-import { scoreCommand, type Command, type Shortcut } from "@/lib/commands";
+import { effectiveKeys, formatShortcut, scoreCommand, type Command } from "@/lib/commands";
 import { useBookCommands } from "@/features/command/useBookCommands";
 import { useCommandStore } from "@/stores/commands";
 import { useCommandPalette } from "@/stores/command-palette";
+import { useSettings } from "@/stores/settings";
 import { GlassDialog } from "@/components/glass/overlay";
 import { GlassInput } from "@/components/glass/input";
 import { cn } from "@/lib/cn";
@@ -37,6 +38,7 @@ export function CommandPalette() {
 
 function PaletteBody({ onClose }: { onClose: () => void }) {
   const commands = useCommandStore((s) => s.commands);
+  const overrides = useSettings((s) => s.keyOverrides);
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -134,6 +136,11 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
             <ul>
               {items.map(({ entry, index }) => {
                 const on = index === active;
+                // Rebound keys are shown as they are bound: the palette's job is
+                // to say what to press, and a hint that named the default after
+                // the reader changed it would be the one place that lied.
+                const [bound] =
+                  effectiveKeys(entry.command.id, entry.command.shortcut, overrides) ?? [];
                 return (
                   <li key={entry.command.id} data-row={index} className="relative">
                     {/* One element gliding between rows, rather than a class
@@ -170,9 +177,9 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
                           )}
                         </span>
                       </span>
-                      {entry.command.shortcut?.[0] && (
+                      {bound && (
                         <kbd className="text-text-3 font-mono text-[11px]">
-                          {formatShortcut(entry.command.shortcut[0])}
+                          {formatShortcut(bound)}
                         </kbd>
                       )}
                     </button>
@@ -191,13 +198,4 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
       </footer>
     </div>
   );
-}
-
-function formatShortcut(shortcut: Shortcut): string {
-  const parts: string[] = [];
-  if (shortcut.mod) parts.push("⌘");
-  if (shortcut.shift) parts.push("⇧");
-  if (shortcut.alt) parts.push("⌥");
-  parts.push(shortcut.key.toUpperCase());
-  return parts.join(" ");
 }

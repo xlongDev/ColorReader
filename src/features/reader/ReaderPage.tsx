@@ -102,6 +102,7 @@ import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
 import { useReaderPanels } from "@/hooks/useReaderPanels";
 import { LINE_HEIGHTS, PARA_GAPS, useReaderSettings, HIGHLIGHT_COLORS } from "@/stores/reader";
+import { useSettings } from "@/stores/settings";
 import { sessionNow, useSpeechSession } from "@/stores/speech";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
 import { useChrome } from "@/stores/chrome";
@@ -1370,7 +1371,9 @@ function ReaderView({
       readsLeftward,
     };
     const onKey = (event: KeyboardEvent) => {
-      const binding = resolveReaderKey(event, ctx);
+      // Read per press rather than captured when the listener binds: the store
+      // is the record of what is bound, so a rebind needs no re-binding here.
+      const binding = resolveReaderKey(event, ctx, useSettings.getState().keyOverrides);
       if (!binding) return;
       // Don't hijack typing in any text field (search panel, etc.): a focused
       // input must keep its native caret/selection behaviour, and keys reaching

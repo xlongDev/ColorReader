@@ -3,6 +3,7 @@ import { persist } from "zustand/middleware";
 
 import type { ShelfGroup } from "@/features/library/group";
 import type { LibraryFilter } from "@/features/library/shelfQuery";
+import type { KeyOverrides, Shortcut } from "@/lib/commands";
 import type { LibrarySort } from "@/types/ipc";
 
 export type ThemeMode = "system" | "light" | "dark";
@@ -75,6 +76,9 @@ interface SettingsState {
   lookupSources: LookupSources;
   dictFontSize: number;
   dictAutoSpeak: boolean;
+  /** Rebound keys, keyed by command id — the registry's commands and the
+   *  reader's own table both. Empty until a reader changes one. */
+  keyOverrides: KeyOverrides;
   setTheme: (mode: ThemeMode) => void;
   setTransparency: (mode: TransparencyMode) => void;
   toggleSidebar: () => void;
@@ -85,6 +89,10 @@ interface SettingsState {
   setLookupSources: (patch: Partial<LookupSources>) => void;
   setDictFontSize: (size: number) => void;
   setDictAutoSpeak: (on: boolean) => void;
+  /** `null` drops the override, which is what puts the default back — there is
+   *  no separate "reset" value to store. */
+  setKeyOverride: (id: string, keys: readonly Shortcut[] | null) => void;
+  resetKeyOverrides: () => void;
 }
 
 const shelfView = (sort: LibrarySort): ShelfView => ({
@@ -121,6 +129,7 @@ export const DEFAULT_SETTINGS = {
   lookupSources: { local: true, wiktionary: true, wikipedia: true, urban: false, ai: true },
   dictFontSize: 14,
   dictAutoSpeak: false,
+  keyOverrides: {},
 } satisfies Partial<SettingsState>;
 
 export const useSettings = create<SettingsState>()(
@@ -145,6 +154,14 @@ export const useSettings = create<SettingsState>()(
       setDictFontSize: (dictFontSize) =>
         set({ dictFontSize: Math.min(Math.max(Math.round(dictFontSize), 12), 20) }),
       setDictAutoSpeak: (dictAutoSpeak) => set({ dictAutoSpeak }),
+      setKeyOverride: (id, keys) =>
+        set((state) => {
+          const next = { ...state.keyOverrides };
+          if (keys === null) delete next[id];
+          else next[id] = keys;
+          return { keyOverrides: next };
+        }),
+      resetKeyOverrides: () => set({ keyOverrides: {} }),
     }),
     {
       name: "colorreader.settings",

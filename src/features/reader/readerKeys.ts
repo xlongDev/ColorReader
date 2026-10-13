@@ -1,4 +1,10 @@
-import { shortcutMatches, type KeyStroke, type Shortcut } from "@/lib/commands";
+import {
+  effectiveKeys,
+  shortcutMatches,
+  type KeyOverrides,
+  type KeyStroke,
+  type Shortcut,
+} from "@/lib/commands";
 import { rulerStepForKey } from "@/features/reader/ReadingRuler";
 
 /**
@@ -188,18 +194,110 @@ const READING_KEYS: readonly ReaderKeyBinding[] = [
   },
 ];
 
-/** Every binding, for the panel that will list them. */
+/** Every binding, for the panel that lists them. */
 export const READER_KEYS: readonly ReaderKeyBinding[] = [...LIGHTBOX_KEYS, ...READING_KEYS];
+
+/** The keys a binding answers to, a rebound one included. */
+export function bindingKeys(
+  binding: ReaderKeyBinding,
+  overrides: KeyOverrides,
+): readonly Shortcut[] {
+  return effectiveKeys(binding.id, binding.keys, overrides) ?? binding.keys;
+}
 
 /** Which of the reader's keys a press is, or `null` when it is nobody's. */
 export function resolveReaderKey(
   stroke: KeyStroke,
   ctx: ReaderKeyContext,
+  overrides: KeyOverrides = {},
 ): ReaderKeyBinding | null {
   for (const binding of ctx.lightboxOpen ? LIGHTBOX_KEYS : READING_KEYS) {
-    if (!binding.keys.some((key) => shortcutMatches(stroke, key))) continue;
+    if (!bindingKeys(binding, overrides).some((key) => shortcutMatches(stroke, key))) continue;
     if (binding.when && !binding.when(ctx, stroke)) continue;
     return binding;
   }
   return null;
+}
+
+/** A press that is exactly this shortcut — what a rebind panel hands back to
+ *  the resolver to ask "who wins now?". */
+export function strokeFor(shortcut: Shortcut): KeyStroke {
+  return {
+    key: shortcut.key,
+    altKey: !!shortcut.alt,
+    shiftKey: !!shortcut.shift,
+    metaKey: !!shortcut.mod,
+    ctrlKey: false,
+  };
+}
+
+/** The four gates, all sixteen ways. */
+const ALL_CONTEXTS: readonly ReaderKeyContext[] = [false, true].flatMap((lightboxOpen) =>
+  [false, true].flatMap((rulerOn) =>
+    [false, true].flatMap((paged) =>
+      [false, true].map((readsLeftward) => ({ lightboxOpen, rulerOn, paged, readsLeftward })),
+    ),
+  ),
+);
+
+/** The two tables, and the modality that selects each. */
+const TABLES: readonly { bindings: readonly ReaderKeyBinding[]; lightboxOpen: boolean }[] = [
+  { bindings: LIGHTBOX_KEYS, lightboxOpen: true },
+  { bindings: READING_KEYS, lightboxOpen: false },
+];
+
+/** A binding a set of overrides has left with no context to win in. */
+export interface ReaderKeyConflict {
+  readonly blocked: ReaderKeyBinding;
+  /** Whoever took the keys it used to answer to. Empty when the binding's own
+   *  gate is what refuses them and nothing else claims them either. */
+  readonly by: readonly ReaderKeyBinding[];
+}
+
+/**
+ * The bindings a rebind has made unreachable, and who took their keys.
+ *
+ * A binding is unreachable when it wins in no context at all: another binding
+ * with the same key sits above it in the table, or the only keys left to it
+ * are ones its own gate refuses. The context is four booleans, so this is an
+ * enumeration rather than a guess — and it is the honest thing to tell a reader
+ * who has just taken a key away from something else, because a panel that
+ * silently accepts the change leaves them with a key that does nothing.
+ *
+ * Each table is searched in the contexts it is live in, which is the whole of
+ * the modality rule: a binding only ever competes with its own table, so a
+ * lightbox binding is not blamed on whoever holds Escape in the reading table.
+ *
+ * Reachable-but-narrowed is deliberately *not* reported: the same key on two
+ * bindings is the table's normal state (`ArrowRight` is a page turn in one
+ * layout and a chapter step in the other), and the gates are what sort them.
+ */
+export function unreachableBindings(overrides: KeyOverrides = {}): readonly ReaderKeyConflict[] {
+  const byId = new Map(READER_KEYS.map((binding) => [binding.id, binding]));
+  const won = new Set<ReaderKeyId>();
+  const taken = new Map<ReaderKeyId, Set<ReaderKeyId>>();
+
+  for (const { bindings, lightboxOpen } of TABLES) {
+    for (const ctx of ALL_CONTEXTS) {
+      if (ctx.lightboxOpen !== lightboxOpen) continue;
+      for (const binding of bindings) {
+        for (const key of bindingKeys(binding, overrides)) {
+          const winner = resolveReaderKey(strokeFor(key), ctx, overrides);
+          if (!winner) continue;
+          won.add(winner.id);
+          if (winner.id === binding.id) continue;
+          const takers = taken.get(binding.id) ?? new Set<ReaderKeyId>();
+          takers.add(winner.id);
+          taken.set(binding.id, takers);
+        }
+      }
+    }
+  }
+
+  return READER_KEYS.filter((binding) => !won.has(binding.id)).map((blocked) => ({
+    blocked,
+    by: [...(taken.get(blocked.id) ?? [])]
+      .map((id) => byId.get(id))
+      .filter((binding): binding is ReaderKeyBinding => binding !== undefined),
+  }));
 }

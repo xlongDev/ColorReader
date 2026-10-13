@@ -33,4 +33,14 @@ describe("resetAllSettings", () => {
     resetAllSettings(true);
     expect(useReaderSettings.getState().pageTheme).toBe("night");
   });
+
+  it("puts the rebound keys back with everything else", () => {
+    // Rebound keys are preferences like any other, so 重置 is where a reader
+    // who has made a mess of the keyboard goes. It is asserted here rather
+    // than left to the panel because the panel has its own 全部恢复默认 — two
+    // buttons that have to mean the same thing.
+    useSettings.getState().setKeyOverride("reader.chapter.next", [{ key: "n" }]);
+    resetAllSettings(false);
+    expect(useSettings.getState().keyOverrides).toEqual({});
+  });
 });

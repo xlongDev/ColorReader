@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { READER_KEYS, resolveReaderKey, type ReaderKeyContext } from "@/features/reader/readerKeys";
-import type { KeyStroke } from "@/lib/commands";
+import {
+  bindingKeys,
+  READER_KEYS,
+  resolveReaderKey,
+  unreachableBindings,
+  type ReaderKeyContext,
+} from "@/features/reader/readerKeys";
+import type { KeyOverrides, KeyStroke } from "@/lib/commands";
 
 /**
  * The reader's keyboard, as a decision table.
@@ -166,5 +172,156 @@ describe("resolveReaderKey", () => {
       binding.keys.map((key) => `${binding.id} ${key.key}`),
     );
     expect(declared.filter((entry) => !reachable.has(entry))).toEqual([]);
+  });
+});
+
+/** The id a press resolves to once the reader has rebound something. */
+const pressWith = (
+  key: string,
+  over: Partial<ReaderKeyContext>,
+  overrides: KeyOverrides,
+  mods?: Partial<KeyStroke>,
+) => resolveReaderKey(stroke(key, mods), context(over), overrides)?.id ?? null;
+
+const binding = (id: string) => {
+  const found = READER_KEYS.find((entry) => entry.id === id);
+  if (!found) throw new Error(`no such binding: ${id}`);
+  return found;
+};
+
+/**
+ * What a rebind does to the table.
+ *
+ * The panel writes `overrides` and everything downstream — the resolver, the
+ * palette, the row's own badge — reads through `bindingKeys`. An override
+ * *replaces* the binding's keys rather than adding to them, which is the one
+ * thing that has to hold for the panel to be able to take a key away at all.
+ */
+describe("bindingKeys", () => {
+  it("hands back the binding's own keys when nothing was rebound", () => {
+    expect(bindingKeys(binding("reader.chapter.next"), {})).toBe(
+      binding("reader.chapter.next").keys,
+    );
+  });
+
+  it("hands back the override instead, not as well", () => {
+    const overrides: KeyOverrides = { "reader.chapter.next": [{ key: "n" }] };
+    expect(bindingKeys(binding("reader.chapter.next"), overrides)).toEqual([{ key: "n" }]);
+  });
+});
+
+describe("resolveReaderKey with overrides", () => {
+  it("answers to the new key and no longer to the old one", () => {
+    const overrides: KeyOverrides = { "reader.chapter.next": [{ key: "n" }] };
+    expect(pressWith("n", { paged: false }, overrides)).toBe("reader.chapter.next");
+    expect(pressWith("ArrowRight", { paged: false }, overrides)).toBeNull();
+  });
+
+  it("still respects the gate the key was rebound into", () => {
+    // `reader.page.next` only claims a key in a paged layout, and a rebind
+    // changes which key that is — not when it applies.
+    const overrides: KeyOverrides = { "reader.page.next": [{ key: "n" }] };
+    expect(pressWith("n", { paged: true }, overrides)).toBe("reader.page.next");
+    expect(pressWith("n", { paged: false }, overrides)).toBeNull();
+  });
+
+  it("carries a modifier into the table", () => {
+    const overrides: KeyOverrides = { "reader.chapter.next": [{ key: "n", mod: true }] };
+    expect(pressWith("n", { paged: false }, overrides, { metaKey: true })).toBe(
+      "reader.chapter.next",
+    );
+    expect(pressWith("n", { paged: false }, overrides)).toBeNull();
+  });
+
+  it("leaves a rebound global command out of the reader's table", () => {
+    // One record holds both id spaces; the reader only ever looks up its own.
+    const overrides: KeyOverrides = { "app.palette": [{ key: "n" }] };
+    expect(pressWith("n", { paged: false }, overrides)).toBeNull();
+  });
+});
+
+/**
+ * The panel's warning line.
+ *
+ * A rebind can leave a binding with no context to win in, and the reader has
+ * no way to find that out except by pressing the key and watching nothing
+ * happen. The shipped table has to be clean, and each way of breaking it has
+ * to be reported with the right culprit — including the case where there is no
+ * culprit, because the binding's own gate refuses every key it now has.
+ *
+ * The takers are compared sorted: which of them is found first is the order the
+ * sixteen contexts are enumerated in, which is not something a reader cares
+ * about and not something this test should pin.
+ */
+const conflicts = (overrides: KeyOverrides) =>
+  unreachableBindings(overrides).map((entry) => ({
+    blocked: entry.blocked.id,
+    by: entry.by.map((taker) => taker.id).toSorted(),
+  }));
+
+describe("unreachableBindings", () => {
+  it("finds nothing wrong with the table as it ships", () => {
+    expect(unreachableBindings()).toEqual([]);
+    expect(unreachableBindings({})).toEqual([]);
+  });
+
+  it("names whoever took the keys", () => {
+    // `reader.chapter.prev` sits below `reader.chapter.next`, so giving the
+    // former the latter's key leaves it with nothing. Three things hold
+    // ArrowRight between them: the chapter step in a scrolled layout, the page
+    // turn in a paged one, and the band while the ruler is on.
+    expect(conflicts({ "reader.chapter.prev": [{ key: "ArrowRight" }] })).toEqual([
+      {
+        blocked: "reader.chapter.prev",
+        by: ["reader.chapter.next", "reader.ruler.forward", "reader.turn.right"],
+      },
+    ]);
+  });
+
+  it("catches a key taken by the top of the table", () => {
+    // `reader.dismiss` is first and always claims Escape, so a page turn bound
+    // to Escape can never win.
+    expect(conflicts({ "reader.page.next": [{ key: "Escape" }] })).toEqual([
+      { blocked: "reader.page.next", by: ["reader.dismiss"] },
+    ]);
+  });
+
+  it("catches a key taken inside the lightbox's own table", () => {
+    // The lightbox swaps the table, so its three bindings only ever compete
+    // with each other — and `close` is above `next`. Nothing from the reading
+    // table is named here even though it also holds Escape: that table is not
+    // in force while the lightbox is up, so it never took this key.
+    expect(conflicts({ "reader.lightbox.next": [{ key: "Escape" }] })).toEqual([
+      { blocked: "reader.lightbox.next", by: ["reader.lightbox.close"] },
+    ]);
+  });
+
+  it("reports a binding its own gate refuses, with nobody to blame", () => {
+    // The band only walks on the four arrows, so a forward step rebound to
+    // `KeyQ` is a key its gate will never accept — and nothing else in the
+    // table claims that key, so there is no one to name.
+    expect(conflicts({ "reader.ruler.forward": [{ key: "KeyQ" }] })).toEqual([
+      { blocked: "reader.ruler.forward", by: [] },
+    ]);
+  });
+
+  it("still names the taker when the gate is what refuses the key", () => {
+    // ArrowUp is the *backward* step's key, so a forward step rebound to it is
+    // refused by its own gate — and the binding below answers instead.
+    expect(conflicts({ "reader.ruler.forward": [{ key: "ArrowUp" }] })).toEqual([
+      { blocked: "reader.ruler.forward", by: ["reader.ruler.back"] },
+    ]);
+  });
+
+  it("says nothing about a binding that merely lost contexts", () => {
+    // The same key on two bindings is the table's normal state, and a rebind
+    // that narrows one is not a mistake: `reader.turn.right` on ArrowDown still
+    // wins wherever the ruler is off.
+    expect(unreachableBindings({ "reader.turn.right": [{ key: "ArrowDown" }] })).toEqual([]);
+  });
+
+  it("clears once the override is dropped", () => {
+    expect(conflicts({ "reader.chapter.prev": [{ key: "ArrowRight" }] })).toHaveLength(1);
+    expect(unreachableBindings({ "reader.chapter.prev": [{ key: "ArrowLeft" }] })).toEqual([]);
   });
 });

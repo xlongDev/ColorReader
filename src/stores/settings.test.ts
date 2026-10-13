@@ -69,3 +69,57 @@ describe("useSettings", () => {
     expect(useSettings.getState().shelfViews.all.group).toBe("none");
   });
 });
+
+/**
+ * The rebind panel's whole storage.
+ *
+ * `null` is the delete: there is no "reset to default" value to store, because
+ * an absent id already means "whatever the command declares". Getting that
+ * wrong is how a panel ends up with two ways to say the same thing and a
+ * restore that cannot be distinguished from a rebind to the same key.
+ */
+describe("useSettings key overrides", () => {
+  beforeEach(() => {
+    useSettings.setState({ keyOverrides: {} });
+  });
+
+  it("starts with nothing rebound", () => {
+    expect(DEFAULT_SETTINGS.keyOverrides).toEqual({});
+    expect(useSettings.getState().keyOverrides).toEqual({});
+  });
+
+  it("records an override against its id", () => {
+    useSettings.getState().setKeyOverride("app.palette", [{ mod: true, key: "j" }]);
+    expect(useSettings.getState().keyOverrides).toEqual({
+      "app.palette": [{ mod: true, key: "j" }],
+    });
+  });
+
+  it("keeps the other ids where they were", () => {
+    useSettings.getState().setKeyOverride("app.palette", [{ mod: true, key: "j" }]);
+    useSettings.getState().setKeyOverride("reader.chapter.next", [{ key: "n" }]);
+    expect(Object.keys(useSettings.getState().keyOverrides).toSorted()).toEqual([
+      "app.palette",
+      "reader.chapter.next",
+    ]);
+  });
+
+  it("replaces an id's keys rather than adding to them", () => {
+    useSettings.getState().setKeyOverride("reader.chapter.next", [{ key: "n" }]);
+    useSettings.getState().setKeyOverride("reader.chapter.next", [{ key: "j" }]);
+    expect(useSettings.getState().keyOverrides["reader.chapter.next"]).toEqual([{ key: "j" }]);
+  });
+
+  it("drops the id when handed null, which is what puts the default back", () => {
+    useSettings.getState().setKeyOverride("reader.chapter.next", [{ key: "n" }]);
+    useSettings.getState().setKeyOverride("reader.chapter.next", null);
+    expect(useSettings.getState().keyOverrides).toEqual({});
+  });
+
+  it("puts them all back at once", () => {
+    useSettings.getState().setKeyOverride("app.palette", [{ mod: true, key: "j" }]);
+    useSettings.getState().setKeyOverride("reader.chapter.next", [{ key: "n" }]);
+    useSettings.getState().resetKeyOverrides();
+    expect(useSettings.getState().keyOverrides).toEqual({});
+  });
+});
