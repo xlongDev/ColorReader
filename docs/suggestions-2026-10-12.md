@@ -149,10 +149,14 @@ AI Native · Local First · High Performance 的跨平台（Tauri 2）电子书�
 - **证据**：`vite.config.ts` 只有 `@vitejs/plugin-react`，手写 memo 真实起作用，父组件 re-render 带整棵子树（ReaderPage 尤甚）；而 oxlint 的 React Compiler 规则已经在拦 `immutability` 违规（PR#8）。
 - **方向**：试启用编译器（react-compiler-runtime），**全量 e2e 验证行为等价**后再默认开启。预期收益是记忆化从「手写 + 审计」变成编译器保证；风险是插件对 foliate 桥这类命令式代码的行为差异，必须双引擎跑完再合。
 
-### O7 · 浏览器替身比真身还大；e2e 仍有 load 敏感 flake　【P2 / P3】
+### O7 · 浏览器替身比真身还大；e2e 仍有 load 敏感 flake　【P2 / P3 · ✅ 已落地 2026-10-14】
 
 - **证据**：`src/lib/local/backend.ts` 1250 行，比最大的 Rust 后端文件还长；`reading-ruler.spec.ts` 那条负载敏感的 flake 有完整机制记录（单独跑可复现红），归档清单给的候选改法（加重试 / 容差两行高放宽到三行 / 测量前等排版稳定）**未落地**。
-- **方向**：① 按 `LOCAL_COMMANDS` 分组拆 `local/{books, annotations, stats, search, ...}.ts`，`backend.ts` 只留 `fromLocal` 转发表——Rust 端与浏览器端从此同名同位；② 三选一治 flake，先加重试（最便宜）。
+- **落地（一）拆 `backend.ts`**：先量再拆（`scripts/measure-backend-groups.py`）。1251 行、85 个顶层声明按命令域分：books 311 / dictionaries 119 / clippings 94 / notes 88 / search 87 / stats 85 / reader 77 / annotations 75 / fonts 68 / rows 65 / types 43 / tags 42 / bookmarks 31。**共享面只有 9 个名字**——`now` / `two` / `newId` / `bookRow` / `patchBook` / `coverUrls`（+ `StoredBook` / `StoredImage` / `bookFile` 三种跨域类型与句柄），收进 `rows.ts`；跨域调用只有 4 处（books→reader 的 `bookFile`、search→reader 的 `chaptersOf`、clippingsImport→annotations 的两个写入口、其余→rows）。**调用点零改动**：全仓只有 `ipc.ts` 一个消费者，还是按名字动态查找——这正是 O7 说的「Rust 端与浏览器端从此同名同位」。`backend.ts` 只剩 36 行转发表（`export *` 十一个领域文件 + backup 再导出）。
+- **拆出的文件**：`rows.ts`（共享行助手）/ `books.ts`（导入+书架）/ `reader.ts`（章节、字节、书内条目、进度）/ `annotations.ts` / `bookmarks.ts` / `stats.ts` / `tags.ts` / `search.ts` / `fonts.ts` / `dictionaries.ts` / `notesSave.ts`（下载命令，与纯渲染的 `notes.ts` 分开）/ `clippingsImport.ts`（导入命令，与解析器 `clippings.ts` 分开）。
+- **保真度**：按行区间脚本搬运（`scripts/split-backend.py`，范围先断言），85 个声明逐字比对通过（`scripts/verify-backend-split.py`：去导入、去尾注释、去空白与 prettier 尾逗号后 token 级相同）。核对器还抓到一处真遗漏——backup 再导出行原本落在两个范围之间，已搬回转发表并单独断言。
+- **落地（二）治 flake**：**加重试，且只给这一条**。先按归档协议试重现：空载 chromium 过（9.1s）、8 核 synthetic load（load 2.55）webkit 也过——沙箱 CPU 配额上不到它当年失败的 12.46，**重现失败**。因此没有改容差、也没有改等待机制：在拿不出证据的情况下那两类改动都是猜测。改为 `test.describe.configure({ retries: 2 })` 包住那一条，全库其余用例本地仍是 `retries: 0`（`playwright.config.ts` 的注释保留）。变异验证过接线：把容差改小后它连挂三次（含两次 retry），持续回归不会被掩盖。
+- **门禁**：tsc ✓ / oxlint 344 文件 0-0 / vitest 全量 **892 passed（86 文件）** / `vite build` ✓ / reading-ruler 全 spec **46 passed（8.5m，双引擎）**。
 
 ---
 
@@ -164,4 +168,4 @@ AI Native · Local First · High Performance 的跨平台（Tauri 2）电子书�
 | 第二批（结构性）     | ~~F1 快捷键自定义（收编 → 面板）~~ → ~~O1 重跑 ReaderPage 量测~~ → **O1 按渲染分支拆文件** | ✅ **F1、量测、拆分均已落地**（2026-10-12 量测 / 2026-10-13 拆分，全量门禁绿）：三个分支 hook + 页面 2731 → 2553 行（见上） |
 | 第三批（数据与安全） | ~~O4 凭据加密~~ → O2 library 分层（纯移动）                                                | O4 **已落地**（2026-10-13）；O2 **全部落地**（2026-10-13，门禁绿）：分层 + `mobi.rs` 八文件 + `clippings.rs` 七文件         |
 | 第四批（按需）       | F3 整本 OCR → F4 金句卡片 → F5 OPDS                                                        | 未动                                                                                                                        |
-| 随时                 | O5 覆盖率报告 → O7 拆 backend.ts / flake 加重试                                            | 未动                                                                                                                        |
+| 随时                 | O5 覆盖率报告 → ~~O7 拆 backend.ts / flake 加重试~~                                        | ~~O7 **已落地**~~（2026-10-14：12 个领域文件 + 36 行转发表，flake 局部重试，全量门禁绿）；O5 未动                           |
