@@ -407,6 +407,12 @@ Command（lib/commands.ts）
 
 两个字段值得单独记住：`inEditable`（Escape 要在搜索框里也能用，它是抽屉的关法）与 `keepDefault`（Escape 不阻止默认行为——浏览器构建用的是真的 Fullscreen API，Esc 退出全屏是浏览器在做的事，拦下来会把读者困在全屏里）。🔴 这两条都属于 Escape，改动时别按「其他键怎么写就怎么写」照搬。
 
+**改键是「覆盖」，不是「改默认值」。** `KeyOverrides`（`lib/commands.ts`）是一张扁平的 `Record<id, Shortcut[]>`，**注册表命令与阅读器键表共用一张**（两套 id 空间不重叠：`app.*` / `nav.*` / `reader.*`），落在 `useSettings` 里跟着 `persist` 走。消费者一律问 `effectiveKeys(id, 默认值, overrides)`，不直接读 `command.shortcut`；`useHotkeys` 与 `resolveReaderKey` 都是**每次按键现读** store，而不是绑定时捕获——store 才是「现在绑的是什么」的那份记录，一个要重新绑定才听得见改动的监听器就是它的第二份副本。`null` 表示删除（缺席即默认），所以没有「恢复默认」这个值需要存。
+
+设置页的 `KeymapSection` 是唯一写这张表的地方。`useRecorder` 的监听器挂在 `window` 的**捕获阶段**并吞掉听到的一切：录制时按 ⌘K 不能让命令面板盖在正在改键的面板上（`useHotkeys` 是冒泡阶段，捕获先跑，`stopPropagation` 直接掐掉整段冒泡），Escape 是取消，裸修饰键与 `Dead` / `Unidentified` 不绑（`shortcutFromStroke`）。**面板只改 `keys`**：闸门（`when`）与 `inEditable` / `keepDefault` 都跟按键无关，面板碰不到。
+
+**改键能把某个绑定改到按不到，面板必须说得出来。** `unreachableBindings` 把四个闸门（灯箱 / 标尺 / 版式 / 竖排）的 16 种组合全枚举一遍，找「在任何上下文里都赢不了」的绑定，并点名是谁拿走了它的键。**按表分别枚举**：一个键归哪张表由模态决定（灯箱开着就是灯箱表），所以灯箱里的绑定不会去怪阅读表里持有 Escape 的那个人。`sharedShortcuts` 则只对**全局**命令有意义——阅读器里同一个键绑两条是设计（闸门决定谁生效），全局命令没有闸门可让，同一个键就是一次按键触发两个动作。
+
 ### 路由
 
 桌面应用没有地址栏，使用 `createMemoryRouter`。命令 → 路由跳转通过一个 `CustomEvent` 桥接（`useNavigationBridge`），因为命令注册表本身在 React Router 之外。
@@ -634,9 +640,11 @@ capability 只放行实际用到的三条：`updater:allow-check`、`updater:all
 
 - 笔记导出到 Anki（`.apkg`）—— Obsidian 方言已落地（2026-10-12）
 - 知识图谱力导向可视化深化（`GraphPanel` 已有基础）
-- 金句卡片分享图 · 扫描页整本识别 · 快捷键自定义 · 多窗口对照 · i18n（en）
+- 金句卡片分享图 · 扫描页整本识别 · 多窗口对照 · i18n（en）
 
-🔴 **快捷键自定义的前置是收编阅读器自己的键** —— **收编已完成（2026-10-12）**：`src/features/reader/readerKeys.ts` 是一张纯表，12 条绑定各有稳定 id 与中文标题（翻章翻页 / 标尺步进 / 灯箱 / 浮层关闭），`ReaderPage` 那 105 行分支换成「搭上下文 → 解一个 id → 翻译成调用」，`readerKeys.test.ts` 11 条用例把整张判定表钉住（改之前这块**一条单测都没有**，只有浏览器套件能碰到）。**剩下的才是面板**：把覆盖值写进 settings、`resolveReaderKey` 先查覆盖，再给设置页一块录制键的 UI。面板要动的是 `keys`，闸门（`when`）与 `inEditable` / `keepDefault` 都跟按键无关，不该被面板改到。
+**一项已于此日落地**（2026-10-12），从上面的清单里移走：
+
+- **快捷键自定义。** 分两步。**① 收编阅读器自己的键**：`src/features/reader/readerKeys.ts` 是一张纯表，12 条绑定各有稳定 id 与中文标题（翻章翻页 / 标尺步进 / 灯箱 / 浮层关闭），`ReaderPage` 那 105 行分支换成「搭上下文 → 解一个 id → 翻译成调用」，`readerKeys.test.ts` 把整张判定表钉住（改之前这块**一条单测都没有**，只有浏览器套件能碰到）。**② 面板**：`KeyOverrides` 写进 `useSettings`，`useHotkeys` 与 `resolveReaderKey` 每次按键现读，设置页的 `KeymapSection` 分「应用 / 阅读器」两张表列出可改的键，点「改键」按一下就换（捕获阶段录制，Escape 取消），并把改出来的问题（按不到的绑定、被两处占用的组合）显式列在「需要注意」里。`e2e/keymap.spec.ts` 走完整条链：面板写 → **刷新**（证明写进了存储而不只是面板状态）→ 打开书按新键。**面板只动 `keys`**，闸门与 `inEditable` / `keepDefault` 都跟按键无关，不该被面板改到。
 
 ### 明确不做
 
