@@ -7,7 +7,9 @@
 //!
 //! The API key is stored in SQLite, never in the renderer: a key in a webview's
 //! localStorage is readable by anything that can read the profile directory, and
-//! the backend needs it anyway because the backend makes the call.
+//! the backend needs it anyway because the backend makes the call. Since
+//! 2026-10-13 it is also sealed at rest under a key the OS credential store
+//! holds (`crate::secrets`), so the database file on its own is not enough.
 
 pub mod chat;
 pub mod embeddings;
@@ -15,7 +17,6 @@ pub mod lookup;
 pub mod rerank;
 pub mod vision;
 
-use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
 use crate::db::Library;
@@ -71,17 +72,16 @@ const DEFAULT_SYSTEM_PROMPT: &str = "你是一个阅读助手。只依据用户�
 const KEY: &str = "ai.config";
 
 /// Persisted config, or the defaults when nothing has been saved yet.
+///
+/// The two credentials in it are sealed at rest (see `crate::secrets`); the
+/// endpoint, model and prompt are not, because they are configuration rather
+/// than secrets and reading them back by eye is how the row stays debuggable.
 pub fn config(library: &Library) -> AppResult<AiConfig> {
-    library.with(|conn| {
-        let stored: Option<String> = conn
-            .query_row("SELECT value FROM settings WHERE key = ?1", [KEY], |row| row.get(0))
-            .optional()?;
-        match stored {
-            Some(json) => serde_json::from_str(&json)
-                .map_err(|err| AppError::Message(format!("AI 配置已损坏，请重新填写：{err}"))),
-            None => Ok(AiConfig::default()),
-        }
-    })
+    match crate::secrets::read_json(library, KEY)? {
+        Some(value) => serde_json::from_value(value)
+            .map_err(|err| AppError::Message(format!("AI 配置已损坏，请重新填写：{err}"))),
+        None => Ok(AiConfig::default()),
+    }
 }
 
 /// Writes the config back. `api_key` is validated by the caller's test call,
@@ -102,16 +102,7 @@ pub fn set_config(library: &Library, next: &AiConfig) -> AppResult<()> {
         rerank_model: next.rerank_model.trim().to_string(),
         deepl_key: next.deepl_key.trim().to_string(),
     };
-    let json = serde_json::to_string(&stored)?;
-    library.with(|conn| {
-        conn.execute(
-            "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
-               ON CONFLICT (key) DO UPDATE SET value = excluded.value,
-                                               updated_at = excluded.updated_at",
-            rusqlite::params![KEY, json, crate::library::now_seconds()],
-        )?;
-        Ok(())
-    })
+    crate::secrets::write_json(library, KEY, &serde_json::to_value(&stored)?)
 }
 
 /// `true` once a model is named: the endpoint may still be wrong, which is what
@@ -183,6 +174,23 @@ mod tests {
         assert_eq!(config.model, "qwen2.5");
         assert_eq!(config.system_prompt, "简短回答");
         assert_eq!(config.rerank_model, "bge-reranker-v2-m3");
+
+        // The round trip above cannot tell sealing from not sealing: a plaintext
+        // row reads back just as well. This is the assertion that fails if
+        // `set_config` ever stops routing through `secrets`, and it is the only
+        // place the wiring is checked from the caller's side.
+        let raw: String = harness
+            .library
+            .with(|conn| {
+                Ok(conn.query_row(
+                    "SELECT value FROM settings WHERE key = 'ai.config'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("raw row");
+        assert!(!raw.contains("sk-secret"), "API Key 明文落盘了：{raw}");
+        assert!(!raw.contains("key:fx"), "DeepL Key 明文落盘了：{raw}");
     }
 
     #[test]

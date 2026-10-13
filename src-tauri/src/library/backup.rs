@@ -38,6 +38,7 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 use super::now_seconds;
 use crate::db::{DB_FILE, Library};
 use crate::error::{AppError, AppResult};
+use crate::secrets::SECRET_FIELDS;
 
 /// Identifies the archive: a ZIP has no magic of its own, so this entry is
 /// what tells a backup from any other `.zip`.
@@ -52,14 +53,6 @@ const STAGING: &str = "-restore";
 const STAGING_TMP: &str = "-restore.tmp";
 /// Sibling directory holding the library a restore displaced.
 const PREVIOUS: &str = "-previous";
-
-/// The `settings` rows a backup carries, and the JSON fields in each that are
-/// the secret itself.
-///
-/// The WebDAV username goes with the password: half a credential pair is
-/// useless for signing in and still names the account.
-const SECRET_FIELDS: [(&str, &[&str]); 2] =
-    [("ai.config", &["apiKey", "deeplKey"]), ("sync.webdav", &["username", "password"])];
 
 /// What one backup or restore moved.
 #[derive(specta::Type, Debug, Clone, Copy, Serialize)]

@@ -39,6 +39,13 @@ pub enum AppError {
     #[error("archive error: {0}")]
     Zip(#[from] zip::result::ZipError),
 
+    /// A credential could not be sealed or opened. Its own variant because it
+    /// is the one failure the reader can act on by re-entering the credential,
+    /// and because the settings page keys its warning off it: "凭据" in the
+    /// message is what tells them which field to retype.
+    #[error("凭据不可用：{0}")]
+    Secrets(String),
+
     #[error("{0}")]
     Message(String),
 }
@@ -142,6 +149,7 @@ mod tests {
             AppError::Parse("bad opf".into()),
             AppError::InvalidArgument("empty id".into()),
             AppError::SourceMissing("abcdef.book".into()),
+            AppError::Secrets("钥匙串不可用".into()),
             AppError::poisoned("library"),
         ] {
             assert!(!err.to_string().is_empty(), "{err:?} rendered nothing");

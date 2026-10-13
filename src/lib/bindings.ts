@@ -418,6 +418,15 @@ export const commands = {
   syncNow: (config: SyncConfig) => __TAURI_INVOKE<SyncReport>("sync_now", { config }),
   /**  `system.info` */
   systemInfo: () => __TAURI_INVOKE<SystemInfo>("system_info"),
+  /**
+   *  `system.secretsStatus` — asked before the reader types a key into a field
+   *  that could not be saved, rather than after.
+   *
+   *  Never fails: "the credential store is unusable" is the answer this exists to
+   *  deliver, not an error, and a settings page that could not render its warning
+   *  would be worse than one that renders nothing.
+   */
+  secretsStatus: () => __TAURI_INVOKE<SecretsStatus>("secrets_status"),
   /**  `tag.list` */
   tagList: () => __TAURI_INVOKE<TagSummary[]>("tag_list"),
   /**  `tag.delete` — removes one tag from every book that carries it. */
@@ -1148,6 +1157,17 @@ export type SearchRules = {
   cover?: string;
   /**  Rule locating the book-detail URL (relative or absolute). */
   bookUrl?: string;
+};
+
+/**  Whether the credentials in the database can be sealed on this machine. */
+export type SecretsStatus = {
+  /**
+   *  `true` when the OS credential store answered *and* every sealed
+   *  credential opens. The settings page shows nothing at all when it is.
+   */
+  available: boolean;
+  /**  Why not, as a sentence to show as-is. */
+  detail: string | null;
 };
 
 /**  A book as a search result or detail response describes it. */

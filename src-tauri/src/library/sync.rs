@@ -13,7 +13,8 @@
 //! would destroy the other device's data.
 //!
 //! Password lives in SQLite next to the AI key, for the same reason: the
-//! renderer must never hold backend-owned secrets.
+//! renderer must never hold backend-owned secrets. Both are sealed at rest
+//! under a key the OS credential store holds — see `crate::secrets`.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -23,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use crate::db::Library;
 use crate::error::{AppError, AppResult};
 use crate::library::{annotations, bookmarks};
+use crate::secrets;
 
 /// Where the state document lives and how to sign in.
 #[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -43,16 +45,11 @@ const STATE_FILE: &str = "state.json";
 
 /// Persisted config, or blanks when nothing has been saved yet.
 pub fn config(library: &Library) -> AppResult<SyncConfig> {
-    library.with(|conn| {
-        let stored: Option<String> = conn
-            .query_row("SELECT value FROM settings WHERE key = ?1", [KEY], |row| row.get(0))
-            .optional()?;
-        match stored {
-            Some(json) => serde_json::from_str(&json)
-                .map_err(|err| AppError::Message(format!("同步配置已损坏，请重新填写：{err}"))),
-            None => Ok(SyncConfig::default()),
-        }
-    })
+    match secrets::read_json(library, KEY)? {
+        Some(value) => serde_json::from_value(value)
+            .map_err(|err| AppError::Message(format!("同步配置已损坏，请重新填写：{err}"))),
+        None => Ok(SyncConfig::default()),
+    }
 }
 
 /// Writes the config back after trimming; the URL shape is validated here.
@@ -62,16 +59,7 @@ pub fn set_config(library: &Library, next: &SyncConfig) -> AppResult<SyncConfig>
         username: next.username.trim().to_string(),
         password: next.password.clone(),
     };
-    let json = serde_json::to_string(&stored)?;
-    library.with(|conn| {
-        conn.execute(
-            "INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3)
-               ON CONFLICT (key) DO UPDATE SET value = excluded.value,
-                                               updated_at = excluded.updated_at",
-            rusqlite::params![KEY, json, crate::library::now_seconds()],
-        )?;
-        Ok(())
-    })?;
+    secrets::write_json(library, KEY, &serde_json::to_value(&stored)?)?;
     Ok(stored)
 }
 
@@ -966,5 +954,62 @@ mod tests {
         );
         assert_eq!(tally.deleted, 1);
         assert_eq!(delete, vec!["k".to_string()]);
+    }
+
+    /// A real database, so the credential assertions below run the same path a
+    /// save from the settings page does.
+    struct Harness {
+        dir: std::path::PathBuf,
+        library: Library,
+    }
+
+    impl Harness {
+        fn new(tag: &str) -> Self {
+            let dir = crate::document::fixture::temp_dir(tag);
+            let layout = crate::db::Layout::create(dir.clone()).expect("layout");
+            let library = Library::open(&layout.data_dir).expect("open");
+            Self { dir, library }
+        }
+    }
+
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.dir).ok();
+        }
+    }
+
+    #[test]
+    fn the_saved_credentials_are_not_in_the_row_in_the_clear() {
+        let harness = Harness::new("sync-credentials");
+        let saved = set_config(
+            &harness.library,
+            &SyncConfig {
+                url: "https://dav.example.com/dav/ColorReader/".into(),
+                username: "reader@example.com".into(),
+                password: "app-password".into(),
+            },
+        )
+        .expect("save");
+        assert_eq!(saved.url, "https://dav.example.com/dav/ColorReader", "尾斜杠要去掉");
+
+        // The round trip alone cannot tell sealing from not sealing — a
+        // plaintext row reads back just as well. This is what fails if
+        // `set_config` ever stops routing through `secrets`.
+        let raw: String = harness
+            .library
+            .with(|conn| {
+                Ok(conn.query_row(
+                    "SELECT value FROM settings WHERE key = 'sync.webdav'",
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .expect("raw row");
+        assert!(!raw.contains("app-password"), "密码明文落盘了：{raw}");
+        assert!(!raw.contains("reader@example.com"), "账号也一起封装：{raw}");
+
+        let config = config(&harness.library).expect("config");
+        assert_eq!(config.username, "reader@example.com");
+        assert_eq!(config.password, "app-password");
     }
 }

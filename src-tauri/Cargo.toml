@@ -92,6 +92,16 @@ flate2 = "1"
 tauri-specta = { version = "=2.0.0-rc.25", features = ["typescript"] }
 specta = { version = "=2.0.0-rc.25", features = ["derive"] }
 specta-typescript = "=0.0.12"
+# Custody for the key that seals credentials at rest (`src/secrets.rs`). The
+# point is that the key is *not* in the data directory: the database file and
+# the key live behind different access rules, and on macOS/Windows the OS is
+# what enforces them.
+#
+# The store feature is spelled out because the default set does not include it —
+# v4 splits each platform's store into its own crate, and a build with none of
+# them enabled fails at runtime with `NoDefaultStore` rather than quietly
+# writing nowhere. Windows and Linux keep their defaults.
+keyring = { version = "4.2.0", features = ["apple-native-keyring-store"] }
 
 # The platform's own dictionary, for the 词典 action's zero-config layer. macOS
 # only, because DictionaryServices is macOS only. `core-foundation-sys` is

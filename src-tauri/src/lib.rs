@@ -9,6 +9,7 @@ mod error;
 mod library;
 mod net;
 mod resource;
+mod secrets;
 mod state;
 mod tts;
 
@@ -84,6 +85,7 @@ pub fn run() -> tauri::Result<()> {
         .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             commands::system::system_info,
+            commands::system::secrets_status,
             commands::webview::webview_capture_region,
             commands::book::book_list,
             commands::book::book_get,
@@ -187,6 +189,16 @@ pub fn run() -> tauri::Result<()> {
                 // The fonts directory goes with it: it is the one resource the
                 // protocol has to resolve itself (see `resource::Registry`).
                 registry.set(library.clone(), layout.fonts_dir.clone());
+
+                // Credentials written before they were sealed are still in the
+                // clear in this database file. Best-effort: a machine with no
+                // usable credential store must still start, and the settings
+                // page is where that gets said out loud (`secrets::check`).
+                match secrets::seal_existing(&library) {
+                    Ok(0) => {}
+                    Ok(count) => tracing::info!(count, "已有凭据完成加密"),
+                    Err(err) => tracing::warn!(%err, "已有凭据未能加密，仍以明文保存在本机"),
+                }
 
                 tracing::info!(path = %layout.data_dir.display(), "application data directory ready");
                 app.manage(AppState { started_at: Instant::now(), layout, library });
@@ -395,6 +407,7 @@ mod specta_bindings {
                 commands::sync::sync_test,
                 commands::sync::sync_now,
                 commands::system::system_info,
+                commands::system::secrets_status,
                 commands::tag::tag_list,
                 commands::tag::tag_delete,
                 commands::tag::book_set_tags,

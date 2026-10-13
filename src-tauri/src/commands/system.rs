@@ -23,6 +23,17 @@ pub struct SystemInfo {
     pub uptime_ms: u64,
 }
 
+/// Whether the credentials in the database can be sealed on this machine.
+#[derive(specta::Type, Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretsStatus {
+    /// `true` when the OS credential store answered *and* every sealed
+    /// credential opens. The settings page shows nothing at all when it is.
+    pub available: bool,
+    /// Why not, as a sentence to show as-is.
+    pub detail: Option<String>,
+}
+
 /// `system.info`
 #[tauri::command]
 #[specta::specta]
@@ -35,6 +46,21 @@ pub fn system_info(state: State<'_, AppState>) -> SystemInfo {
         webview: webview_version().ok(),
         data_dir: state.layout.data_dir.to_string_lossy().to_string(),
         uptime_ms: to_millis(state.started_at),
+    }
+}
+
+/// `system.secretsStatus` — asked before the reader types a key into a field
+/// that could not be saved, rather than after.
+///
+/// Never fails: "the credential store is unusable" is the answer this exists to
+/// deliver, not an error, and a settings page that could not render its warning
+/// would be worse than one that renders nothing.
+#[tauri::command]
+#[specta::specta]
+pub fn secrets_status(state: State<'_, AppState>) -> SecretsStatus {
+    match crate::secrets::check(&state.library) {
+        Ok(()) => SecretsStatus { available: true, detail: None },
+        Err(detail) => SecretsStatus { available: false, detail: Some(detail) },
     }
 }
 
@@ -70,5 +96,15 @@ mod tests {
         assert!(value.get("appName").is_some());
         assert!(value.get("dataDir").is_some());
         assert_eq!(value["uptimeMs"], 1);
+    }
+
+    #[test]
+    fn a_healthy_store_carries_no_excuse() {
+        // The settings page shows a warning whenever `detail` is set, so an
+        // empty string would put a line on screen that says nothing.
+        let value = serde_json::to_value(SecretsStatus { available: true, detail: None })
+            .expect("payload must serialize");
+        assert_eq!(value["available"], true);
+        assert_eq!(value["detail"], serde_json::Value::Null);
     }
 }
