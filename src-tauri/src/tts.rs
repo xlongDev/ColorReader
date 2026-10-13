@@ -20,6 +20,14 @@
 //!   ~1.3e17, so it is computed in integers here — a double cannot hold it.
 //! * `Sec-MS-GEC-Version` must track a current Edge build. A stale version is
 //!   answered with a bare `403` on the handshake and nothing else.
+//! * The synthesis socket is on `api.msedgeservices.com` and the key travels
+//!   as `Ocp-Apim-Subscription-Key`. Microsoft is retiring the legacy
+//!   `speech.platform.bing.com` WebSocket — since 2026-10-10 it answers the
+//!   upgrade with a bare `403` in one country after another — while the voice
+//!   list on that same legacy host still answers, so `VOICES_URL` stays. The
+//!   new host takes the *legacy* signature computed here; claiming the v2
+//!   `Sec-MS-GEC-Version` without the v2 token is refused, so the version
+//!   constant stays on the build the v1 algorithm was pinned to.
 //! * A `Cookie: muid=<32 random hex>;` is required. Without it the handshake
 //!   is also refused with `403`.
 //! * Text frames and binary frames share one envelope: header lines, a blank
@@ -56,10 +64,10 @@ const CHROMIUM_VERSION: &str = "143.0.3650.75";
 
 const VOICES_URL: &str =
     "https://speech.platform.bing.com/consumer/speech/synthesize/readaloud/voices/list";
-const WSS_URL: &str = "wss://speech.platform.bing.com/consumer/speech/synthesize/readaloud/edge/v1";
+const WSS_URL: &str = "wss://api.msedgeservices.com/tts/cognitiveservices/websocket/v1";
 /// The same host, spelled out because opening a socket needs an address and
 /// `WSS_URL` is only a string.
-const WSS_HOST: &str = "speech.platform.bing.com";
+const WSS_HOST: &str = "api.msedgeservices.com";
 
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
      AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36 Edg/143.0.0.0";
@@ -522,7 +530,7 @@ async fn connect() -> Result<WebSocketStream<MaybeTlsStream<TcpStream>>, Attempt
 /// the cookie is meant to be fresh per request anyway.
 fn handshake_request() -> Result<WsRequest, Attempt> {
     let url = format!(
-        "{WSS_URL}?TrustedClientToken={TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC={}&Sec-MS-GEC-Version=1-{CHROMIUM_VERSION}&ConnectionId={}",
+        "{WSS_URL}?Ocp-Apim-Subscription-Key={TRUSTED_CLIENT_TOKEN}&Sec-MS-GEC={}&Sec-MS-GEC-Version=1-{CHROMIUM_VERSION}&ConnectionId={}",
         sec_ms_gec(now_seconds()),
         uuid::Uuid::new_v4().simple()
     );
@@ -717,7 +725,11 @@ mod tests {
     fn the_handshake_carries_everything_the_service_refuses_without() {
         let request = handshake_request().expect("request");
         let query = request.uri().query().unwrap_or_default();
-        assert!(query.contains("TrustedClientToken="), "{query}");
+        // The key's query name moved with the host: the legacy
+        // `TrustedClientToken` is what the retired `speech.platform.bing.com`
+        // WebSocket wanted, and `api.msedgeservices.com` refuses the upgrade
+        // without its own spelling.
+        assert!(query.contains("Ocp-Apim-Subscription-Key="), "{query}");
         assert!(query.contains("Sec-MS-GEC-Version=1-"), "{query}");
         let value = |name: &str| {
             request
