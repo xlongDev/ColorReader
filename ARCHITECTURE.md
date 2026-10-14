@@ -277,11 +277,13 @@ DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CO
 
 命名是这条链的关键一步：字体在 CSS 里叫 `cr-<id>`，设置里选中它用 `custom:<id>`，**两个名字都由 id 推出来**。这让 `resolveFont` 保持成一个对设置值的纯函数——选择器有列表，样式构建器没有。
 
+**字体目录**（`src/lib/fontCatalog.ts`）是第三条路：一键安装、零文件。装的不是字体，是**样式表**——几百 KB 的 `@font-face` 规则，字形子集仍按 `unicode-range` 从 CDN 现取，正是 `pnpm dev` 里霞鹜文楷那套做法。每条 sheet 用 sha256 钉死（`downloadCatalogFont` 校验不过就整款拒收，不留记录不留文件），两个源（jsDelivr / unpkg）依次回退；CSS 抓下来先重写成绝对 URL 再以 `<style>` 采纳——跨源 `<link>` 读不到 `cssRules`，blob 没有基址，只有内联 `<style>` 既同源可读、URL 又已绝对，`bundledFontFaces` 才能把规则原样抄进 section。目录只收 OFL 字体（许可允许我们这样分发字节）；华为/小米那类协议禁止再分发的品牌字面**刻意不在目录里**，它们将来只会指向厂商自己的 URL 并附带协议要求的署名。已下载列表存 `settings.downloadedFonts`（与 `reading.fonts` 分开：那份是导入的文件，这份是「选择器可以提供的字体」）。阅读路径零网络依赖之外的代价：选中目录字体时每次会话拉一次 sheet，交给 webview 的 HTTP 缓存吸收。
+
 **霞鹜文楷是唯一一个「不导入也能用」的字面**，而且它只活在 `pnpm dev`：`lxgw-wenkai-webfont` 是 582 个 `@font-face` 规则加 29 MB 子集，凡是要打包出去的构建都不带它——GitHub Pages 预览（`PAGES_BASE`）与桌面安装包（`CR_NO_BUNDLED_FONT`，`scripts/build-app.mjs` 经 `beforeBuildCommand` 设置）都在 `vite.config.ts` 里把 `bundledFont` 模块与样式表换成空壳，选择器因此不再提供这个字体（`offeredFontStacks` 读 `BUNDLED_FONT_AVAILABLE`），而不是静默回退到系统楷体。实测三种构建：标准 35 MB / 582 子集，两个打包构建各 5.8 MB / 0 子集。🔴 别把这两条别名写成 `resolve.alias` 对象里排在 `"@"` 后面的条目：字符串别名按前缀匹配，`"@"` 会先吞掉所有 `@/…`，排在后面的精确别名永远不生效——这个坑真实存在过几个月，两个「已剔除」的构建一直打着全部 29 MB。
 
-`@font-face` 要**分别**声明在两处，因为书的一节是一个独立文档，应用文档里的声明进不去它：书的那份随注入的样式表一起进 section（`FoliateStyle.fontFaces`），应用侧这份在 `AppShell` 里渲染一个 `<style>`，覆盖 prose 通路与设置界面。`font-display: swap` 是必需的：默认行为会在字体下载完之前不显示文字，而中文面孔有几十兆。
+`@font-face` 要**分别**声明在两处，因为书的一节是一个独立文档，应用文档里的声明进不去它：书的那份随注入的样式表一起进 section（`FoliateStyle.fontFaces`），应用侧这份在 `AppShell` 里渲染一个 `<style>`，覆盖 prose 通路与设置界面。`font-display` 两种取值都对，取决于文件多大：导入的字体用 `swap`（二十兆的文件 block 就是一页空白，默认行为更是），内置与目录字体用 `block`（子集按 `unicode-range` 按需取，等待很短，而 `swap` 会让读者先看到楷体再跳变——「页面字体先变成楷体再变成霞鹜文楷」就是这个）。`withBlockDisplay` 一处实现，构建层（`vite.config.ts` 的 postcss 插件，管应用文档）与运行时的目录采纳共用；**替换必须是全局的**，一份目录样式表里每条 `@font-face` 都写着 `swap`。
 
-最后两处容易漏：CSP 的 `font-src` 必须放行资源协议的源，否则 iframe 里的字体被策略挡掉；删除一个正在使用的字体时，`useDeleteFont` 会把设置退回 `system` —— 否则阅读面会去请求一个再也没有 `@font-face` 声明过的族名，文字悄悄变成浏览器的兜底字体，屏幕上没有任何解释。
+最后两处容易漏：CSP 的 `font-src` 必须放行资源协议的源，否则 iframe 里的字体被策略挡掉——目录字体起来之后，`font-src` 与 `connect-src` 还要放行 jsDelivr 与 unpkg，样式表走 `connect-src`、子集走 `font-src`，漏一个就是「下载成功但正文还是楷体」；删除一个正在使用的字体时，`useDeleteFont` / `useRemoveCatalogFont` 会把设置退回 `system` / `book` —— 否则阅读面会去请求一个再也没有 `@font-face` 声明过的族名，文字悄悄变成浏览器的兜底字体，屏幕上没有任何解释。
 
 ### 演进为 Workspace 的触发条件
 

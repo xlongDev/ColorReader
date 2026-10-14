@@ -42,8 +42,30 @@ is vendored (see above). readest's own AGPL source files are not shipped.
 - License: SIL Open Font License 1.1 — `node_modules/lxgw-wenkai-webfont/OFL.txt`
 - Copyright (c) 2021 Klee One contributors / 落霞孤鹜
 
-Bundled as the reading surface's default CJK face. One subset is also copied to
+Carried by `pnpm dev` only: both builds that ship alias the webfont package out
+(`vite.config.ts`) because its 582 subsets are 29 MB, and the face is offered to
+readers through the font catalogue below instead. One subset is also copied to
 `e2e/fixtures/sample-font.woff2` as the font-import fixture.
+
+## 字体目录 / the font catalogue — SIL OFL 1.1
+
+- 霞鹜文楷 / LXGW WenKai — <https://github.com/lxgw/LxgwWenKai> (webfont
+  packaging: `lxgw-wenkai-webfont`)
+- Noto Serif SC — <https://github.com/notofonts/noto-cjk> (webfont packaging:
+  `@fontsource/noto-serif-sc`)
+- License: SIL Open Font License 1.1 for both — the packages carry `OFL.txt`
+
+Neither font file is redistributed with the app. What the reader installs is the
+`@font-face` stylesheet, fetched from jsDelivr or unpkg on request
+(`src/lib/fontCatalog.ts` pins each sheet by sha256 and refuses anything else);
+the glyph subsets then stream from the same CDN per `unicode-range`, the way
+`pnpm dev` has always served 霞鹜文楷 from the app bundle. OFL is the licence
+that permits serving the bytes this way — the brand faces whose agreements
+forbid it are deliberately absent from the catalogue.
+
+`e2e/fixtures/font-catalog/*.css` are verbatim copies of the two packages'
+sheets, committed so the click-through test is hermetic; their sha256 values are
+the ones the catalogue pins. They are excluded from Prettier for that reason.
 
 ## pdf.js — Apache-2.0
 
