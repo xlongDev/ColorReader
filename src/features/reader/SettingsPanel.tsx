@@ -33,8 +33,10 @@ import {
   useReaderSettings,
 } from "@/stores/reader";
 import { useFonts } from "@/hooks/useFonts";
+import { useSettings } from "@/stores/settings";
 import { ZH_MODES } from "@/features/reader/zhConvert";
 import {
+  catalogFontOptions,
   customFontKey,
   offeredFontStacks,
   LAYOUT_MODES,
@@ -71,6 +73,11 @@ export function SettingsPanel({
   // stylesheets, so it is read once rather than on every keystroke-sized
   // re-render of the panel.
   const stacks = useMemo(() => offeredFontStacks(), []);
+  // The catalogue fonts the reader has installed, in the same list as the
+  // built-in stacks: a catalogue face is adopted into the app document exactly
+  // the way a bundled one is, so the picker need not know the difference.
+  const downloadedFonts = useSettings((state) => state.downloadedFonts);
+  const catalog = useMemo(() => catalogFontOptions(downloadedFonts), [downloadedFonts]);
   const appTheme = useResolvedTheme();
   // The picker edits the surface of the appearance currently active — and
   // "active" now means what the page is wearing, which is the reader's own
@@ -117,6 +124,7 @@ export function SettingsPanel({
             // the picker a plain list of names.
             options={[
               ...stacks,
+              ...catalog,
               ...fonts.map((font) => ({ key: customFontKey(font.id), label: font.name })),
             ]}
             value={settings.fontFamily}

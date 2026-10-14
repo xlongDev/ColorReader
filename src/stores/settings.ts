@@ -79,6 +79,16 @@ interface SettingsState {
   /** Rebound keys, keyed by command id — the registry's commands and the
    *  reader's own table both. Empty until a reader changes one. */
   keyOverrides: KeyOverrides;
+  /**
+   * Catalogue fonts the reader has installed, by catalogue id.
+   *
+   * The bytes are adopted into the document from the CDN on demand — this
+   * list is the *offer*: a font the picker may present and the reader may
+   * select. Persisted here rather than in the reader store because it is an
+   * app preference like the rest, and `resetAllSettings` writes the default
+   * back like everything else.
+   */
+  downloadedFonts: string[];
   setTheme: (mode: ThemeMode) => void;
   setTransparency: (mode: TransparencyMode) => void;
   toggleSidebar: () => void;
@@ -93,6 +103,8 @@ interface SettingsState {
    *  no separate "reset" value to store. */
   setKeyOverride: (id: string, keys: readonly Shortcut[] | null) => void;
   resetKeyOverrides: () => void;
+  addDownloadedFont: (id: string) => void;
+  removeDownloadedFont: (id: string) => void;
 }
 
 const shelfView = (sort: LibrarySort): ShelfView => ({
@@ -130,6 +142,7 @@ export const DEFAULT_SETTINGS = {
   dictFontSize: 14,
   dictAutoSpeak: false,
   keyOverrides: {},
+  downloadedFonts: [],
 } satisfies Partial<SettingsState>;
 
 export const useSettings = create<SettingsState>()(
@@ -162,6 +175,14 @@ export const useSettings = create<SettingsState>()(
           return { keyOverrides: next };
         }),
       resetKeyOverrides: () => set({ keyOverrides: {} }),
+      addDownloadedFont: (id) =>
+        set((state) =>
+          state.downloadedFonts.includes(id)
+            ? state
+            : { downloadedFonts: [...state.downloadedFonts, id] },
+        ),
+      removeDownloadedFont: (id) =>
+        set((state) => ({ downloadedFonts: state.downloadedFonts.filter((font) => font !== id) })),
     }),
     {
       name: "colorreader.settings",

@@ -2,10 +2,12 @@ import { renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import * as bundled from "@/features/reader/bundledFont";
+import * as catalog from "@/features/reader/catalogFont";
 import { useBundledFont } from "@/features/reader/useBundledFont";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  catalog.removeCatalogFont("noto-serif-sc");
 });
 
 describe("useBundledFont", () => {
@@ -95,5 +97,72 @@ describe("the web build's stand-in", () => {
     expect(web.BUNDLED_FONT_AVAILABLE).toBe(false);
     expect(bundled.BUNDLED_FONT_AVAILABLE).toBe(true);
     await expect(web.loadBundledFontCss()).resolves.toBeUndefined();
+  });
+});
+
+describe("catalogue fonts", () => {
+  it("renders the fallback family while the sheets are being adopted", async () => {
+    // Same reasoning as 霞鹜文楷's 楷体: Noto Serif SC falls through to the
+    // 宋体 stack, so the frame looks like the finished thing rather than like
+    // a change.
+    const gate: { open?: () => void } = {};
+    const pending = new Promise<void>((done) => {
+      gate.open = done;
+    });
+    vi.spyOn(catalog, "ensureCatalogAdopted").mockReturnValue(pending);
+
+    const { result } = renderHook(() => useBundledFont("catalog:noto-serif-sc"));
+    expect(result.current).toBe("song");
+    gate.open?.();
+    await waitFor(() => expect(result.current).toBe("catalog:noto-serif-sc"));
+  });
+
+  it("loads the sheets for a reader who picks the font after opening the book", async () => {
+    // The 🔴 regression from the bundled path, on this one: the hook mounted
+    // with some other font and is asked for the catalogue font later.
+    const adopt = vi.spyOn(catalog, "ensureCatalogAdopted").mockResolvedValue();
+    const { result, rerender } = renderHook(({ key }) => useBundledFont(key), {
+      initialProps: { key: "book" },
+    });
+    expect(adopt).not.toHaveBeenCalled();
+
+    rerender({ key: "catalog:noto-serif-sc" });
+    await waitFor(() => expect(adopt).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(result.current).toBe("catalog:noto-serif-sc"));
+  });
+
+  it("leaves a font that is already adopted alone", async () => {
+    // The settings page installs a catalogue font; the reader then mounts with
+    // that key and must not fetch the sheets a second time.
+    catalog.adoptCatalogFont("noto-serif-sc", "@font-face {}");
+    const adopt = vi.spyOn(catalog, "ensureCatalogAdopted");
+
+    const { result } = renderHook(() => useBundledFont("catalog:noto-serif-sc"));
+    expect(result.current).toBe("catalog:noto-serif-sc");
+    expect(adopt).not.toHaveBeenCalled();
+  });
+
+  it("says so when the sheets cannot be fetched, and does not retry forever", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const adopt = vi
+      .spyOn(catalog, "ensureCatalogAdopted")
+      .mockRejectedValue(new Error("no sheet"));
+
+    const { rerender } = renderHook(({ key }) => useBundledFont(key), {
+      initialProps: { key: "book" },
+    });
+    rerender({ key: "catalog:noto-serif-sc" });
+    await waitFor(() => expect(warn).toHaveBeenCalled());
+    rerender({ key: "catalog:noto-serif-sc" });
+    expect(adopt).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers non-catalogue keys unchanged, and synchronously", () => {
+    const adopt = vi.spyOn(catalog, "ensureCatalogAdopted");
+    for (const key of ["book", "system", "song", "custom:7f1c"]) {
+      const { result } = renderHook(() => useBundledFont(key));
+      expect(result.current, key).toBe(key);
+    }
+    expect(adopt).not.toHaveBeenCalled();
   });
 });

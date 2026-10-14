@@ -11,6 +11,13 @@
 import type { CSSProperties } from "react";
 
 import { BUNDLED_FONT_AVAILABLE } from "@/features/reader/bundledFont";
+import {
+  CATALOG_FONTS,
+  catalogFontById,
+  catalogIdOfKey,
+  catalogKey,
+  type CatalogFont,
+} from "@/lib/fontCatalog";
 import type { LocalFont } from "@/types/ipc";
 
 export interface ReadingSurface {
@@ -244,6 +251,8 @@ export function resolveFont(key: string): string {
     // the whole declaration invalid rather than merely wrong.
     return `"${customFontFamily(key.slice(CUSTOM_FONT.length))}"`;
   }
+  const catalogId = catalogIdOfKey(key);
+  if (catalogId !== null) return catalogFontById(catalogId)?.stack ?? FONT_STACKS[0]!.stack;
   return (FONT_STACKS.find((font) => font.key === key) ?? FONT_STACKS[0]!).stack;
 }
 
@@ -342,19 +351,71 @@ export function bundledFontFaces(
  *
  * The app document gets the same treatment at the build layer (`vite.config.ts`
  * rewrites the package's CSS), because a `.txt` book renders there rather than
- * in a foliate section, and it flashed for exactly the same reason.
+ * in a foliate section, and it flashed for exactly the same reason. A catalogue
+ * font adopted at runtime gets it here, for the same reason — the two copies
+ * of the rule are one function so they cannot drift.
+ *
+ * Global, because the two callers hand it different things: `bundledFontFaces`
+ * passes one `cssText` at a time, while `downloadCatalogFont` passes a whole
+ * sheet — and a sheet is one `@font-face` per subset, every one of them
+ * authored `swap`. A non-global replace left all but the first still swapping,
+ * which is the flash this function exists to remove.
  */
-function withBlockDisplay(css: string): string {
+export function withBlockDisplay(css: string): string {
   return /font-display\s*:/.test(css)
-    ? css.replace(/font-display\s*:\s*[a-z]+/i, "font-display: block")
-    : css.replace(/\{\s*/, "{ font-display: block; ");
+    ? css.replace(/font-display\s*:\s*[a-z]+/gi, "font-display: block")
+    : css.replace(/\{\s*/g, "{ font-display: block; ");
 }
 
 /** The bundled `@font-face` rules a font key needs inside a book section, or
  *  an empty string for every face the app does not ship itself. */
 export function bundledFacesFor(key: string): string {
-  const family = FONT_STACKS.find((font) => font.key === key)?.bundled;
+  const family = FONT_STACKS.find((font) => font.key === key)?.bundled ?? catalogFamilyOfKey(key);
   return family ? bundledFontFaces(family) : "";
+}
+
+/** The family a catalogue key's adopted sheet declares — the same lookup
+ *  `bundledFontFaces` needs, one indirection away because the catalogue lives
+ *  in its own module. */
+function catalogFamilyOfKey(key: string): string | undefined {
+  const id = catalogIdOfKey(key);
+  return id === null ? undefined : catalogFontById(id)?.family;
+}
+
+/**
+ * The catalogue entries this build may offer at all.
+ *
+ * One suppression, and it is about the *build* rather than the reader: a family
+ * this build already ships bundled is left to its built-in entry. That is
+ * `pnpm dev`, where 霞鹜文楷 still comes out of `node_modules` — a second chip
+ * for one family would be two ways to select one font, and the bundled one is
+ * the one that costs nothing. The settings row and the picker both start here,
+ * so it is one rule instead of two that can disagree.
+ */
+export function offeredCatalogFonts(): CatalogFont[] {
+  const shipped = new Set(
+    offeredFontStacks().flatMap((font) => (font.bundled ? [font.bundled] : [])),
+  );
+  return CATALOG_FONTS.filter((font) => !shipped.has(font.family));
+}
+
+/**
+ * Picker entries for the catalogue fonts the reader has downloaded.
+ *
+ * An id the catalogue no longer carries is dropped: the downloaded list is
+ * persisted settings, and a font retired from the catalogue must not leave a
+ * chip that selects a stack with no face behind it — the same silent
+ * substitution `offeredFontStacks` exists to prevent.
+ */
+export function catalogFontOptions(downloaded: readonly string[]): FontOption[] {
+  return offeredCatalogFonts()
+    .filter((font) => downloaded.includes(font.id))
+    .map((font) => ({
+      key: catalogKey(font.id),
+      label: font.name,
+      stack: font.stack,
+      bundled: font.family,
+    }));
 }
 
 /**

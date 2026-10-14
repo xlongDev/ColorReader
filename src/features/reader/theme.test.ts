@@ -3,12 +3,15 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   bundledFacesFor,
   bundledFontFaces,
+  catalogFontOptions,
   customFontFamily,
   customFontKey,
   fontFaceCss,
+  offeredCatalogFonts,
   offeredFontStacks,
   resolveFont,
 } from "./theme";
+import { catalogFontById } from "@/lib/fontCatalog";
 
 describe("resolveFont", () => {
   it("falls back to the system stack for a key it does not know", () => {
@@ -201,5 +204,67 @@ describe("offeredFontStacks", () => {
     install(face("LXGW WenKai", "400", "/assets/lxgw.woff2"));
     removeSheets();
     expect(offeredFontStacks().map((font) => font.key)).toContain("lxgw");
+  });
+});
+
+describe("catalogue fonts", () => {
+  it("resolves a catalogue key to the catalogue's own stack", () => {
+    expect(resolveFont("catalog:noto-serif-sc")).toBe(catalogFontById("noto-serif-sc")!.stack);
+    // A font retired from the catalogue would leave such a key behind, the
+    // same way a deleted import does — it resolves to the system stack rather
+    // than throwing.
+    expect(resolveFont("catalog:retired")).toBe("var(--font-sans)");
+  });
+
+  it("carries an adopted catalogue family's rules into a section", () => {
+    // The section document sees nothing of the app's own declarations, so the
+    // catalogue face travels under the family its sheet declares — read back
+    // out of the adopted <style> exactly like a bundled one.
+    install(
+      face(
+        "Noto Serif SC",
+        "400",
+        "https://cdn.jsdelivr.net/files/noto-serif-sc-4-400-normal.woff2",
+      ),
+    );
+    expect(bundledFacesFor("catalog:noto-serif-sc")).toContain('font-family: "Noto Serif SC"');
+  });
+});
+
+describe("offeredCatalogFonts", () => {
+  it("leaves out a family this build already ships, so one font is one entry", () => {
+    // `pnpm dev` (and this suite) carry 霞鹜文楷 bundled; offering a download of
+    // the same family in the settings row would be a second way to get a font
+    // the reader already has.
+    const offered = offeredCatalogFonts().map((font) => font.id);
+    expect(offered).not.toContain("lxgw");
+    expect(offered).toContain("noto-serif-sc");
+  });
+});
+
+describe("catalogFontOptions", () => {
+  it("offers a downloaded catalogue font the picker can select", () => {
+    const noto = catalogFontById("noto-serif-sc")!;
+    expect(catalogFontOptions(["noto-serif-sc"])).toEqual([
+      {
+        key: "catalog:noto-serif-sc",
+        label: "Noto Serif SC",
+        stack: noto.stack,
+        bundled: noto.family,
+      },
+    ]);
+  });
+
+  it("offers nothing for a font that is downloaded but not offered here", () => {
+    // The other side of `offeredCatalogFonts`: a stored id for a family this
+    // build ships bundled must not produce a chip the settings row refused to
+    // install.
+    expect(catalogFontOptions(["lxgw"])).toEqual([]);
+  });
+
+  it("drops an id the catalogue no longer carries", () => {
+    // The downloaded list is persisted settings; a retired font must not
+    // leave a chip selecting a stack with no face behind it.
+    expect(catalogFontOptions(["retired-font"])).toEqual([]);
   });
 });

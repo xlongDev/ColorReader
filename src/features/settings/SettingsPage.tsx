@@ -30,6 +30,9 @@ import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
 import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from "@/hooks/useSync";
 import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
 import { useDeleteFont, useFonts, useImportFont } from "@/hooks/useFonts";
+import { useDownloadCatalogFont, useRemoveCatalogFont } from "@/hooks/useCatalogFonts";
+import { catalogSheetBytes, type CatalogFont } from "@/lib/fontCatalog";
+import { offeredCatalogFonts } from "@/features/reader/theme";
 import { useUpdater, type UpdateState } from "@/stores/updater";
 import { useExportBackup, useStageBackup } from "@/hooks/useBackup";
 import { isDesktopRuntime } from "@/lib/ipc";
@@ -1018,15 +1021,25 @@ function LookupSourceRows() {
 /**
  * Fonts for the reading surface.
  *
- * Nothing ships with the app: CJK faces are tens of megabytes and their
- * licences belong to their authors, so the reader brings the file they already
- * have. Importing copies it next to the library and the reader picks it from
- * the same 字体 row as the built-in stacks.
+ * Two ways in. The reader can import a file they already have — nothing ships
+ * with the app, because CJK faces are tens of megabytes and their licences
+ * belong to their authors. Or they can install one of the catalogue fonts with
+ * a click: the catalogue serves only the `@font-face` sheet, and the glyph
+ * subsets stream per `unicode-range` while reading, so installing 霞鹜文楷
+ * costs 0.2 MB rather than the face's twenty.
+ *
+ * The catalogue rows are offered, not installed: 下载 fetches the sheets and
+ * 删除 takes them back out, and both are honest about the one thing the
+ * reader gives up — installing needs the network, and a font whose sheet
+ * cannot be fetched reads as the next family in its stack.
  */
 function FontSection() {
   const fonts = useFonts();
   const upload = useImportFont();
   const remove = useDeleteFont();
+  const catalogDownload = useDownloadCatalogFont();
+  const catalogRemove = useRemoveCatalogFont();
+  const downloaded = useSettings((state) => state.downloadedFonts);
   const [status, setStatus] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
 
   const pick = async () => {
@@ -1057,6 +1070,24 @@ function FontSection() {
     }
   };
 
+  const installCatalog = (font: CatalogFont) => {
+    setStatus(null);
+    catalogDownload.mutate(font, {
+      onSuccess: () =>
+        setStatus({ tone: "ok", text: `「${font.name}」已安装，可以在阅读器的「字体」里选用。` }),
+      onError: (error) =>
+        setStatus({ tone: "bad", text: `「${font.name}」安装失败：${String(error)}` }),
+    });
+  };
+
+  const removeCatalog = (font: CatalogFont) => {
+    setStatus(null);
+    catalogRemove.mutate(font, {
+      onSuccess: () => setStatus({ tone: "ok", text: `「${font.name}」已移除。` }),
+      onError: (error) => setStatus({ tone: "bad", text: String(error) }),
+    });
+  };
+
   const list = fonts.data ?? [];
 
   return (
@@ -1064,8 +1095,48 @@ function FontSection() {
       id="fonts"
       icon={TextAa}
       title="字体"
-      description="导入 .ttf / .otf / .ttc / .woff / .woff2 后，可以在阅读器的「字体」里选用（如 LXGW 文楷、霞鹜文楷等）。字体只存在本机，不随应用分发。"
+      description="导入 .ttf / .otf / .ttc / .woff / .woff2 文件，或从下方目录一键安装。目录字体只下载样式表（约 0.1 MB），正文字形在阅读时按 unicode-range 按需加载：首次安装需要网络，之后可以在阅读器的「字体」里选用；断网时回退到字体栈里的下一款。导入的文件只存在本机，不随应用分发。"
     >
+      {offeredCatalogFonts().map((font) => {
+        const installed = downloaded.includes(font.id);
+        const busy = catalogDownload.isPending && catalogDownload.variables?.id === font.id;
+        return (
+          <Row
+            key={font.id}
+            label={font.name}
+            // The sheet's cost, and the licence it comes under. The URL is in
+            // the catalogue (`src/lib/fontCatalog.ts`) rather than on a link
+            // here: a desktop webview has no default handler for external
+            // links, and a button that half-works is worse than the text.
+            hint={`${formatFileSize(catalogSheetBytes(font))}样式表 · ${font.license}`}
+          >
+            {installed ? (
+              <button
+                type="button"
+                aria-label={`删除 ${font.name}`}
+                title={`删除 ${font.name}`}
+                onClick={() => removeCatalog(font)}
+                disabled={catalogRemove.isPending}
+                className="text-text-3 hover:text-danger focus-ring shrink-0 rounded-md p-1 transition-colors disabled:opacity-50"
+              >
+                <Trash size={14} />
+              </button>
+            ) : (
+              <GlassButton
+                size="sm"
+                onClick={() => installCatalog(font)}
+                disabled={busy}
+                // One 下载 per catalogue entry: the visible text names the
+                // action, the label names the font it acts on.
+                aria-label={`下载 ${font.name}`}
+              >
+                {busy ? "下载中…" : "下载"}
+              </GlassButton>
+            )}
+          </Row>
+        );
+      })}
+
       {list.length === 0 ? (
         <Row label="已导入" hint="还没有导入字体。" />
       ) : (

@@ -11,3 +11,5 @@ coverage
 public/pdfjs
 # vendored readest foliate-js fork (MIT), keep verbatim
 src/vendor
+# pinned CDN font stylesheets — the catalogue stores their sha256, keep verbatim
+e2e/fixtures/font-catalog
