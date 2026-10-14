@@ -1,13 +1,20 @@
 import { afterEach, describe, expect, it } from "vitest";
 
+import { adoptCatalogFont, isCatalogAdopted } from "@/features/reader/catalogFont";
+import { catalogKey } from "@/lib/fontCatalog";
 import { resetAllSettings } from "@/stores/reset";
 import { DEFAULT_SETTINGS, useSettings } from "@/stores/settings";
 import { DEFAULT_READER_SETTINGS, useReaderSettings } from "@/stores/reader";
+
+/** The `localStorage` key the catalogue sheets live under — see
+ *  `catalogFont.test.ts` for why it is spelled out rather than imported. */
+const SHEET_STORE = "colorreader.catalogFontSheets";
 
 describe("resetAllSettings", () => {
   afterEach(() => {
     useSettings.setState(DEFAULT_SETTINGS);
     useReaderSettings.setState(DEFAULT_READER_SETTINGS);
+    for (const element of document.querySelectorAll('[id^="catalog-font-"]')) element.remove();
   });
 
   it("puts both persisted stores back to what the app shipped with", () => {
@@ -42,5 +49,27 @@ describe("resetAllSettings", () => {
     useSettings.getState().setKeyOverride("reader.chapter.next", [{ key: "n" }]);
     resetAllSettings(false);
     expect(useSettings.getState().keyOverrides).toEqual({});
+  });
+
+  it("uninstalls the catalogue fonts along with the flag that lists them", () => {
+    // 下载 is two writes — the id in `downloadedFonts` and the sheet in the
+    // document — and only the first of them is a preference. Clearing one and
+    // leaving the other is the bug this pins: 霞鹜文楷 stayed declared and
+    // rendering, with no row anywhere saying it was installed and no way for
+    // the reader to take it out short of a reinstall.
+    adoptCatalogFont("lxgw", '@font-face { font-family: "LXGW WenKai" }');
+    localStorage.setItem(SHEET_STORE, JSON.stringify({ lxgw: { fingerprint: "x", css: "y" } }));
+    useSettings.setState({ downloadedFonts: ["lxgw"] });
+    useReaderSettings.setState({ fontFamily: catalogKey("lxgw") });
+
+    resetAllSettings(false);
+
+    expect(useSettings.getState().downloadedFonts).toEqual([]);
+    // …and the picker is back on 原书 rather than on a key whose sheet just
+    // went away — which `useAdoptedFontKey` would read as "not installed yet"
+    // and go and fetch again.
+    expect(useReaderSettings.getState().fontFamily).toBe("book");
+    expect(isCatalogAdopted("lxgw")).toBe(false);
+    expect(localStorage.getItem(SHEET_STORE)).toBeNull();
   });
 });

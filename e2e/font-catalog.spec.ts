@@ -14,7 +14,7 @@ import { expect, test, type Page } from "@playwright/test";
  * Noto Serif SC is the subject rather than 霞鹜文楷 on purpose: 霞鹜文楷 has a
  * spec of its own (`font-display.spec.ts`) pinning the engine's view of its
  * rules, and this one is about the journey — install, offer, select, remove,
- * survive a restart offline.
+ * survive a restart offline, go away with 重置.
  *
  * Noto Serif SC has no other way into the app at all: nothing ships a font, so
  * if the reader renders this family the catalogue put it there.
@@ -193,4 +193,36 @@ test("an installed font is still there after a reload with the CDN gone", async 
   // to be fetched would have left the reader on the fallback family.
   await expect.poll(() => parsedFamilies(page), { timeout: 10_000 }).toContain("Noto Serif SC");
   expect(sheetRequests).toEqual([]);
+});
+
+/**
+ * 重置 把目录字体一起卸掉。
+ *
+ * `downloadedFonts` is a preference and goes with the rest of them; the sheet
+ * in the document is not, and it is the half that used to be left behind —
+ * 霞鹜文楷 stayed declared and rendering with no row anywhere saying it was
+ * installed, and no way for the reader to take it out short of a reinstall.
+ */
+test("restoring every setting uninstalls a catalogue font with the rest", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await routeSheets(page);
+
+  await openFonts(page);
+  await page.getByRole("button", { name: "下载 Noto Serif SC" }).click();
+  await expect(page.getByRole("button", { name: "删除 Noto Serif SC" })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await page.getByRole("button", { name: "重置", exact: true }).click();
+  await page.getByRole("button", { name: "还原", exact: true }).click();
+  // Two buttons are named 还原 once the dialog is open — see
+  // `settings-reset.spec.ts`.
+  await page.getByRole("dialog").getByRole("button", { name: "还原", exact: true }).click();
+  await expect(page.getByText("已还原所有设置")).toBeVisible();
+
+  await page.getByRole("button", { name: "字体", exact: true }).click();
+  await expect(page.getByRole("button", { name: "下载 Noto Serif SC" })).toBeVisible();
+  expect(
+    await page.evaluate(() => document.getElementById("catalog-font-noto-serif-sc") !== null),
+  ).toBe(false);
 });
