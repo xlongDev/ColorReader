@@ -13,17 +13,31 @@ import { expect, test, type Page } from "@playwright/test";
  *
  * Noto Serif SC is the subject rather than 霞鹜文楷 on purpose: 霞鹜文楷 has a
  * spec of its own (`font-display.spec.ts`) pinning the engine's view of its
- * rules, and this one is about the journey — install, offer, select, remove.
+ * rules, and this one is about the journey — install, offer, select, remove,
+ * survive a restart offline.
+ *
  * Noto Serif SC has no other way into the app at all: nothing ships a font, so
  * if the reader renders this family the catalogue put it there.
  *
- * The subset `woff2` files are not shipped as fixtures and are answered 404:
- * the glyph stream is the browser's job, and what this pins is the app's own
+ * The subset `woff2` files are not shipped as fixtures and are aborted: the
+ * glyph stream is the browser's job, and what this pins is the app's own
  * contract — the sheet is installed, the face is offered, the picker selects
  * it, and the engine parses the family into `document.fonts`.
  */
 
 const FIXTURES = "e2e/fixtures/font-catalog";
+
+/** The two hosts the manifest lists, both serving the pinned sheets. */
+async function routeSheets(page: Page): Promise<void> {
+  await page.route("**/noto-serif-sc@5.3.1/*.css", (route) => {
+    const weight = route.request().url().endsWith("/700.css") ? "700" : "400";
+    void route.fulfill({
+      path: `${FIXTURES}/noto-serif-sc-${weight}.css`,
+      contentType: "text/css",
+    });
+  });
+  await page.route("**/files/noto-serif-sc-*.woff2", (route) => route.abort());
+}
 
 /** 设置 is a chrome button, not a rail link; the route boots on the shelf. */
 async function openFonts(page: Page): Promise<void> {
@@ -56,14 +70,7 @@ test("a catalogue font installs, renders in a book, and uninstalls", async ({ pa
   await page.setViewportSize({ width: 1280, height: 900 });
 
   // The two hosts the manifest lists, both serving the pinned sheets.
-  await page.route("**/noto-serif-sc@5.3.1/*.css", (route) => {
-    const weight = route.request().url().endsWith("/700.css") ? "700" : "400";
-    void route.fulfill({
-      path: `${FIXTURES}/noto-serif-sc-${weight}.css`,
-      contentType: "text/css",
-    });
-  });
-  await page.route("**/files/noto-serif-sc-*.woff2", (route) => route.abort());
+  await routeSheets(page);
 
   await openFonts(page);
   const row = page.getByText("Noto Serif SC", { exact: true }).first();
@@ -122,4 +129,68 @@ test("a catalogue font installs, renders in a book, and uninstalls", async ({ pa
   expect(
     await page.evaluate(() => document.getElementById("catalog-font-noto-serif-sc") !== null),
   ).toBe(false);
+});
+
+/**
+ * 断网之后，装过的字体还在。
+ *
+ * The claim under test is narrow on purpose, because the wider one is false:
+ * what the app keeps locally is the `@font-face` **sheet**. The glyph subsets
+ * are still the browser's to fetch and cache, so this asserts that the family
+ * is in the document after a reload with every CDN request refused — which is
+ * the sheet coming out of storage, since a sheet that had to be fetched would
+ * have failed and left the reader on the fallback family.
+ *
+ * Nothing adopts the sheets at boot: they come back the way they went in, on
+ * the reader path, when a book asks for the family. So the reload has to land
+ * in the book rather than on the shelf.
+ */
+test("an installed font is still there after a reload with the CDN gone", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await routeSheets(page);
+
+  await openFonts(page);
+  await page.getByRole("button", { name: "下载 Noto Serif SC" }).click();
+  await expect(page.getByRole("button", { name: "删除 Noto Serif SC" })).toBeVisible({
+    timeout: 15_000,
+  });
+
+  await page.goto("/?demo=1");
+  await page
+    .getByRole("button", { name: /我们为什么会生病/ })
+    .first()
+    .click();
+  await expect(page.getByRole("button", { name: "阅读设置" }).first()).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.waitForTimeout(700);
+  await page.getByRole("button", { name: "Noto Serif SC", exact: true }).first().click();
+  await expect.poll(() => parsedFamilies(page), { timeout: 10_000 }).toContain("Noto Serif SC");
+
+  // The network goes away for good, the sheets included.
+  await page.unroute("**/noto-serif-sc@5.3.1/*.css");
+  await page.route("**/noto-serif-sc@5.3.1/*.css", (route) => route.abort());
+  // Scoped to the CDN, and to stylesheets: the app's own `index-*.css` comes
+  // back on the reload too, and counting it would make this assertion about
+  // nothing.
+  const sheetRequests: string[] = [];
+  page.on("request", (request) => {
+    const url = request.url();
+    if (url.endsWith(".css") && /jsdelivr|unpkg/.test(url)) sheetRequests.push(url);
+  });
+
+  await page.reload();
+  // The router always boots on the shelf, so the book is opened again; the
+  // reader comes back on the family that was picked, from the settings store.
+  await page
+    .getByRole("button", { name: /我们为什么会生病/ })
+    .first()
+    .click();
+
+  // The family is in the document, which it can only be from the kept sheet:
+  // the route above refuses every attempt to fetch one, and a sheet that had
+  // to be fetched would have left the reader on the fallback family.
+  await expect.poll(() => parsedFamilies(page), { timeout: 10_000 }).toContain("Noto Serif SC");
+  expect(sheetRequests).toEqual([]);
 });

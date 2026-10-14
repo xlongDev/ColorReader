@@ -24,9 +24,11 @@ export function useDownloadCatalogFont() {
 }
 
 /**
- * Uninstalls one catalogue font — and steps the picker off it when it is the
- * one in use, for the same reason `useDeleteFont` does: selecting a family
- * whose sheet is no longer adopted would silently fall through the stack.
+ * Uninstalls one catalogue font — the sheet in the document, the copy kept for
+ * the next launch, and the id in `downloadedFonts` — and steps the picker off
+ * it when it is the one in use, for the same reason `useDeleteFont` does:
+ * selecting a family whose sheet is no longer adopted would silently fall
+ * through the stack.
  *
  * Returning to 原书 is the state a fresh install starts in, and one the reader
  * can see.

@@ -1094,7 +1094,7 @@ function FontSection() {
       id="fonts"
       icon={TextAa}
       title="字体"
-      description="导入 .ttf / .otf / .ttc / .woff / .woff2 文件，或从下方目录一键安装。目录字体只下载样式表（约 0.1 MB），正文字形在阅读时按 unicode-range 按需加载：首次安装需要网络，之后可以在阅读器的「字体」里选用；断网时回退到字体栈里的下一款。导入的文件只存在本机，不随应用分发。"
+      description="导入 .ttf / .otf / .ttc / .woff / .woff2 文件，或从下方目录一键安装。目录字体只下载样式表（约 0.1 MB）并存在本机，装好之后断网也能用；正文字形在阅读时按 unicode-range 按需加载，读过的部分离线完整，没读过的字在断网时回退到字体栈里的下一款。导入的文件只存在本机，不随应用分发。"
     >
       {CATALOG_FONTS.map((font) => {
         const installed = downloaded.includes(font.id);
