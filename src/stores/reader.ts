@@ -473,7 +473,7 @@ export const useReaderSettings = create<ReaderState>()(
       // Bump only when a stored value changes meaning; a newly added key needs
       // no bump — the default merge layers the persisted state over the
       // initial one.
-      version: 10,
+      version: 11,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are
       // continuous px now and the scale was rebased (old 特宽 = new 标准).
@@ -543,6 +543,13 @@ export const useReaderSettings = create<ReaderState>()(
         // is the explicit 竖排, `false` was the old forced-horizontal default
         // and maps to 跟随书籍.
         if (next.fontFamily === "system") next.fontFamily = "book";
+        // v11: no build carries a bundled CJK face any more — 霞鹜文楷 became a
+        // catalogue entry the reader installs with one click. A stored `lxgw`
+        // is the old bundled key and now resolves to nothing, which would drop
+        // the reader onto the system *sans* without a word. 楷体 is the family
+        // that stack fell through to, so this leaves the page looking exactly
+        // as it did; the face itself is one download away, under the same name.
+        if (next.fontFamily === "lxgw") next.fontFamily = "kai";
         const legacyVertical = (state as { vertical?: unknown }).vertical;
         if (typeof legacyVertical === "boolean") {
           next.writingMode = legacyVertical ? "vertical" : "auto";

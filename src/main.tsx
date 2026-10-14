@@ -5,14 +5,12 @@ import { AppRouter } from "@/app/router";
 import { ErrorBoundary } from "@/components/common/ErrorBoundary";
 import { MiniBar } from "@/features/reader/MiniBar";
 import "@/styles/globals.css";
-// 🔴 LXGW WenKai is deliberately NOT imported here. Its 582 `@font-face` rules
-// are 539 KB — the single largest thing in the first paint — and the font is
-// the fifth option in a picker whose default is 「系统」, so almost every
-// session was paying to parse a family it never used. It loads on demand
-// instead: `useBundledFont` fetches the sheet when the reader picks it, and
-// nothing else in the app needs the rules in the document. The 29 MB of subset
-// woff2 were never the cost — they only download when a glyph falls in their
-// `unicode-range`, and a section fetches only the handful its own glyphs hit.
+// 🔴 No CJK face is imported here, and none is imported anywhere else either.
+// The app ships zero font bytes: a face the reader wants comes from the
+// catalogue (one click, `src/lib/fontCatalog.ts`) or from a file they bring,
+// and both are declared at runtime. That is what keeps 29 MB of subsets out of
+// the bundle, and it is also why the font the reader picks is held back rather
+// than swapped in — see `useAdoptedFontKey`.
 
 const container = document.getElementById("root");
 if (!container) throw new Error("Root container #root not found");

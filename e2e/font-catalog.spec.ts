@@ -11,10 +11,11 @@ import { expect, test, type Page } from "@playwright/test";
  * path (a served file that did not match would fail the install, which is
  * the point of the pin).
  *
- * Noto Serif SC is the subject rather than 霞鹜文楷 on purpose: this build
- * ships 霞鹜文楷 bundled, so its picker entry exists with or without the
- * catalogue. Noto Serif SC has no bundled face anywhere — if the reader
- * renders it, the catalogue put it there.
+ * Noto Serif SC is the subject rather than 霞鹜文楷 on purpose: 霞鹜文楷 has a
+ * spec of its own (`font-display.spec.ts`) pinning the engine's view of its
+ * rules, and this one is about the journey — install, offer, select, remove.
+ * Noto Serif SC has no other way into the app at all: nothing ships a font, so
+ * if the reader renders this family the catalogue put it there.
  *
  * The subset `woff2` files are not shipped as fixtures and are answered 404:
  * the glyph stream is the browser's job, and what this pins is the app's own
@@ -96,8 +97,8 @@ test("a catalogue font installs, renders in a book, and uninstalls", async ({ pa
   await expect(page.getByRole("button", { name: "删除 Noto Serif SC" })).toBeVisible();
 
   // The reader: the picker offers the installed face, and selecting it parses
-  // the family into the engine. 霞鹜文楷 exists in this build either way;
-  // Noto Serif SC only exists because the catalogue adopted it.
+  // the family into the engine. Nothing ships a font, so the family exists
+  // here only because the catalogue adopted it.
   await page.goto("/?demo=1");
   await page
     .getByRole("button", { name: /我们为什么会生病/ })

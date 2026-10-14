@@ -1,7 +1,7 @@
 import { renderHook } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import { bundledFacesFor, type ReadingSurface } from "@/features/reader/theme";
+import { adoptedFacesFor, type ReadingSurface } from "@/features/reader/theme";
 import { useFoliateStyle, type FoliateStyleOptions } from "@/features/reader/useFoliateStyle";
 import type { LocalFont } from "@/types/ipc";
 
@@ -91,8 +91,10 @@ describe("useFoliateStyle", () => {
     const none = setup({ fonts: [] }).result.current.fontFaces;
     const some = setup({ fonts: [font] }).result.current.fontFaces;
 
-    // Nothing imported: exactly the bundled faces, nothing before them.
-    expect(none).toBe(bundledFacesFor("songti"));
+    // Nothing imported: exactly the faces the theme module would carry for
+    // this key — none, for a stack the section resolves itself — and nothing
+    // before them.
+    expect(none).toBe(adoptedFacesFor("song"));
     for (const faces of [none, some]) {
       expect(faces.startsWith("\n")).toBe(false);
       expect(faces.endsWith("\n")).toBe(false);

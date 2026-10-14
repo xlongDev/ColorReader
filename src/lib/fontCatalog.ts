@@ -3,10 +3,10 @@
  *
  * Nothing here ships with the app. Each entry points at *stylesheets* — the
  * `@font-face` rules — hosted on a public CDN, and the glyph subsets they name
- * stream per `unicode-range` the way the dev build's own bundled 霞鹜文楷 has
- * always done (see `main.tsx`). The cost of "installing" a catalogue font is
- * the sheet: a couple of hundred kilobytes, against the ten-or-twenty
- * megabytes the face itself is.
+ * stream per `unicode-range`, so the app never downloads the face: a section
+ * fetches the handful of subsets its own glyphs fall into. The cost of
+ * "installing" a catalogue font is the sheet — a couple of hundred kilobytes,
+ * against the ten-or-twenty megabytes the face itself is.
  *
  * Two entries, both SIL OFL 1.1 — the licences that permit serving the bytes
  * from our own mirror in the first place. The brand faces (HarmonyOS Sans,
@@ -48,7 +48,7 @@ export interface CatalogFont {
   /**
    * The `font-family` the sheet declares its faces under. A book section
    * cannot see the app's own declarations, so the face travels into the
-   * section under this name (see `bundledFontFaces`).
+   * section under this name (see `adoptedFontFaces`).
    */
   family: string;
   /** The picker's stack: the family first, then what to fall through to. */

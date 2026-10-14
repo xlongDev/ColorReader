@@ -1,35 +1,64 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
 /**
- * 霞鹜文楷 is held back rather than swapped in.
+ * A font the reader installs is held back rather than swapped in.
  *
  * "从别的字体切换成霞鹜文楷的时候,页面字体先会变成楷体再变成霞鹜文楷" is what
  * `font-display: swap` looks like from the reader's chair: the book paints in
- * 楷体 — the next family in the stack — and changes under them when the
- * subsets land. The webfont package authors every one of its subsets as
- * `swap`, so the app rewrites them to `block` in `vite.config.ts`, and this
- * asserts the rewrite reached the built sheet.
+ * 楷体 — the next family in the stack — and changes under them when the subsets
+ * land. Both webfont packages author every subset as `swap`, so the app
+ * rewrites them to `block` as it adopts the sheet (`withBlockDisplay`), and
+ * this asserts the rewrite reached the engine's own view of the rules.
  *
- * It is the app document that is checked, which is the surface a `.txt` book
- * renders in. A foliate section is a document of its own and gets its rules
- * from `bundledFontFaces` instead; the two are covered by the same descriptor
- * and the same rewrite, and the section path was measured separately with the
- * font held back at the network layer — the shipped rules drew no ink where
- * `swap` drew the fallback face.
+ * It is the app document that is checked, which is where an adopted sheet
+ * lands. A foliate section is a document of its own and gets its rules from
+ * `adoptedFontFaces` instead; the two are covered by the same descriptor and
+ * the same rewrite, and the section path was measured separately with the font
+ * held back at the network layer — the shipped rules drew no ink where `swap`
+ * drew the fallback face.
  *
  * `FontFace.display` is the descriptor as the engine parsed it, so this fails
- * if the plugin is dropped, if the package is upgraded into a sheet that
- * bypasses PostCSS, or if the family stops loading altogether.
+ * if the rewrite is dropped or if a package is upgraded into a sheet that
+ * bypasses it. 霞鹜文楷 is the subject rather than Noto Serif SC because its
+ * stack falls through to 楷体, which is the flash the report above describes.
  *
- * 🔴 The sheet is **not** in the document at startup any more: 582 rules
- * (539 KB) load on the reader picking 霞鹜文楷 (`useBundledFont`). So this
- * picks the font first and waits for `document.fonts` to report the family —
- * reading the counters at startup would only measure the laziness. `document.fonts`
- * only lists faces the engine has *parsed*, so its growing is the signal that
- * the sheet arrived, and it is the same signal a real reader waits for.
+ * 🔴 The sheet is **not** in the document at startup: nothing ships a font, so
+ * it arrives when the reader installs one. This installs first and waits for
+ * `document.fonts` to report the family — reading the counters at startup would
+ * only measure the absence. `document.fonts` lists the faces the engine has
+ * *parsed*, so its growing is the signal that the sheet arrived, and it is the
+ * same signal a real reader waits for.
  */
+
+/** The sheets `src/lib/fontCatalog.ts` pins, served from the fixtures it pins
+ *  them to — the hash check stays in the path either way. */
+async function installLxgw(page: Page): Promise<void> {
+  await page.route("**/lxgw-wenkai-webfont@1.7.0/lxgwwenkai-*.css", (route) => {
+    const weight = route.request().url().includes("bold") ? "bold" : "regular";
+    void route.fulfill({
+      path: `e2e/fixtures/font-catalog/lxgw-${weight}.css`,
+      contentType: "text/css",
+    });
+  });
+  // The glyph stream is the browser's job and is not what this pins; the
+  // sheets are, and the engine parses a family out of them without any subset
+  // ever arriving.
+  await page.route("**/files/lxgwwenkai-*.woff2", (route) => route.abort());
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).first().click();
+  await expect(page.getByRole("heading", { name: "设置", level: 1 })).toBeVisible();
+  await page.getByRole("button", { name: "字体", exact: true }).click();
+  await page.getByRole("button", { name: "下载 霞鹜文楷" }).click();
+  await expect(page.getByText("「霞鹜文楷」已安装，可以在阅读器的「字体」里选用。")).toBeVisible({
+    timeout: 15_000,
+  });
+}
+
 test("霞鹜文楷 is held back rather than swapped in", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
+  await installLxgw(page);
+
   await page.goto("/?demo=1");
   await page
     .getByRole("button", { name: /我们为什么会生病/ })
@@ -53,8 +82,8 @@ test("霞鹜文楷 is held back rather than swapped in", async ({ page }) => {
       }
       return out;
     };
-    // The sheet arrives as a separate stylesheet, so poll the engine's own
-    // view of it rather than sleeping a guessed interval.
+    // The sheet is adopted asynchronously, so poll the engine's own view of it
+    // rather than sleeping a guessed interval.
     for (let i = 0; i < 40; i += 1) {
       const seen = count();
       if ((seen.block ?? 0) > 0) return seen;
@@ -63,9 +92,9 @@ test("霞鹜文楷 is held back rather than swapped in", async ({ page }) => {
     return count();
   });
 
-  // 291 subsets today. Not pinned exactly, because the number belongs to the
-  // package and a bump would fail this for no reason — what matters is that
-  // the family is present at all and that not one rule still swaps.
+  // Not pinned exactly, because the number belongs to the package and a bump
+  // would fail this for no reason — what matters is that the family is present
+  // at all and that not one rule still swaps.
   expect(
     faces.block ?? 0,
     `the sheet has to declare the family (saw ${JSON.stringify(faces)})`,

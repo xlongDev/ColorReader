@@ -159,3 +159,30 @@ describe("v8 page-theme migration", () => {
     expect(pageThemeOf({ pageTheme: "day" })).toBe("day");
   });
 });
+
+/**
+ * v11 retires the bundled webfont key. `lxgw` selected a face only `pnpm dev`
+ * carried; no build ships one now, and an unmigrated key resolves to the system
+ * *sans* rather than to the 楷体 that stack used to fall through to — the
+ * reader's page changing font on upgrade, with nothing to explain it.
+ */
+function fontFamilyOf(persisted: Record<string, unknown>): unknown {
+  const options = useReaderSettings.persist.getOptions();
+  if (!options.migrate) throw new Error("the store lost its migrate function");
+  return (options.migrate(persisted, 10) as { fontFamily: unknown }).fontFamily;
+}
+
+describe("v11 bundled-font-key migration", () => {
+  it("moves the retired bundled key to the family its stack fell through to", () => {
+    expect(fontFamilyOf({ fontFamily: "lxgw" })).toBe("kai");
+  });
+
+  it("leaves every key the app still knows alone", () => {
+    // Not `system`: v10 turns that into `book` on its own account (it was the
+    // old default rather than a choice), and this migration must not interfere
+    // with that.
+    for (const key of ["book", "song", "kai", "hei", "catalog:lxgw"]) {
+      expect(fontFamilyOf({ fontFamily: key }), key).toBe(key);
+    }
+  });
+});

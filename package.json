@@ -8,7 +8,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
-    "build:app": "node scripts/build-app.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "oxlint .",
@@ -41,7 +40,6 @@
     "@tauri-apps/plugin-process": "^2.4.0",
     "@tauri-apps/plugin-updater": "^2.13.2",
     "clsx": "^2.1.1",
-    "lxgw-wenkai-webfont": "^1.7.0",
     "motion": "^14.0.0",
     "opencc-js": "^1.4.2",
     "pdfjs-dist": "^6.4.299",

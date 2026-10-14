@@ -31,8 +31,7 @@ import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from 
 import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
 import { useDeleteFont, useFonts, useImportFont } from "@/hooks/useFonts";
 import { useDownloadCatalogFont, useRemoveCatalogFont } from "@/hooks/useCatalogFonts";
-import { catalogSheetBytes, type CatalogFont } from "@/lib/fontCatalog";
-import { offeredCatalogFonts } from "@/features/reader/theme";
+import { CATALOG_FONTS, catalogSheetBytes, type CatalogFont } from "@/lib/fontCatalog";
 import { useUpdater, type UpdateState } from "@/stores/updater";
 import { useExportBackup, useStageBackup } from "@/hooks/useBackup";
 import { isDesktopRuntime } from "@/lib/ipc";
@@ -1097,7 +1096,7 @@ function FontSection() {
       title="字体"
       description="导入 .ttf / .otf / .ttc / .woff / .woff2 文件，或从下方目录一键安装。目录字体只下载样式表（约 0.1 MB），正文字形在阅读时按 unicode-range 按需加载：首次安装需要网络，之后可以在阅读器的「字体」里选用；断网时回退到字体栈里的下一款。导入的文件只存在本机，不随应用分发。"
     >
-      {offeredCatalogFonts().map((font) => {
+      {CATALOG_FONTS.map((font) => {
         const installed = downloaded.includes(font.id);
         const busy = catalogDownload.isPending && catalogDownload.variables?.id === font.id;
         return (

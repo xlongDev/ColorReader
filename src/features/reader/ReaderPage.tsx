@@ -66,7 +66,7 @@ import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionTo
 import type { AnnotationStyle } from "@/types/ipc";
 import { useTtsHost } from "@/features/reader/TtsHost";
 import { resolveSurface, readerGlassVars } from "@/features/reader/theme";
-import { useBundledFont } from "@/features/reader/useBundledFont";
+import { useAdoptedFontKey } from "@/features/reader/useAdoptedFontKey";
 import {
   useAnnotations,
   useAnchorAnnotation,
@@ -1652,7 +1652,7 @@ function ReaderView({
   // reading paths ask the same hook — they share one stylesheet's worth of
   // rules, and each asking for a different answer would show the reader two
   // fonts in one book.
-  const font = useBundledFont(settings.fontFamily);
+  const font = useAdoptedFontKey(settings.fontFamily);
   const foliateStyle = useFoliateStyle({
     fontSize,
     font,

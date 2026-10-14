@@ -10,14 +10,7 @@
 
 import type { CSSProperties } from "react";
 
-import { BUNDLED_FONT_AVAILABLE } from "@/features/reader/bundledFont";
-import {
-  CATALOG_FONTS,
-  catalogFontById,
-  catalogIdOfKey,
-  catalogKey,
-  type CatalogFont,
-} from "@/lib/fontCatalog";
+import { CATALOG_FONTS, catalogFontById, catalogIdOfKey, catalogKey } from "@/lib/fontCatalog";
 import type { LocalFont } from "@/types/ipc";
 
 export interface ReadingSurface {
@@ -188,15 +181,6 @@ export interface FontOption {
   label: string;
   /** CSS `font-family` for the article body. */
   stack: string;
-  /**
-   * The `font-family` this option's `@font-face` is declared under in the *app*
-   * document, when the face ships with the app rather than being imported.
-   *
-   * It has to be named here because a book section cannot see the app's own
-   * declarations (see [`bundledFontFaces`]), and the stack alone is not enough
-   * to go on: it lists four families, only the first of which is bundled.
-   */
-  bundled?: string;
 }
 
 export const FONT_STACKS: FontOption[] = [
@@ -215,15 +199,12 @@ export const FONT_STACKS: FontOption[] = [
     label: "黑体",
     stack: '"PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
   },
-  // 霞鹜文楷 — the `@font-face` ships with the app (see `main.tsx`), so
-  // the reader can pick it without the user having to import a font. Falls
-  // back to the system kaiti stack on the rare platform without LXGW.
-  {
-    key: "lxgw",
-    label: "霞鹜文楷",
-    stack: '"LXGW WenKai", "LXGW WenKai Screen", "Kaiti SC", "STKaiti", "KaiTi", serif',
-    bundled: "LXGW WenKai",
-  },
+  // 霞鹜文楷 is deliberately not here. No build ships a CJK face — that is the
+  // whole point of the catalogue — so it is an entry the reader installs with
+  // one click and selects as `catalog:lxgw`, offered from `CATALOG_FONTS`
+  // rather than from this list. It used to sit here behind a `bundled` marker
+  // that only `pnpm dev` satisfied, which meant the face was in the picker in
+  // exactly the builds nobody else ran.
 ];
 
 /**
@@ -279,31 +260,26 @@ export function fontFaceCss(fonts: readonly Pick<LocalFont, "id" | "url">[]): st
 }
 
 /**
- * `@font-face` for a face that ships with the app, read back out of the app's
- * own stylesheets so a book section can carry a copy.
+ * `@font-face` for a face the app adopted at runtime, read back out of the
+ * app's own stylesheets so a book section can carry a copy.
  *
- * The bug this exists for: 霞鹜文楷 is installed in the app document (`main.tsx`
- * imports the webfont package's 582 `unicode-range` subsets), and a foliate
- * section is a document of its own. A section asking for `"LXGW WenKai"` finds
- * no such face in *its* document, falls through the stack, and renders as
- * `"Kaiti SC"` — the reader picks 霞鹜文楷 and gets the system 楷体. The rules
- * have to be handed to the section, which is the same thing `fontFaceCss`
- * already does for imported faces.
+ * The bug this exists for: a catalogue font is adopted into the app document
+ * as an inline `<style>` (see `catalogFont.ts`), and a foliate section is a
+ * document of its own. A section asking for `"Noto Serif SC"` finds no such
+ * face in *its* document, falls through the stack, and renders as `"Songti
+ * SC"` — the reader installs 思源宋体 and gets the system 宋体. The rules have
+ * to be handed to the section, which is the same thing `fontFaceCss` already
+ * does for imported faces.
  *
- * Reading them back rather than importing the package's CSS a second time
- * keeps one copy of the 29 MB of subsets in the build: the URLs in these rules
- * are the ones Vite already emitted for the app's own sheet. They are resolved
- * against the sheet they came from, because in a production build the sheet is
- * a hashed `/assets/*.css` and its `src` is relative to *that*, not to the
- * page.
+ * Reading them back rather than fetching the sheet a second time keeps one
+ * copy of the rules in the build: `useAdoptedFontKey` needs them in the app
+ * document for the prose surface, and the section needs the same rules.
  *
- * Only the weights a book's body text uses. The package also ships 300 and a
- * monospace cut; carrying those would add ~320 KB of rules to every section
- * document for nothing. Measured cost of the remaining 194 rules: ~2 ms to
- * inject into a document, and only the handful of subsets the section's own
- * glyphs fall into are ever fetched.
+ * Only the weights a book's body text uses. Both packages publish more than
+ * that; carrying the rest would add rules to every section document for a
+ * weight no book body text asks for.
  */
-export function bundledFontFaces(
+export function adoptedFontFaces(
   family: string,
   weights: readonly string[] = ["400", "700"],
 ): string {
@@ -313,8 +289,8 @@ export function bundledFontFaces(
     try {
       cssRules = sheet.cssRules;
     } catch {
-      // A cross-origin sheet cannot be read. Everything the app ships is
-      // same-origin, so this is only ever a third party's.
+      // A cross-origin sheet cannot be read. Every adopted sheet is inline, so
+      // this is only ever a third party's.
       continue;
     }
     for (const rule of cssRules) {
@@ -326,6 +302,12 @@ export function bundledFontFaces(
         withBlockDisplay(rule.cssText).replace(
           /url\((["']?)([^"')]+)\1\)/g,
           (_match, _quote: string, url: string) =>
+            // Resolved against the document, not against the section: an
+            // adopted `<style>` has no href of its own, and a section document
+            // would otherwise read a relative url as relative to the *book*.
+            // The catalogue rewrites its urls to absolute before adopting
+            // (`rewriteSheetUrls`), so this resolves nothing today — it is the
+            // backstop for a sheet that arrives relative.
             `url("${new URL(url, sheet.href ?? document.baseURI).href}")`,
         ),
       );
@@ -337,29 +319,25 @@ export function bundledFontFaces(
 /**
  * The same face, held back until it has arrived instead of swapping in late.
  *
- * The webfont package authors all 582 subsets with `font-display: swap`, which
- * is the right default for a page that can afford a fallback and the wrong one
+ * The webfont packages author every subset with `font-display: swap`, which is
+ * the right default for a page that can afford a fallback and the wrong one
  * here: a reader switching to 霞鹜文楷 watches the book render in 楷体 — the
  * next family in the stack — for as long as the subsets take to arrive, and
  * then change under them. That flash is what "只是变成了楷体" looked like.
  *
  * `block` spends the same moment showing *nothing* rather than the wrong face.
- * It is a short moment: the subsets are served out of the app bundle, a section
- * only ever needs the handful its own glyphs fall into, and the rules are
- * injected before the section paints — so the reader sees the text arrive
- * already in the font they chose.
+ * It is a short moment: a section only ever needs the handful of subsets its
+ * own glyphs fall into, and the rules are injected before the section paints —
+ * so the reader sees the text arrive already in the font they chose.
  *
- * The app document gets the same treatment at the build layer (`vite.config.ts`
- * rewrites the package's CSS), because a `.txt` book renders there rather than
- * in a foliate section, and it flashed for exactly the same reason. A catalogue
- * font adopted at runtime gets it here, for the same reason — the two copies
- * of the rule are one function so they cannot drift.
+ * Two callers, both on the adoption path: `downloadCatalogFont` rewrites a
+ * whole fetched sheet before adopting it (which is what the app document and
+ * the prose surface see), and `adoptedFontFaces` rewrites each rule again on
+ * its way into a book section. One function so the two cannot drift.
  *
- * Global, because the two callers hand it different things: `bundledFontFaces`
- * passes one `cssText` at a time, while `downloadCatalogFont` passes a whole
- * sheet — and a sheet is one `@font-face` per subset, every one of them
- * authored `swap`. A non-global replace left all but the first still swapping,
- * which is the flash this function exists to remove.
+ * Global, because a sheet is one `@font-face` per subset and every one of them
+ * is authored `swap`. A non-global replace left all but the first still
+ * swapping, which is the flash this function exists to remove.
  */
 export function withBlockDisplay(css: string): string {
   return /font-display\s*:/.test(css)
@@ -367,76 +345,28 @@ export function withBlockDisplay(css: string): string {
     : css.replace(/\{\s*/g, "{ font-display: block; ");
 }
 
-/** The bundled `@font-face` rules a font key needs inside a book section, or
- *  an empty string for every face the app does not ship itself. */
-export function bundledFacesFor(key: string): string {
-  const family = FONT_STACKS.find((font) => font.key === key)?.bundled ?? catalogFamilyOfKey(key);
-  return family ? bundledFontFaces(family) : "";
-}
-
-/** The family a catalogue key's adopted sheet declares — the same lookup
- *  `bundledFontFaces` needs, one indirection away because the catalogue lives
- *  in its own module. */
-function catalogFamilyOfKey(key: string): string | undefined {
+/** The `@font-face` rules a font key needs inside a book section, or an empty
+ *  string for every key whose face the section can resolve on its own. */
+export function adoptedFacesFor(key: string): string {
   const id = catalogIdOfKey(key);
-  return id === null ? undefined : catalogFontById(id)?.family;
+  const family = id === null ? undefined : catalogFontById(id)?.family;
+  return family ? adoptedFontFaces(family) : "";
 }
 
 /**
- * The catalogue entries this build may offer at all.
+ * Picker entries for the catalogue fonts the reader has installed.
  *
- * One suppression, and it is about the *build* rather than the reader: a family
- * this build already ships bundled is left to its built-in entry. That is
- * `pnpm dev`, where 霞鹜文楷 still comes out of `node_modules` — a second chip
- * for one family would be two ways to select one font, and the bundled one is
- * the one that costs nothing. The settings row and the picker both start here,
- * so it is one rule instead of two that can disagree.
- */
-export function offeredCatalogFonts(): CatalogFont[] {
-  const shipped = new Set(
-    offeredFontStacks().flatMap((font) => (font.bundled ? [font.bundled] : [])),
-  );
-  return CATALOG_FONTS.filter((font) => !shipped.has(font.family));
-}
-
-/**
- * Picker entries for the catalogue fonts the reader has downloaded.
- *
- * An id the catalogue no longer carries is dropped: the downloaded list is
+ * An id the catalogue no longer carries is dropped: the installed list is
  * persisted settings, and a font retired from the catalogue must not leave a
- * chip that selects a stack with no face behind it — the same silent
- * substitution `offeredFontStacks` exists to prevent.
+ * chip that selects a stack with no face behind it. The sheets themselves are
+ * not the picker's business — `useAdoptedFontKey` adopts them on selection.
  */
 export function catalogFontOptions(downloaded: readonly string[]): FontOption[] {
-  return offeredCatalogFonts()
-    .filter((font) => downloaded.includes(font.id))
-    .map((font) => ({
-      key: catalogKey(font.id),
-      label: font.name,
-      stack: font.stack,
-      bundled: font.family,
-    }));
-}
-
-/**
- * The stacks the picker may offer.
- *
- * A bundled face is only offered where this build ships it. No shipping build
- * does — the web preview and the desktop app bundle both leave the package out
- * (see `vite.config.ts`) — and offering 霞鹜文楷 there would fall through the
- * stack to the system 楷体 without a word, the same silent substitution that
- * used to happen when an imported font was deleted while it was selected.
- *
- * 🔴 Decided by [`BUNDLED_FONT_AVAILABLE`] rather than by asking the CSSOM
- * whether the rules are there. It used to ask, and the moment the sheet became
- * lazy (loaded on the reader picking the font) that answer flipped to "no face
- * here", so the picker stopped offering the very font whose loading would have
- * supplied the rules — a lock that shut itself. A build-time alias in
- * `vite.config.ts` answers it where the sheet's own removal is decided, so the
- * two halves are the same decision rather than two.
- */
-export function offeredFontStacks(): FontOption[] {
-  return FONT_STACKS.filter((font) => !font.bundled || BUNDLED_FONT_AVAILABLE);
+  return CATALOG_FONTS.filter((font) => downloaded.includes(font.id)).map((font) => ({
+    key: catalogKey(font.id),
+    label: font.name,
+    stack: font.stack,
+  }));
 }
 
 export const PAGE_TRANSITIONS: { key: PageTransition; label: string }[] = [

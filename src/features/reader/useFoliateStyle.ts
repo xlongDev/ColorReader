@@ -2,7 +2,7 @@ import { useMemo } from "react";
 
 import type { FoliateStyle } from "@/features/reader/foliateStyle";
 import {
-  bundledFacesFor,
+  adoptedFacesFor,
   fontFaceCss,
   resolveFont,
   type ReadingSurface,
@@ -88,9 +88,10 @@ export function useFoliateStyle({
       invertImages,
       // A section is its own document, so the faces have to travel with the
       // sheet rather than come from the app's own style — the imported ones
-      // and the ones the app ships (霞鹜文楷), which is the difference between
-      // the reader picking it and the reader getting the system 楷体.
-      fontFaces: [fontFaceCss(fonts), bundledFacesFor(font)].filter(Boolean).join("\n"),
+      // and the catalogue faces adopted into the app document, which is the
+      // difference between the reader picking Noto Serif SC and the reader
+      // getting the system 宋体.
+      fontFaces: [fontFaceCss(fonts), adoptedFacesFor(font)].filter(Boolean).join("\n"),
       writingMode,
       quoteReplace,
       zhConvert,

@@ -36,9 +36,9 @@ import { useFonts } from "@/hooks/useFonts";
 import { useSettings } from "@/stores/settings";
 import { ZH_MODES } from "@/features/reader/zhConvert";
 import {
+  FONT_STACKS,
   catalogFontOptions,
   customFontKey,
-  offeredFontStacks,
   LAYOUT_MODES,
   WRITING_MODES,
   PAGE_TRANSITIONS,
@@ -69,13 +69,9 @@ export function SettingsPanel({
   const settings = useReaderSettings();
   const { update } = settings;
   const fonts = useFonts().data ?? [];
-  // Which bundled faces this build actually carries. It reads the app's own
-  // stylesheets, so it is read once rather than on every keystroke-sized
-  // re-render of the panel.
-  const stacks = useMemo(() => offeredFontStacks(), []);
-  // The catalogue fonts the reader has installed, in the same list as the
-  // built-in stacks: a catalogue face is adopted into the app document exactly
-  // the way a bundled one is, so the picker need not know the difference.
+  // The stacks every machine already has. A catalogue face is adopted into the
+  // app document exactly the way these are declared in it, so the picker need
+  // not know the difference between the two.
   const downloadedFonts = useSettings((state) => state.downloadedFonts);
   const catalog = useMemo(() => catalogFontOptions(downloadedFonts), [downloadedFonts]);
   const appTheme = useResolvedTheme();
@@ -118,12 +114,13 @@ export function SettingsPanel({
 
         <Group label="字体">
           <Chips
-            // The stacks every machine already has first, then whatever the
-            // reader imported. A custom entry carries no `stack` of its own:
-            // `resolveFont` derives the family from the key, which is what keeps
-            // the picker a plain list of names.
+            // The stacks every machine already has first, then the catalogue
+            // fonts the reader installed, then whatever they imported. A custom
+            // entry carries no `stack` of its own: `resolveFont` derives the
+            // family from the key, which is what keeps the picker a plain list
+            // of names.
             options={[
-              ...stacks,
+              ...FONT_STACKS,
               ...catalog,
               ...fonts.map((font) => ({ key: customFontKey(font.id), label: font.name })),
             ]}

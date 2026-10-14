@@ -5,14 +5,14 @@
  * every weight's sheet. That shape is chosen over the two obvious ones:
  *
  * - A `<link href="https://cdn…">` is cross-origin, and a cross-origin
- *   stylesheet's `cssRules` cannot be read — `bundledFontFaces` walks exactly
+ *   stylesheet's `cssRules` cannot be read — `adoptedFontFaces` walks exactly
  *   that, and would answer "this build has no such face" for a face the
  *   reader just installed.
  * - A blob URL has no base to resolve the sheets' relative subset URLs
  *   against.
  *
  * An inline `<style>` is same-origin, readable, and its URLs are absolute by
- * the time they land (see `rewriteSheetUrls`), so `bundledFontFaces` copies
+ * the time they land (see `rewriteSheetUrls`), so `adoptedFontFaces` copies
  * the rules into a book section unchanged.
  *
  * The reader path (`ensureCatalogAdopted`) and the settings path

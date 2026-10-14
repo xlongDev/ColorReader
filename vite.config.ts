@@ -40,58 +40,11 @@ export default defineConfig({
   // GitHub Pages serves the web build under /<repo>/; the Tauri builds keep
   // the root base so bundled assets resolve the same way as always.
   base: process.env.PAGES_BASE ?? "/",
-  css: {
-    postcss: {
-      plugins: [
-        /**
-         * `font-display: block` on every `@font-face` in the app document.
-         *
-         * The LXGW webfont package authors its 582 subsets with `swap`, which
-         * is the right default for a page that can afford a fallback and the
-         * wrong one here: a reader switching to 霞鹜文楷 watches the book render
-         * in 楷体 — the next family in the stack — for as long as the subsets
-         * take to arrive, then change under them. `block` spends that moment
-         * showing nothing instead of the wrong face, and the subsets come out
-         * of the app bundle, so the moment is short.
-         *
-         * Scoped to `@font-face` rather than to the file: the app declares no
-         * other faces in CSS (imported ones are generated at runtime by
-         * `fontFaceCss`), so this can only ever touch the bundled package. The
-         * foliate sections need the same rewrite and get it in `theme.ts`,
-         * where the rules are read back out of this sheet.
-         */
-        {
-          postcssPlugin: "font-display-block",
-          Declaration(decl) {
-            if (decl.prop !== "font-display" || decl.value !== "swap") return;
-            if (decl.parent?.type !== "atrule") return;
-            if (decl.parent.name !== "font-face") return;
-            decl.value = "block";
-          },
-        },
-      ],
-    },
-  },
   resolve: {
-    // An array, in this order, and the order is load-bearing: a string alias
-    // entry matches by prefix (`find` plus a `/`), so a bare `"@"` would
-    // prefix-match every `@/…` import — including the webfont swap below —
-    // and the swap would never fire. It did not, for months: the two entries
-    // here used to sit *after* `"@"` in an object, so both shipping builds
-    // resolved the real module and shipped all 29 MB of subsets while every
-    // comment said they did not. The CSS entry additionally has to tolerate
-    // the `?url` query the dynamic import carries — a string entry does not.
+    // An array rather than an object: a string entry matches by prefix (`find`
+    // plus a `/`), which is what `"@"` needs in order to cover `@/…` without
+    // also swallowing a bare `@` specifier.
     alias: [
-      ...(process.env.PAGES_BASE || process.env.CR_NO_BUNDLED_FONT
-        ? [
-            {
-              find: "@/features/reader/bundledFont",
-              replacement: fileURLToPath(
-                new URL("./src/features/reader/no-bundled-font.ts", import.meta.url),
-              ),
-            },
-          ]
-        : []),
       {
         find: "@",
         replacement: fileURLToPath(new URL("./src", import.meta.url)),
@@ -104,33 +57,6 @@ export default defineConfig({
         find: "foliate-js",
         replacement: fileURLToPath(new URL("./src/vendor/foliate-js", import.meta.url)),
       },
-      // Both builds that *ship* leave the bundled webfont out — the GitHub
-      // Pages preview (`PAGES_BASE`, no backend behind it) and the desktop app
-      // bundle (`CR_NO_BUNDLED_FONT`, set by `scripts/build-app.mjs` through
-      // Tauri's beforeBuildCommand). That package is 582 `@font-face` rules
-      // — 539 KB, the largest thing in the first paint — pointing at 29 MB of
-      // subsets; a reader who wants the face imports their own file, the way
-      // every other font in this reader works. Only `pnpm dev` keeps it,
-      // served from `node_modules` with nothing emitted.
-      //
-      // The first alias is the decision: it swaps the module that *answers*
-      // whether the face exists, because once the sheet is gone CSSOM can no
-      // longer answer it — `offeredFontStacks` offers the face only where
-      // `BUNDLED_FONT_AVAILABLE`, and the dynamic `import(…?url)` lives in the
-      // module being swapped, so the stylesheet never enters the graph at all.
-      // This regex is the backstop for any *other* import of the sheet, with
-      // or without a query, and it is a RegExp precisely because a string
-      // entry does not match `…/style.css?url`.
-      ...(process.env.PAGES_BASE || process.env.CR_NO_BUNDLED_FONT
-        ? [
-            {
-              find: /^lxgw-wenkai-webfont\/style\.css(\?.*)?$/,
-              replacement: fileURLToPath(
-                new URL("./src/styles/no-bundled-font.css", import.meta.url),
-              ),
-            },
-          ]
-        : []),
     ],
   },
   clearScreen: false,
