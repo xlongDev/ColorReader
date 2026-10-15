@@ -26,7 +26,7 @@ pub use io::{clippings, export, import, pack, source};
 pub use lookup::{dictionaries, markup, mdict, stardict};
 pub use marks::{annotations, bookmarks, migrate};
 pub use retrieval::{rag, search};
-pub use shelf::{chapters, fonts, repository, stats, tags};
+pub use shelf::{chapters, font_archive, fonts, repository, stats, tags};
 pub use transfer::{backup, sync};
 
 #[cfg(test)]

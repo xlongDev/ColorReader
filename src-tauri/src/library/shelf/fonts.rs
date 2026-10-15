@@ -12,7 +12,13 @@
 //! of consulting a list.
 //!
 //! No font data ships with the app: CJK faces are tens of megabytes and their
-//! licences are their own, so the reader brings the file they already have.
+//! licences are their own. A face therefore arrives one of two ways — the
+//! reader picks a file they already have, or the catalogue fetches the vendor's
+//! own archive and unpacks one member of it (`font_archive`) — and both land
+//! here, as a row in this list.
+//!
+//! Nothing in this module touches the network or an archive: it is the
+//! registry, and the archive path hands it verified bytes.
 
 use std::path::{Path, PathBuf};
 
@@ -54,6 +60,34 @@ pub struct Font {
     /// derived from it into storage would outlive the build that produced it.
     #[serde(skip_deserializing, default)]
     pub url: String,
+    /// Which catalogue entry installed this, when one did.
+    ///
+    /// The catalogue's own record of a `file` font is this row and nothing
+    /// else: the bytes are here, the face is offered from here, and the
+    /// settings row finds its 删除 by looking for this id. `downloadedFonts`
+    /// in the settings store is the *webfont* kind's record and stays empty for
+    /// a face that arrives as a whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_id: Option<String>,
+    /// The licence file stored beside the face, when the vendor shipped one.
+    ///
+    /// Kept as a name rather than derived from the id, for the same reason
+    /// `file` is. HarmonyOS Sans's agreement asks that any copy of the fonts
+    /// carry its notice and terms, and this is what makes that true of the copy
+    /// on the reader's disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+}
+
+/// Where a face's bytes come from.
+///
+/// Two shapes rather than one `&[u8]`, because the import path must not read a
+/// twenty-megabyte face into memory just to write it out again, while the
+/// catalogue path already holds its bytes — they had to be hashed before
+/// anything else was allowed to happen to them.
+enum Face<'a> {
+    Copy(&'a Path),
+    Bytes(&'a [u8]),
 }
 
 /// Adds the URL, which is derived from the id and therefore never stored with
@@ -98,23 +132,23 @@ fn store(library: &Library, fonts: &[Font]) -> AppResult<()> {
     })
 }
 
-/// Copies one font file in and records it.
-pub fn import(library: &Library, root: &Path, path: &Path) -> AppResult<Font> {
-    let extension = path
-        .extension()
-        .and_then(|ext| ext.to_str())
-        .map(str::to_ascii_lowercase)
-        .filter(|ext| EXTENSIONS.contains(&ext.as_str()))
-        .ok_or_else(|| invalid("请选择字体文件：.ttf / .otf / .ttc / .woff / .woff2"))?;
-
-    let name = path
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(str::trim)
-        .filter(|stem| !stem.is_empty())
-        .ok_or_else(|| invalid("无法从文件名推断字体名"))?
-        .to_string();
-
+/// The one place a face lands on disk and joins the list.
+///
+/// Both ways in come through here, so the rule that keeps two entries from
+/// sharing a name, the rollback when the row cannot be written, and the licence
+/// file that has to travel with the face are each written once.
+///
+/// The refusal happens before anything is created: a rejected import must not
+/// leave a fonts directory behind.
+fn adopt(
+    library: &Library,
+    root: &Path,
+    name: String,
+    extension: &str,
+    face: Face<'_>,
+    catalog_id: Option<String>,
+    license: Option<&[u8]>,
+) -> AppResult<Font> {
     let mut fonts = list(library)?;
     // Two entries with one name would be two identical chips in the picker with
     // no way to tell them apart, so the second import is refused instead.
@@ -125,7 +159,20 @@ pub fn import(library: &Library, root: &Path, path: &Path) -> AppResult<Font> {
     let id = uuid::Uuid::new_v4().to_string();
     let file = format!("{id}.{extension}");
     std::fs::create_dir_all(root)?;
-    std::fs::copy(path, root.join(&file))?;
+    match face {
+        Face::Copy(path) => {
+            std::fs::copy(path, root.join(&file))?;
+        }
+        Face::Bytes(bytes) => std::fs::write(root.join(&file), bytes)?,
+    }
+
+    let license_file = license.map(|bytes| {
+        let stored = format!("{id}.license.txt");
+        (stored, bytes)
+    });
+    if let Some((stored, bytes)) = &license_file {
+        std::fs::write(root.join(stored), bytes)?;
+    }
 
     let font = announced(Font {
         id,
@@ -133,14 +180,77 @@ pub fn import(library: &Library, root: &Path, path: &Path) -> AppResult<Font> {
         file,
         added_at: crate::library::now_seconds(),
         url: String::new(),
+        catalog_id,
+        license: license_file.map(|(stored, _)| stored),
     });
     fonts.push(font.clone());
     if let Err(err) = store(library, &fonts) {
         // A file nobody can select is worse than no file at all.
         let _ = std::fs::remove_file(root.join(&font.file));
+        if let Some(license) = &font.license {
+            let _ = std::fs::remove_file(root.join(license));
+        }
         return Err(err);
     }
     Ok(font)
+}
+
+/// Copies one font file in and records it.
+pub fn import(library: &Library, root: &Path, path: &Path) -> AppResult<Font> {
+    let extension = extension_of(path.to_string_lossy().as_ref())?;
+
+    let name = path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(str::trim)
+        .filter(|stem| !stem.is_empty())
+        .ok_or_else(|| invalid("无法从文件名推断字体名"))?
+        .to_string();
+
+    adopt(library, root, name, &extension, Face::Copy(path), None, None)
+}
+
+/// Records a face the app fetched itself.
+///
+/// The bytes have already been verified against the catalogue's pin by the
+/// caller — this is the half that puts them where the resource protocol can
+/// serve them. `catalog_id` is what the settings row looks for to know the
+/// entry is installed, and `license` is the vendor's own licence file, written
+/// beside the face because the agreements that permit this ask for it.
+pub fn install(
+    library: &Library,
+    root: &Path,
+    name: String,
+    member: &str,
+    catalog_id: String,
+    bytes: &[u8],
+    license: Option<&[u8]>,
+) -> AppResult<Font> {
+    let extension = extension_of(member)?;
+    adopt(library, root, name, &extension, Face::Bytes(bytes), Some(catalog_id), license)
+}
+
+/// The extension a stored face should carry, taken from the name the vendor
+/// gave it — and refused unless it is one the webview can actually parse.
+fn extension_of(name: &str) -> AppResult<String> {
+    Path::new(name)
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|ext| EXTENSIONS.contains(&ext.as_str()))
+        .ok_or_else(|| invalid("请选择字体文件：.ttf / .otf / .ttc / .woff / .woff2"))
+}
+
+/// The font a catalogue entry installed, when one did.
+///
+/// The catalogue's record of a face that arrives as a whole file *is* this row:
+/// the settings page reads it to know whether to offer 下载 or 删除, and the
+/// reader path is the list it always was. Nothing else records the entry as
+/// installed, which is what keeps such a face out of `downloadedFonts` — that
+/// flag means "the sheets are kept for the next launch", and there are no
+/// sheets here.
+pub fn installed(library: &Library, catalog_id: &str) -> AppResult<Option<Font>> {
+    Ok(list(library)?.into_iter().find(|font| font.catalog_id.as_deref() == Some(catalog_id)))
 }
 
 /// Deletes one font: the record first, then the bytes.
@@ -156,6 +266,9 @@ pub fn remove(library: &Library, root: &Path, id: &str) -> AppResult<()> {
     let removed = fonts.remove(index);
     store(library, &fonts)?;
     let _ = std::fs::remove_file(root.join(&removed.file));
+    if let Some(license) = &removed.license {
+        let _ = std::fs::remove_file(root.join(license));
+    }
     Ok(())
 }
 
@@ -269,6 +382,113 @@ mod tests {
         let dir = scratch("unknown");
         let library = Library::open(&dir).expect("library");
         assert!(path(&library, &dir.join("fonts"), "not-imported").expect("path").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The member's own name carries the format, and the display name does not:
+    /// `HarmonyOS Sans` has no extension at all, so deriving one from the label
+    /// the picker shows would refuse every catalogue face.
+    #[test]
+    fn a_catalogue_face_is_recorded_under_its_entry_and_carries_its_licence() {
+        let dir = scratch("install");
+        let library = Library::open(&dir).expect("library");
+        let root = dir.join("fonts");
+        let agreement = b"Copyright 2021 Huawei Device Co., Ltd.";
+
+        let font = install(
+            &library,
+            &root,
+            "HarmonyOS Sans".to_string(),
+            "HarmonyOS Sans/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Regular.ttf",
+            "harmonyos-sans".to_string(),
+            b"\x00\x01\x00\x00 a face",
+            Some(agreement),
+        )
+        .expect("install");
+
+        assert_eq!(font.name, "HarmonyOS Sans");
+        assert!(font.file.ends_with(".ttf"), "扩展名要跟着成员走：{}", font.file);
+        assert_eq!(font.catalog_id.as_deref(), Some("harmonyos-sans"));
+
+        // The agreement travels with the copy, which is what clause 2(4) of
+        // HarmonyOS Sans's licence asks for.
+        let license = font.license.as_deref().expect("许可文件要跟着字体落盘");
+        assert_eq!(std::fs::read(root.join(license)).expect("read licence"), agreement);
+
+        assert_eq!(
+            installed(&library, "harmonyos-sans").expect("installed").map(|found| found.id),
+            Some(font.id.clone()),
+            "目录条目要能从列表里找回自己那一行"
+        );
+        assert!(
+            installed(&library, "misans").expect("installed").is_none(),
+            "别的条目不能认领这一行"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An imported file belongs to no entry, and the lookup has to say so
+    /// rather than matching the first font with no catalogue id.
+    #[test]
+    fn a_hand_imported_font_belongs_to_no_catalogue_entry() {
+        let dir = scratch("not-catalogue");
+        let library = Library::open(&dir).expect("library");
+        let root = dir.join("fonts");
+        let font = import(&library, &root, &face(&dir, "Kaiti.ttf")).expect("import");
+
+        assert!(font.catalog_id.is_none(), "手导入的字体不该带上目录 id");
+        assert!(font.license.is_none(), "手导入的字体没有厂商协议可带");
+        assert!(installed(&library, "lxgw").expect("installed").is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A face whose archive shipped no agreement still installs — and leaves no
+    /// empty file behind pretending to be one.
+    #[test]
+    fn a_face_without_an_agreement_installs_without_inventing_one() {
+        let dir = scratch("no-licence");
+        let library = Library::open(&dir).expect("library");
+        let root = dir.join("fonts");
+
+        let font = install(
+            &library,
+            &root,
+            "A Face".to_string(),
+            "face.otf",
+            "an-entry".to_string(),
+            b"\x00\x01\x00\x00 a face",
+            None,
+        )
+        .expect("install");
+
+        assert!(font.license.is_none());
+        assert!(!root.join(format!("{}.license.txt", font.id)).exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 删除 has to take the agreement too: a licence left in the fonts
+    /// directory with no face to describe is a file nothing will ever clean up.
+    #[test]
+    fn removing_a_catalogue_face_takes_its_agreement_with_it() {
+        let dir = scratch("remove-licence");
+        let library = Library::open(&dir).expect("library");
+        let root = dir.join("fonts");
+        let font = install(
+            &library,
+            &root,
+            "A Face".to_string(),
+            "face.ttf",
+            "an-entry".to_string(),
+            b"\x00\x01\x00\x00 a face",
+            Some(b"terms"),
+        )
+        .expect("install");
+        let license = root.join(font.license.as_deref().expect("licence"));
+        assert!(license.exists());
+
+        remove(&library, &root, &font.id).expect("remove");
+        assert!(!license.exists(), "协议要跟着字体一起删掉");
+        assert!(installed(&library, "an-entry").expect("installed").is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
