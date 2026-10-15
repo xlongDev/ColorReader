@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ipc } from "@/lib/ipc";
 import { useReaderSettings } from "@/stores/reader";
+import { archiveRequest, type CatalogFontFile } from "@/lib/fontCatalog";
 import { customFontKey } from "@/features/reader/theme";
 import type { LocalFont } from "@/types/ipc";
 
@@ -50,6 +51,30 @@ export function useDeleteFont() {
     mutationFn: (id: string) => ipc.fontDelete(id),
     onSuccess: (_deleted, id) => {
       if (selected === customFontKey(id)) update({ fontFamily: "system" });
+      void queryClient.invalidateQueries({ queryKey: ["fonts"] });
+    },
+  });
+}
+
+/**
+ * Installs a catalogue face that arrives as a whole file.
+ *
+ * The whole journey — a 50 MB download, one member unpacked, the sha256 checked,
+ * the face written beside the vendor's own licence — happens in Rust, because
+ * that is the only side with a zip reader and a filesystem. What comes back is
+ * an ordinary `LocalFont`, which is the point: once installed it is a font the
+ * reader imported, offered by the same picker and removed by the same button.
+ *
+ * The list has to be refetched rather than patched: the settings row decides
+ * between 下载 and 删除 by looking for a row carrying this entry's id, so a
+ * stale list would leave a font installed with no way to take it out.
+ */
+export function useInstallCatalogFont() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (font: CatalogFontFile) => ipc.fontInstallCatalog(archiveRequest(font)),
+    meta: { silent: true },
+    onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["fonts"] });
     },
   });

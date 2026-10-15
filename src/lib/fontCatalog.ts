@@ -1,27 +1,33 @@
 /**
  * The font catalogue: faces the reader adds with one click instead of a file.
  *
- * Nothing here ships with the app. Each entry points at *stylesheets* — the
- * `@font-face` rules — hosted on a public CDN, and the glyph subsets they name
- * stream per `unicode-range`, so the app never downloads the face: a section
- * fetches the handful of subsets its own glyphs fall into. The cost of
- * "installing" a catalogue font is the sheet — a couple of hundred kilobytes,
- * against the ten-or-twenty megabytes the face itself is.
+ * Nothing here ships with the app. There are two ways in, and which one an
+ * entry takes is decided by its licence rather than by preference:
  *
- * Two entries, both SIL OFL 1.1 — the licences that permit serving the bytes
- * from our own mirror in the first place. The brand faces (HarmonyOS Sans,
- * MiSans, and the two the reader dropped) are deliberately absent: their
- * agreements either forbid third-party download channels outright or forbid
- * redistributing the font files, which is what a CDN copy is. When they join
- * the catalogue they will point at the vendor's own URL, and carry the notice
- * their agreement requires us to show.
+ * - `CATALOG_FONTS` — SIL OFL 1.1 faces, installed from *stylesheets*. Each
+ *   entry points at the `@font-face` rules hosted on a public CDN, and the
+ *   glyph subsets they name stream per `unicode-range`, so the app never
+ *   downloads the face: a section fetches the handful of subsets its own glyphs
+ *   fall into. The cost of "installing" one is the sheet — a couple of hundred
+ *   kilobytes, against the ten-or-twenty megabytes the face itself is.
+ * - `CATALOG_FILES` — brand faces, installed from the *vendor's own archive*.
+ *   Their agreements permit unmodified copies to travel with software but
+ *   forbid redistributing the fonts on their own, so there is no mirror to
+ *   point at, and subsetting one into a stylesheet would be the modification
+ *   clause 2.2 forbids. The app reads the vendor's zip's own table of contents
+ *   over a range request and fetches only the member it wants, so the copy on
+ *   the reader's disk is the vendor's byte for byte — and the other 46 MB of the
+ *   package is never asked for.
  *
  * 🔴 The `sha256` values were computed from the real bytes on 2026-10-14, not
- * hand-copied. `downloadCatalogFont` refuses a sheet that hashes otherwise —
- * that check is the only thing standing between a CDN compromise and the app
- * silently adopting someone else's glyphs, and it is pinned by
- * `catalogFont.test.ts` against a hash-mismatch fixture.
+ * hand-copied. `downloadCatalogFont` refuses a sheet that hashes otherwise, and
+ * `font.install_catalog` refuses a member that does — those checks are the only
+ * thing standing between a compromised host and the app silently adopting
+ * someone else's glyphs, and they are pinned by `fontCatalog.test.ts` and
+ * `font_archive.rs` against fixtures that hash the other way.
  */
+
+import type { CatalogInstall, LocalFont } from "@/types/ipc";
 
 /** One stylesheet: where it lives, what it must hash to, what it costs. */
 export interface CatalogSheet {
@@ -125,6 +131,126 @@ export const CATALOG_FONTS: readonly CatalogFont[] = [
   },
 ];
 
+/**
+ * A face that arrives as a whole font file, out of the vendor's own archive.
+ *
+ * HarmonyOS Sans is here and not above because its agreement is the one that
+ * permits this shape. It grants the right to "use, copy, merge, embed, bundle,
+ * redistribute and/or sell **unmodified** copies" with any software, which is
+ * what lets the app fetch Huawei's archive and unpack a face out of it — and
+ * what makes the two conditions load-bearing. Clause 2.2 forbids modifying the
+ * fonts or any component of them, so this entry must name Huawei's own zip:
+ * the npm packages that subset it into a webfont (`harmonyos-sans-webfont-
+ * splitted`, `@lobehub/webfont-harmony-sans`) are modified fonts and cannot be
+ * used. Clause 2.3 forbids redistributing them "in a stand-alone base", which
+ * is what a mirror of the raw files would be.
+ *
+ * MiSans is the counter-example and is deliberately absent: Xiaomi publishes it
+ * only inside a 217 MB archive of nested zips, and its agreement forbids
+ * passing the fonts on at all. No shape of this entry would be honest about
+ * either.
+ */
+export interface CatalogFontFile {
+  id: string;
+  /** What the reader sees, in the picker and in the settings row. */
+  name: string;
+  /**
+   * Where the archive is fetched from, in order — the first to answer wins.
+   *
+   * One source, unlike the sheet entries: there is exactly one place the vendor
+   * publishes this, and a third-party copy would be the redistribution the
+   * agreement forbids. A source that is down is a font that will not install
+   * today, which is the honest outcome.
+   */
+  sources: string[];
+  /** The member inside the archive that is the face. */
+  member: string;
+  /**
+   * sha256 of the **member's** bytes, not the archive's.
+   *
+   * The member is what lands on disk, so the member is what gets pinned.
+   * Pinning the archive instead would pin the download rather than the font,
+   * and would break the install the day Huawei repacks the package — a new
+   * `LICENSE.txt` inside it changes the zip and not the face.
+   */
+  sha256: string;
+  /** The member's size — what the face costs on disk once installed. */
+  bytes: number;
+  /**
+   * Roughly what installing costs over the network.
+   *
+   * Measured against the real archive, and the *only* figure here that is
+   * approximate. The member's compressed size is the server's business and can
+   * change the next time Huawei repacks the package, so nothing checks this —
+   * what has to stay true is `sha256`, and that is pinned. A hint that drifts by
+   * a few hundred kilobytes costs a slightly stale number in a sentence.
+   */
+  downloadBytes: number;
+  /**
+   * The whole archive's size — what the *fallback* route downloads.
+   *
+   * Only reached when the narrow route cannot be used: a server that ignores
+   * `Range`, or a zip shape the reader's parser declines to guess at. It is not
+   * what installing normally costs.
+   */
+  archiveBytes: number;
+  /** The vendor's licence file inside the same archive. */
+  licenseMember: string;
+  license: string;
+  licenseUrl: string;
+  /**
+   * The notice the agreement requires the *software* to carry.
+   *
+   * HarmonyOS Sans's clause 2.1: "YOU shall make a prominent notice in the
+   * software to state that HarmonyOS Sans Fonts are used." The settings row
+   * prints this verbatim, which is where that promise is kept — there is no
+   * licences screen in the app for it to live on instead.
+   */
+  notice: string;
+}
+
+export const CATALOG_FILES: readonly CatalogFontFile[] = [
+  {
+    id: "harmonyos-sans",
+    // The name the agreement uses, and the name in the font's own name table.
+    // Worth keeping in English: the stored file is `<uuid>.ttf`, so this label
+    // is the only thing on the reader's disk that still says whose font it is.
+    name: "HarmonyOS Sans",
+    sources: ["https://developer.huawei.com/images/download/general/HarmonyOS-Sans.zip"],
+    member: "HarmonyOS Sans/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Regular.ttf",
+    sha256: "297b088424be212207df2ce8b98e335468b782aa6b96832af0b8b773d711e2b1",
+    bytes: 8_261_128,
+    // The members (5,562,865 + 1,644 compressed) plus the archive's tail and its
+    // 18 KB table of contents: what the narrow route actually moves. Measured,
+    // not derived — see the field's own note on why it is allowed to be inexact.
+    downloadBytes: 5_649_494,
+    archiveBytes: 52_165_952,
+    licenseMember: "HarmonyOS Sans/HarmonyOS_Sans_SC/LICENSE.txt",
+    license: "HarmonyOS Sans Fonts License Agreement",
+    licenseUrl: "https://developer.huawei.com/consumer/cn/design/resource/",
+    notice: "本软件使用了 HarmonyOS Sans 字体。Copyright 2021 Huawei Device Co., Ltd.",
+  },
+];
+
+/**
+ * The install request for one archive entry — only what the backend needs.
+ *
+ * The pins travel with it, and that is not a hole: the catalogue is compiled
+ * into the same signed bundle as the code that hands it over, and the check
+ * itself has to happen where the bytes are. What the frontend cannot do is hold
+ * the archive up against the hash — it has no zip reader and no filesystem.
+ */
+export function archiveRequest(font: CatalogFontFile): CatalogInstall {
+  return {
+    catalogId: font.id,
+    name: font.name,
+    sources: [...font.sources],
+    member: font.member,
+    sha256: font.sha256,
+    licenseMember: font.licenseMember,
+  };
+}
+
 /** The prefix a catalogue font is stored as in the reader's font key. */
 export const CATALOG_KEY_PREFIX = "catalog:";
 
@@ -155,6 +281,24 @@ export function catalogFontOfKey(key: string): CatalogFont | null {
 /** What the sheets weigh together, in bytes — the install cost, not the font. */
 export function catalogSheetBytes(font: CatalogFont): number {
   return font.sheets.reduce((total, sheet) => total + sheet.bytes, 0);
+}
+
+/**
+ * The imported fonts the 已导入 list still has to show.
+ *
+ * A catalogue face installed from an archive *is* an imported font, so without
+ * this it would be listed twice — once as the entry, once as the file — and the
+ * entry's row is the one carrying the licence and the download size.
+ *
+ * 🔴 Only the fonts a catalogue row is *actually rendering* are held back. An
+ * entry retired from `CATALOG_FILES` leaves its font carrying an id nothing
+ * matches, and hiding that one would put a face on the reader's disk with no row
+ * anywhere to delete it from — the same dead end the reset path exists to avoid.
+ * Keyed off what is in the catalogue now, never off "has a catalogue id".
+ */
+export function handImported(fonts: readonly LocalFont[]): LocalFont[] {
+  const shown = new Set(CATALOG_FILES.map((font) => font.id));
+  return fonts.filter((font) => !font.catalogId || !shown.has(font.catalogId));
 }
 
 const URL_IN_CSS = /url\((['"]?)([^'")]+)\1\)/g;
