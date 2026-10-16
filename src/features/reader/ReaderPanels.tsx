@@ -99,6 +99,8 @@ export function ReaderPanels({
     onExport: () => void;
     /** `undefined` for a book the reader cannot navigate by anchor. */
     onJump: ((annotation: Annotation) => void) | undefined;
+    /** Opens the share card for one highlight. */
+    onShare: (annotation: Annotation) => void;
   };
   ai: {
     context: string | null;
@@ -149,6 +151,7 @@ export function ReaderPanels({
                 onNote={annotations.onNote}
                 onExport={annotations.onExport}
                 onJump={annotations.onJump}
+                onShare={annotations.onShare}
               />
             )}
             {panel === "search" &&

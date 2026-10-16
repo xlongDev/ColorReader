@@ -112,6 +112,14 @@ const ExportNotesDialog = lazy(() =>
   })),
 );
 
+/** The share card draws a QR and a whole canvas; the same reasoning as the
+ *  export dialog, with a dependency of its own riding along. */
+const QuoteCardDialog = lazy(() =>
+  import("@/features/reader/QuoteCardDialog").then((module) => ({
+    default: module.QuoteCardDialog,
+  })),
+);
+
 /**
  * How long the page has to stand still before the reading ruler re-measures.
  *
@@ -322,6 +330,10 @@ function ReaderView({
   const [aiContext, setAiContext] = useState<string | null>(null);
   // Notes export: the format picker is open and waiting for a destination.
   const [exportingNotes, setExportingNotes] = useState(false);
+  // The highlight the share card is drawing; `null` = closed. One canvas is
+  // shared by whichever row was pressed last, so this carries the whole
+  // annotation — the dialog re-renders on every change, not on mount.
+  const [shareAnnotation, setShareAnnotation] = useState<Annotation | null>(null);
   // 词典 / 翻译 / 维基百科 popup over the selection; `null` = closed. The
   // toolbar closes when it opens — one floating surface at a time.
   const [lookup, setLookup] = useState<{
@@ -2351,6 +2363,7 @@ function ReaderView({
           busy: deleteAnnotation.isPending || setAnnotationNote.isPending,
           onDelete: (id) => deleteAnnotation.mutate(id),
           onNote: (id, note) => setAnnotationNote.mutate({ id, note }),
+          onShare: (annotation) => setShareAnnotation(annotation),
           onExport: () => setExportingNotes(true),
           onJump: useFoliate
             ? (annotation) => {
@@ -2425,6 +2438,17 @@ function ReaderView({
           />
         </Suspense>
       )}
+
+      {/* The share card rides alongside the export dialog: same reasoning —
+          it draws a whole canvas, so it stays out of the initial bundle, and
+          the reader stays on the drawer while it opens. */}
+      <Suspense fallback={null}>
+        <QuoteCardDialog
+          annotation={shareAnnotation}
+          open={shareAnnotation !== null}
+          onOpenChange={(open) => setShareAnnotation(open ? shareAnnotation : null)}
+        />
+      </Suspense>
     </div>
   );
 }

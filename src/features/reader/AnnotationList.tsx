@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { DownloadSimple, Trash } from "@phosphor-icons/react";
+import { DownloadSimple, ShareNetwork, Trash } from "@phosphor-icons/react";
 
 import { NoteCell } from "@/features/reader/AnnotationNote";
 import type { Annotation } from "@/types/ipc";
@@ -11,6 +11,7 @@ export function AnnotationList({
   onNote,
   onExport,
   onJump,
+  onShare,
 }: {
   annotations: Annotation[];
   busy: boolean;
@@ -27,6 +28,8 @@ export function AnnotationList({
    * are enough (see `FoliateHandle::goToHighlight`).
    */
   onJump?: (annotation: Annotation) => void;
+  /** Opens the share card for one highlight, drawn on the reader's own paper. */
+  onShare?: (annotation: Annotation) => void;
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -59,6 +62,7 @@ export function AnnotationList({
                 onDelete={onDelete}
                 onNote={onNote}
                 onJump={onJump}
+                onShare={onShare}
               />
             ))}
           </ul>
@@ -79,12 +83,14 @@ function AnnotationRow({
   onDelete,
   onNote,
   onJump,
+  onShare,
 }: {
   annotation: Annotation;
   busy: boolean;
   onDelete: (id: string) => void;
   onNote: (id: string, note: string | null) => void;
   onJump?: (annotation: Annotation) => void;
+  onShare?: (annotation: Annotation) => void;
 }) {
   const [editing, setEditing] = useState(false);
 
@@ -97,15 +103,31 @@ function AnnotationRow({
           第 {annotation.chapterIdx + 1}
           {onJump ? " 节" : " 章"}
         </p>
-        <button
-          type="button"
-          aria-label="删除标注"
-          disabled={busy}
-          onClick={() => onDelete(annotation.id)}
-          className="focus-visible:focus-ring text-text-3 hover:text-danger transition-colors disabled:opacity-50"
-        >
-          <Trash size={14} />
-        </button>
+        <div className="flex items-center gap-2">
+          {/* Share sits next to delete rather than in a menu: it is the one
+              action here that makes something new rather than changing or
+              removing what is there. */}
+          {onShare && (
+            <button
+              type="button"
+              aria-label="分享这一句"
+              disabled={busy}
+              onClick={() => onShare(annotation)}
+              className="focus-visible:focus-ring text-text-3 hover:text-text-1 transition-colors disabled:opacity-50"
+            >
+              <ShareNetwork size={14} />
+            </button>
+          )}
+          <button
+            type="button"
+            aria-label="删除标注"
+            disabled={busy}
+            onClick={() => onDelete(annotation.id)}
+            className="focus-visible:focus-ring text-text-3 hover:text-danger transition-colors disabled:opacity-50"
+          >
+            <Trash size={14} />
+          </button>
+        </div>
       </div>
       {onJump ? (
         <button
