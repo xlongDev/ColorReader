@@ -52,11 +52,15 @@ to `e2e/fixtures/sample-font.woff2` as the font-import fixture.
 
 - 霞鹜文楷 / LXGW WenKai — <https://github.com/lxgw/LxgwWenKai> (webfont
   packaging: `lxgw-wenkai-webfont`)
-- Noto Serif SC — <https://github.com/notofonts/noto-cjk> (webfont packaging:
-  `@fontsource/noto-serif-sc`)
-- License: SIL Open Font License 1.1 for both — the packages carry `OFL.txt`
+- 思源宋体 / Noto Serif SC — <https://github.com/notofonts/noto-cjk> (webfont
+  packaging: `@fontsource/noto-serif-sc`). One design under two names: Google
+  publishes Adobe's Source Han Serif as Noto Serif CJK, and the catalogue entry
+  carries both names so that a reader looking for either finds it.
+- 寒蝉正楷体 / ChillKai — <https://github.com/Warren2060/Chillkai> (webfont
+  packaging: `@xiao-xue-seng/chill-kai` — a community repackage, see below)
+- License: SIL Open Font License 1.1 for all three
 
-Neither font file is redistributed with the app. What the reader installs is the
+No font file is redistributed with the app. What the reader installs is the
 `@font-face` stylesheet, fetched from jsDelivr or unpkg on request
 (`src/lib/fontCatalog.ts` pins each sheet by sha256 and refuses anything else);
 the glyph subsets then stream from the same CDN per `unicode-range`, so the
@@ -65,9 +69,20 @@ is the licence that permits serving the bytes this way. The brand faces whose
 agreements forbid it are not in _this_ list — HarmonyOS Sans is installed from
 Huawei's own archive instead, under its own section below.
 
-`e2e/fixtures/font-catalog/*.css` are verbatim copies of the two packages'
-sheets, committed so the click-through test is hermetic; their sha256 values are
-the ones the catalogue pins. They are excluded from Prettier for that reason.
+寒蝉正楷体 is the one entry whose publisher is not the font's author. The author
+deleted the font from `Warren2060/Chillkai` — the repository now holds only
+`LICENSE` and `README.md`, and the v2.000 release carries no assets — so the
+stylesheet comes from a community repackage of that same v2.000 build. The
+upstream licence is what makes this permissible rather than merely convenient:
+OFL 1.1 grants redistribution and modification, and the package declares the
+same. The catalogue's sha256 pin covers the **sheet**; it does not cover the
+glyph subsets, which the browser fetches from the CDN unpinned. That is true of
+every sheet entry here, and it is spelled out on this one because this is where
+the distinction has teeth.
+
+`e2e/fixtures/font-catalog/*.css` are verbatim copies of the packages' sheets,
+committed so the click-through test is hermetic; their sha256 values are the ones
+the catalogue pins. They are excluded from Prettier for that reason.
 
 ## HarmonyOS Sans — HarmonyOS Sans Fonts License Agreement
 
