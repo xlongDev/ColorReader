@@ -19,12 +19,13 @@
  *   the reader's disk is the vendor's byte for byte — and the other 46 MB of the
  *   package is never asked for.
  *
- * 🔴 The `sha256` values were computed from the real bytes on 2026-10-14, not
- * hand-copied. `downloadCatalogFont` refuses a sheet that hashes otherwise, and
- * `font.install_catalog` refuses a member that does — those checks are the only
- * thing standing between a compromised host and the app silently adopting
- * someone else's glyphs, and they are pinned by `fontCatalog.test.ts` and
- * `font_archive.rs` against fixtures that hash the other way.
+ * 🔴 The `sha256` values were computed from the real bytes on 2026-10-14 — and
+ * on 2026-10-16 for 寒蝉正楷体 — not hand-copied. `downloadCatalogFont` refuses
+ * a sheet that hashes otherwise, and `font.install_catalog` refuses a member
+ * that does — those checks are the only thing standing between a compromised
+ * host and the app silently adopting someone else's glyphs, and they are pinned
+ * by `fontCatalog.test.ts` and `font_archive.rs` against fixtures that hash the
+ * other way.
  */
 
 import type { CatalogInstall, LocalFont } from "@/types/ipc";
@@ -102,7 +103,18 @@ export const CATALOG_FONTS: readonly CatalogFont[] = [
   },
   {
     id: "noto-serif-sc",
-    name: "Noto Serif SC",
+    /**
+     * 思源宋体 first, because this entry *is* 思源宋体: Google publishes Adobe's
+     * Source Han Serif under the Noto Serif CJK name, and the bytes say so —
+     * the faces in the pinned sheet carry Adobe's copyright and
+     * `Version 2.003`, which is the version `adobe-fonts/source-han-serif`
+     * currently ships. A reader looking for the name they know should find it
+     * here rather than meet a second entry holding the same outlines.
+     *
+     * `family` stays Google's, and must: that is the name the sheet declares
+     * and the one `adoptedFontFaces` matches a rule on.
+     */
+    name: "思源宋体 / Noto Serif SC",
     family: "Noto Serif SC",
     stack: '"Noto Serif SC", "Songti SC", "STSong", "SimSun", serif',
     fallbackKey: "song",
@@ -128,6 +140,63 @@ export const CATALOG_FONTS: readonly CatalogFont[] = [
     ],
     license: "SIL OFL 1.1",
     licenseUrl: "https://github.com/notofonts/noto-cjk",
+  },
+  {
+    id: "chill-kai",
+    name: "寒蝉正楷体",
+    /** The family the sheet declares, which is also the font's own PostScript
+     *  name (`ChillKai`, 寒蝉字型). */
+    family: "ChillKai",
+    /**
+     * 楷体's stack with the face in front — the same reasoning as 霞鹜文楷's:
+     * while the sheet is in flight the reader sees the system 楷体 rather than
+     * a serif that changes under them a moment later.
+     */
+    stack: '"ChillKai", "Kaiti SC", "STKaiti", "KaiTi", "DFKai-SB", serif',
+    fallbackKey: "kai",
+    /**
+     * One sheet, because ChillKai has one weight: v2.000 ships Regular and
+     * nothing else, and a second entry here would be a weight the font does not
+     * have. Body bold falls back to the webview's synthesis, as it does for
+     * every other single-face path (see the note in `library.md`).
+     *
+     * ⚠️ **The source is a community repackage, not the author's own bytes.**
+     * `Warren2060/Chillkai` deleted the font from the repository — its last
+     * commit is literally "Delete ChillKai directory", the tree holds only
+     * `LICENSE` and `README.md`, and the v2.000 release carries no assets. So
+     * there is no vendor archive for `CATALOG_FILES` to point at, which is the
+     * shape this catalogue otherwise uses for a face with no mirror.
+     *
+     * What makes the entry legitimate is still the licence, and it is upstream's:
+     * SIL OFL 1.1 permits redistribution and modification, and this package
+     * declares the same. What the pin does *not* establish is that these are the
+     * author's outlines — `sha256` covers the sheet, not the 385 glyph subsets
+     * it names, which the browser fetches from the same CDN unpinned. That is
+     * true of every sheet entry here; this is the only one whose publisher is a
+     * third party, and the licence is what makes that acceptable rather than
+     * merely convenient.
+     *
+     * One more difference from the other two packages, and the only one that
+     * changes what actually renders: all 385 rules here are authored
+     * `src: local("ChillKai"), url(…)`, so a reader who has ChillKai installed
+     * on their own machine gets *their* copy rather than the pinned subset.
+     * Neither of the other two names a `local()`. Nothing breaks — the face is
+     * ChillKai either way, and a reader who installed it themselves chose it —
+     * but this is the one entry whose glyphs the pin does not decide.
+     */
+    sheets: [
+      {
+        weight: "400",
+        sources: [
+          "https://cdn.jsdelivr.net/npm/@xiao-xue-seng/chill-kai@1.0.0/result.css",
+          "https://unpkg.com/@xiao-xue-seng/chill-kai@1.0.0/result.css",
+        ],
+        sha256: "bce7308ea5944b513c0ee07c9c5b63bbc0deab800b688d562d229df789905db5",
+        bytes: 188_738,
+      },
+    ],
+    license: "SIL OFL 1.1",
+    licenseUrl: "https://github.com/Warren2060/Chillkai",
   },
 ];
 

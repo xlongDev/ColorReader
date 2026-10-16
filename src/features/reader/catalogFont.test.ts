@@ -16,6 +16,7 @@ import {
 
 const noto = catalogFontById("noto-serif-sc")!;
 const lxgw = catalogFontById("lxgw")!;
+const chillKai = catalogFontById("chill-kai")!;
 
 /**
  * The `localStorage` key the adopted sheets live under, spelled out rather than
@@ -155,6 +156,44 @@ describe("downloadCatalogFont", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
     // The adopted rules survive untouched.
     expect(document.getElementById("catalog-font-lxgw")!.textContent).toBe("/* already here */");
+  });
+});
+
+/**
+ * 寒蝉正楷体 is the catalogue's only one-sheet entry, and the only one whose
+ * sheet declares a family name that is not also the entry's display name
+ * (`ChillKai` against 寒蝉正楷体). Both are reasons for a case of its own: a
+ * `family` that does not match what the sheet declares installs cleanly, is
+ * offered in the picker, and then renders nothing — the section's stack falls
+ * through to the system 楷体 and the reader sees a font they did not pick.
+ */
+describe("a one-weight entry", () => {
+  it("adopts its single sheet, under the family the sheet declares", async () => {
+    // The fixture is the bytes the pin was computed from, so its length is what
+    // the manifest's `bytes` claims — the figure the settings row prints. The
+    // two are written down in different files and only agree if someone put the
+    // real number in both.
+    expect(fixture("chill-kai-400.css").byteLength).toBe(chillKai.sheets[0]!.bytes);
+
+    stubFetch([[chillKai.sheets[0]!.sources[0]!, fixture("chill-kai-400.css")]]);
+
+    await expect(downloadCatalogFont(chillKai)).resolves.toBe(188_738);
+
+    const css = document.getElementById("catalog-font-chill-kai")!.textContent!;
+    // The pair the picker's stack and `adoptedFontFaces` both read. Matched
+    // loosely on the colon because this sheet is minified —
+    // `font-family:"ChillKai"`, unlike the other two packages' — and what is
+    // being asserted is the name, not the packaging tool's whitespace.
+    expect(css).toMatch(new RegExp(`font-family:\\s*"${chillKai.family}"`));
+    expect(css).toContain('url("https://cdn.jsdelivr.net/npm/@xiao-xue-seng/chill-kai@1.0.0/');
+    expect(css).not.toContain('url("./');
+    // Every rule got the hold-back rewrite, not just the first. Counted against
+    // the rules rather than against a literal, so a package bump does not turn
+    // this into a test about arithmetic.
+    const rules = (css.match(/@font-face/g) ?? []).length;
+    expect(rules).toBeGreaterThan(1);
+    expect((css.match(/font-display:\s*block/g) ?? []).length).toBe(rules);
+    expect(css).not.toMatch(/font-display:\s*swap/);
   });
 });
 

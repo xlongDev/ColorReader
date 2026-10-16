@@ -73,15 +73,15 @@ test("a catalogue font installs, renders in a book, and uninstalls", async ({ pa
   await routeSheets(page);
 
   await openFonts(page);
-  const row = page.getByText("Noto Serif SC", { exact: true }).first();
+  const row = page.getByText("思源宋体 / Noto Serif SC", { exact: true }).first();
   await expect(row).toBeVisible();
   // Named, not just 下载: one catalogue entry per row, each with its own button.
-  const install = page.getByRole("button", { name: "下载 Noto Serif SC" });
+  const install = page.getByRole("button", { name: "下载 思源宋体 / Noto Serif SC" });
   await expect(install).toBeVisible();
 
   await install.click();
   await expect(
-    page.getByText("「Noto Serif SC」已安装，可以在阅读器的「字体」里选用。"),
+    page.getByText("「思源宋体 / Noto Serif SC」已安装，可以在阅读器的「字体」里选用。"),
   ).toBeVisible({
     timeout: 15_000,
   });
@@ -101,7 +101,7 @@ test("a catalogue font installs, renders in a book, and uninstalls", async ({ pa
   expect(adopted.text).not.toContain("font-display: swap");
 
   // The row now offers removal instead of installation.
-  await expect(page.getByRole("button", { name: "删除 Noto Serif SC" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "删除 思源宋体 / Noto Serif SC" })).toBeVisible();
 
   // The reader: the picker offers the installed face, and selecting it parses
   // the family into the engine. Nothing ships a font, so the family exists
@@ -116,16 +116,16 @@ test("a catalogue font installs, renders in a book, and uninstalls", async ({ pa
   });
   await page.getByRole("button", { name: "阅读设置" }).first().click();
   await page.waitForTimeout(700);
-  await page.getByRole("button", { name: "Noto Serif SC", exact: true }).first().click();
+  await page.getByRole("button", { name: "思源宋体 / Noto Serif SC", exact: true }).first().click();
   await expect.poll(() => parsedFamilies(page), { timeout: 10_000 }).toContain("Noto Serif SC");
 
   // And back out: the face leaves the document and the row offers it again.
   await page.goto("/");
   await page.getByRole("button", { name: "设置", exact: true }).first().click();
   await page.getByRole("button", { name: "字体", exact: true }).click();
-  await page.getByRole("button", { name: "删除 Noto Serif SC" }).click();
-  await expect(page.getByText("「Noto Serif SC」已移除。")).toBeVisible();
-  await expect(page.getByRole("button", { name: "下载 Noto Serif SC" })).toBeVisible();
+  await page.getByRole("button", { name: "删除 思源宋体 / Noto Serif SC" }).click();
+  await expect(page.getByText("「思源宋体 / Noto Serif SC」已移除。")).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载 思源宋体 / Noto Serif SC" })).toBeVisible();
   expect(
     await page.evaluate(() => document.getElementById("catalog-font-noto-serif-sc") !== null),
   ).toBe(false);
@@ -150,8 +150,8 @@ test("an installed font is still there after a reload with the CDN gone", async 
   await routeSheets(page);
 
   await openFonts(page);
-  await page.getByRole("button", { name: "下载 Noto Serif SC" }).click();
-  await expect(page.getByRole("button", { name: "删除 Noto Serif SC" })).toBeVisible({
+  await page.getByRole("button", { name: "下载 思源宋体 / Noto Serif SC" }).click();
+  await expect(page.getByRole("button", { name: "删除 思源宋体 / Noto Serif SC" })).toBeVisible({
     timeout: 15_000,
   });
 
@@ -165,7 +165,7 @@ test("an installed font is still there after a reload with the CDN gone", async 
   });
   await page.getByRole("button", { name: "阅读设置" }).first().click();
   await page.waitForTimeout(700);
-  await page.getByRole("button", { name: "Noto Serif SC", exact: true }).first().click();
+  await page.getByRole("button", { name: "思源宋体 / Noto Serif SC", exact: true }).first().click();
   await expect.poll(() => parsedFamilies(page), { timeout: 10_000 }).toContain("Noto Serif SC");
 
   // The network goes away for good, the sheets included.
@@ -233,6 +233,24 @@ test("the archive entry explains itself instead of offering a button the web bui
 });
 
 /**
+ * 寒蝉正楷体 是目录里唯一一个「作者已把字体从上游删掉」的条目。
+ *
+ * 字节来自社区重打包（`@xiao-xue-seng/chill-kai`），而许可仍然是上游的 OFL
+ * 1.1 —— 所以这一行照常提供，只是没有厂商归档可指（`CATALOG_FILES` 那条路
+ * 走不了）。这一条钉的是它确实作为一行出现、并且给的是样式表类的下载按钮：
+ * 不点下载，所以不需要夹具，也不需要网络。
+ */
+test("the community-repackaged entry is offered like any other", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openFonts(page);
+
+  await expect(page.getByText("寒蝉正楷体", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载 寒蝉正楷体" })).toBeVisible();
+  // 它和样式表类的其它条目并列，而不是和归档类并列 —— 后者在浏览器端不给按钮。
+  await expect(page.getByText("浏览器端请自行下载后用「导入字体」")).toHaveCount(1);
+});
+
+/**
  * 重置 把目录字体一起卸掉。
  *
  * `downloadedFonts` is a preference and goes with the rest of them; the sheet
@@ -245,8 +263,8 @@ test("restoring every setting uninstalls a catalogue font with the rest", async 
   await routeSheets(page);
 
   await openFonts(page);
-  await page.getByRole("button", { name: "下载 Noto Serif SC" }).click();
-  await expect(page.getByRole("button", { name: "删除 Noto Serif SC" })).toBeVisible({
+  await page.getByRole("button", { name: "下载 思源宋体 / Noto Serif SC" }).click();
+  await expect(page.getByRole("button", { name: "删除 思源宋体 / Noto Serif SC" })).toBeVisible({
     timeout: 15_000,
   });
 
@@ -258,7 +276,7 @@ test("restoring every setting uninstalls a catalogue font with the rest", async 
   await expect(page.getByText("已还原所有设置")).toBeVisible();
 
   await page.getByRole("button", { name: "字体", exact: true }).click();
-  await expect(page.getByRole("button", { name: "下载 Noto Serif SC" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "下载 思源宋体 / Noto Serif SC" })).toBeVisible();
   expect(
     await page.evaluate(() => document.getElementById("catalog-font-noto-serif-sc") !== null),
   ).toBe(false);

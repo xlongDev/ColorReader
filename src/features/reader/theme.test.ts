@@ -209,7 +209,7 @@ describe("catalogFontOptions", () => {
   it("offers an installed catalogue font the picker can select", () => {
     const noto = catalogFontById("noto-serif-sc")!;
     expect(catalogFontOptions(["noto-serif-sc"])).toEqual([
-      { key: "catalog:noto-serif-sc", label: "Noto Serif SC", stack: noto.stack },
+      { key: "catalog:noto-serif-sc", label: "思源宋体 / Noto Serif SC", stack: noto.stack },
     ]);
   });
 
