@@ -48,7 +48,7 @@ reader installs it with one click. It is still credited here because it is
 where that catalogue entry comes from, and because one of its subsets is copied
 to `e2e/fixtures/sample-font.woff2` as the font-import fixture.
 
-## 字体目录（样式表类）/ the font catalogue, stylesheet entries — SIL OFL 1.1
+## 字体目录 / the font catalogue — SIL OFL 1.1
 
 - 霞鹜文楷 / LXGW WenKai — <https://github.com/lxgw/LxgwWenKai> (webfont
   packaging: `lxgw-wenkai-webfont`)
@@ -65,9 +65,11 @@ No font file is redistributed with the app. What the reader installs is the
 (`src/lib/fontCatalog.ts` pins each sheet by sha256 and refuses anything else);
 the glyph subsets then stream from the same CDN per `unicode-range`, so the
 browser downloads only the handful of subsets a book's own text falls into. OFL
-is the licence that permits serving the bytes this way. The brand faces whose
-agreements forbid it are not in _this_ list — HarmonyOS Sans is installed from
-Huawei's own archive instead, under its own section below.
+is the licence that permits serving the bytes this way, and it is why every entry
+here is an OFL face. A face whose agreement forbids the mirror has no entry at
+all — the reader imports the file by hand. HarmonyOS Sans was the one entry of
+that other kind, and it was withdrawn on 2026-10-16 together with the archive
+path that installed it.
 
 寒蝉正楷体 is the one entry whose publisher is not the font's author. The author
 deleted the font from `Warren2060/Chillkai` — the repository now holds only
@@ -83,35 +85,6 @@ the distinction has teeth.
 `e2e/fixtures/font-catalog/*.css` are verbatim copies of the packages' sheets,
 committed so the click-through test is hermetic; their sha256 values are the ones
 the catalogue pins. They are excluded from Prettier for that reason.
-
-## HarmonyOS Sans — HarmonyOS Sans Fonts License Agreement
-
-- 官方来源：<https://developer.huawei.com/consumer/cn/design/resource/>
-- 下载包：<https://developer.huawei.com/images/download/general/HarmonyOS-Sans.zip>
-- Copyright 2021 Huawei Device Co., Ltd.
-- 协议全文随包分发；应用解包后把它存为 `<data dir>/fonts/<id>.license.txt`，
-  与字体放在一起，删除字体时一并删除（协议 2.4 条）
-
-**本软件使用了 HarmonyOS Sans 字体。** 这是协议 2.1 条要求的声明——原文是
-"YOU shall make a prominent notice in the software to state that HarmonyOS
-Sans Fonts are used"。落点在应用内：「设置 → 字体」中该条目的说明行印着这句话
-（本文件不随应用分发，因此它不能当那个落点）。核对日期 2026-10-14，包内
-`HarmonyOS Sans/HarmonyOS_Sans_SC/HarmonyOS_Sans_SC_Regular.ttf` 为
-8,261,128 字节，sha256
-`297b088424be212207df2ce8b98e335468b782aa6b96832af0b8b773d711e2b1`，应用按
-这条哈希校验后才落盘。
-
-字体文件**不随应用分发**。读者点「下载」时由 Rust 从上面那个官方地址读取整包的
-目录（`Range` 请求只取尾部与中央目录），再只把需要的那个成员取回来——约 5.6 MB，
-而不是整包 49.8 MB——解出字面形落在本机数据目录。若服务器不支持 `Range`（回的是
-200 而非 206）或包结构是本应用不解析的形态（Zip64 等），则退回下载整包，结果相同。
-协议授予的是「与软件一起使用、复制、嵌入、捆绑、再分发和/或销售**未修改的副本**」，
-条件是不得修改（2.2）、不得把字体单独再分发（2.3）、副本须随附版权声明与本协议（2.4）。
-
-因此**不能**使用 npm 上任何把 HarmonyOS Sans 子集化的包
-（`harmonyos-sans-webfont-splitted`、`@lobehub/webfont-harmony-sans` 等）：它们
-是修改过的字体，2.2 条不允许；把原始文件镜像到 CDN 则违反 2.3 条。MiSans 同理
-不做——小米只发 217 MB 的嵌套包，且协议连把字体转交他人都不允许。
 
 ## pdf.js — Apache-2.0
 
