@@ -338,6 +338,26 @@ export const commands = {
    */
   ocrPage: (bookId: string, page: number, image: string) =>
     __TAURI_INVOKE<OcrPage>("ocr_page", { bookId, page, image }),
+  /**
+   *  `ocr.scannedPages` — which pages of a book still have no text, and how many
+   *  pages the book has, so the reader can be quoted "210 / 756" before a run
+   *  that may take a quarter of an hour.
+   *
+   *  🔴 **Deliberately not gated on the model being configured**, unlike
+   *  [`ocr_page`]. The question this answers is about the book, not about the
+   *  provider, and the answer is a plain read of the corpus. Gating it would mean
+   *  the frontend duplicating `is_ready`'s rule to decide whether to offer the
+   *  button — and the frontend already has the pattern that avoids exactly that:
+   *  press, and let the backend's error say what is missing. The first page of a
+   *  batch fails with the same message `ocr_page` gives a single page, before
+   *  anything is uploaded.
+   *
+   *  Dispatched to a blocking worker rather than answered inline, and for a real
+   *  reason: the corpus may be a deferred PDF whose text was never extracted, and
+   *  paying that debt is a full document decode. Same treatment as `reader.toc`,
+   *  which pays the same debt.
+   */
+  ocrScannedPages: (bookId: string) => __TAURI_INVOKE<OcrScan>("ocr_scanned_pages", { bookId }),
   /**  `rag.status` — what the AI drawer needs to decide which controls to show. */
   ragStatus: (bookId: string) => __TAURI_INVOKE<RagStatus>("rag_status", { bookId }),
   /**  `rag.indexBook` — rebuilds the embedding index for one book. */
@@ -1074,6 +1094,30 @@ export type OcrPage = {
   page: number;
   /**  Characters now stored for it, which is what search and read-aloud see. */
   chars: number;
+};
+
+/**
+ *  Which pages of a book still have no text to read.
+ *
+ *  The answer comes from the corpus, not from the renderer: a page is a scan
+ *  when its stored chapter holds no characters. That is the same `chars` search,
+ *  read-aloud and the assistant already read, so a page dropping off this list
+ *  is a page those four have gained — no second notion of "has text" to keep in
+ *  step with the first.
+ *
+ *  🔴 **It pays the text debt first, and that is not a formality.** A freshly
+ *  imported PDF stores its page index with every `chars` at 0, so reading the
+ *  column alone would call the whole book a scan and quote the reader a
+ *  756-page bill for a book whose text was merely still deferred. The debt is
+ *  one decode of the document — the same one the importer starts on a background
+ *  thread and the reader triggers on its first chapter — so in the ordinary case
+ *  this is a flag read, not a decode.
+ */
+export type OcrScan = {
+  /**  Every page the book has, so the reader can be told "210 of 756". */
+  total: number;
+  /**  0-based chapter indices — for a PDF, its page numbers. */
+  pages: number[];
 };
 
 /**

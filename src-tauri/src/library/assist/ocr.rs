@@ -7,9 +7,43 @@
 //! reader — which is why this module is one `UPDATE` and nothing else.
 
 use rusqlite::params;
+use serde::Serialize;
 
 use crate::db::Library;
 use crate::error::{AppError, AppResult};
+use crate::library::chapters;
+
+/// Which pages of a book still have no text to read.
+///
+/// The answer comes from the corpus, not from the renderer: a page is a scan
+/// when its stored chapter holds no characters. That is the same `chars` search,
+/// read-aloud and the assistant already read, so a page dropping off this list
+/// is a page those four have gained — no second notion of "has text" to keep in
+/// step with the first.
+///
+/// 🔴 **It pays the text debt first, and that is not a formality.** A freshly
+/// imported PDF stores its page index with every `chars` at 0, so reading the
+/// column alone would call the whole book a scan and quote the reader a
+/// 756-page bill for a book whose text was merely still deferred. The debt is
+/// one decode of the document — the same one the importer starts on a background
+/// thread and the reader triggers on its first chapter — so in the ordinary case
+/// this is a flag read, not a decode.
+#[derive(specta::Type, Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OcrScan {
+    /// Every page the book has, so the reader can be told "210 of 756".
+    pub total: usize,
+    /// 0-based chapter indices — for a PDF, its page numbers.
+    pub pages: Vec<usize>,
+}
+
+/// The pages of `book_id` that still need recognising, in reading order.
+pub fn scanned_pages(library: &Library, book_id: &str) -> AppResult<OcrScan> {
+    let chapters = chapters::ensure_text(library, book_id)?;
+    let pages =
+        chapters.iter().filter(|chapter| chapter.chars == 0).map(|chapter| chapter.idx).collect();
+    Ok(OcrScan { total: chapters.len(), pages })
+}
 
 /// Checks a page is one worth recognising, before a megabyte is uploaded to
 /// find out.
@@ -171,6 +205,65 @@ mod tests {
         let (dir, library) = library("ocr-blank");
         seed(&library, "book-4", &[""]);
         assert!(write_page(&library, "book-4", 0, "  \n\n ").is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The list a whole-book run is driven by: the pages with no text, and a
+    /// total to quote alongside them.
+    #[test]
+    fn the_scan_list_names_the_empty_pages_and_counts_the_whole_book() {
+        let (dir, library) = library("ocr-scan");
+        seed(&library, "book-5", &["", "这一页有文字", "", ""]);
+
+        let scan = scanned_pages(&library, "book-5").expect("scan");
+        assert_eq!(scan.total, 4);
+        assert_eq!(scan.pages, vec![0, 2, 3], "有文字的那页不该在列表里");
+
+        // The list is derived, not remembered: recognising a page takes it off
+        // the next answer. That is what makes a stopped run resumable — pressing
+        // the button again picks up exactly what is left, with no bookkeeping.
+        write_page(&library, "book-5", 2, "认出来的字").expect("write");
+        let after = scanned_pages(&library, "book-5").expect("scan again");
+        assert_eq!(after.total, 4);
+        assert_eq!(after.pages, vec![0, 3]);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// 🔴 A book whose text was never extracted must not read as one giant scan.
+    ///
+    /// The stored rows here are two empty pages, so an implementation that
+    /// trusted the `chars` column would answer "both pages are scans" and quote
+    /// the reader a bill for the whole book. The book is marked pending and its
+    /// source holds three chapters of real text, so the only answer that proves
+    /// the debt was paid is the source's own: three pages, none of them scans.
+    #[test]
+    fn a_deferred_book_is_extracted_before_its_pages_are_called_scans() {
+        let (dir, library) = library("ocr-deferred");
+        let source = dir.join("book.txt");
+        std::fs::write(
+            &source,
+            "第一章 开始\n\n正文甲\n\n第二章 继续\n\n正文乙\n\n第三章 尾声\n\n正文丙\n",
+        )
+        .expect("write source");
+        // Seed first — the rows have to exist before the row can be pointed at
+        // the source. The seeded pages are the *index* the deferral left behind
+        // (two empty pages); the flag says the text behind them was never
+        // extracted.
+        seed(&library, "b7", &["", ""]);
+        library
+            .with(|conn| {
+                conn.execute(
+                    "UPDATE books SET format = 'txt', file_path = ?1, chapters_pending = 1 \
+                     WHERE id = 'b7'",
+                    params![source.to_string_lossy()],
+                )?;
+                Ok(())
+            })
+            .expect("point at the source and mark it pending");
+
+        let scan = scanned_pages(&library, "b7").expect("scan");
+        assert_eq!(scan.total, 3, "总数要来自源文件，不是延期时留下的索引");
+        assert_eq!(scan.pages, Vec::<usize>::new(), "源文件里的三页都有文字");
         std::fs::remove_dir_all(&dir).ok();
     }
 }

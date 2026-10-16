@@ -1,10 +1,12 @@
 //! `ocr.*` — reading the text out of a scanned page.
 //!
-//! One command, one page. Whole-book recognition is deliberately not here yet:
-//! it is the same call in a loop, and what it needs on top (a progress event,
-//! a cancel, a cost the reader can see before committing to a hundred pages)
-//! is worth building once the single page has proved the model and the
-//! prompt against a real scan.
+//! One page per call, plus the list a whole-book run is driven by. The loop
+//! itself is **not here**: rendering a page is `pdfOcr.ts` on the frontend and
+//! Rust has no PDF renderer, so a batch loop on this side would have to ask the
+//! frontend for every image anyway. Doing it in the frontend makes the progress
+//! plain React state instead of a stream of events, and leaves this side with
+//! the two things only it can answer — which pages still need recognising, and
+//! storing the answer.
 
 use serde::Serialize;
 use tauri::State;
@@ -52,4 +54,33 @@ pub async fn ocr_page(
     let chars = ocr::write_page(&state.library, &book_id, page, &text)?;
     tracing::info!(book = %book_id, page, chars, "扫描页已识别");
     Ok(OcrPage { page: page + 1, chars })
+}
+
+/// `ocr.scannedPages` — which pages of a book still have no text, and how many
+/// pages the book has, so the reader can be quoted "210 / 756" before a run
+/// that may take a quarter of an hour.
+///
+/// 🔴 **Deliberately not gated on the model being configured**, unlike
+/// [`ocr_page`]. The question this answers is about the book, not about the
+/// provider, and the answer is a plain read of the corpus. Gating it would mean
+/// the frontend duplicating `is_ready`'s rule to decide whether to offer the
+/// button — and the frontend already has the pattern that avoids exactly that:
+/// press, and let the backend's error say what is missing. The first page of a
+/// batch fails with the same message `ocr_page` gives a single page, before
+/// anything is uploaded.
+///
+/// Dispatched to a blocking worker rather than answered inline, and for a real
+/// reason: the corpus may be a deferred PDF whose text was never extracted, and
+/// paying that debt is a full document decode. Same treatment as `reader.toc`,
+/// which pays the same debt.
+#[tauri::command]
+#[specta::specta]
+pub async fn ocr_scanned_pages(
+    state: State<'_, AppState>,
+    book_id: String,
+) -> AppResult<ocr::OcrScan> {
+    let library = state.library.clone();
+    tauri::async_runtime::spawn_blocking(move || ocr::scanned_pages(&library, &book_id))
+        .await
+        .map_err(|err| AppError::Message(format!("扫描页统计被中断：{err}")))?
 }
