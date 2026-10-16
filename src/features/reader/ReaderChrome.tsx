@@ -30,6 +30,7 @@ import { GlassButton, GlassIconButton } from "@/components/glass/button";
 import { IconSwap } from "@/components/motion/IconSwap";
 import { HeaderCover, HeaderRule } from "@/features/reader/ReaderHeader";
 import { estimateLabel, planLabel } from "@/features/reader/progress";
+import { ScanChip } from "@/features/reader/ScanChip";
 import { MAX_PDF_ZOOM, MIN_PDF_ZOOM, PDF_ZOOM_STEP } from "@/features/reader/usePdfZoom";
 import { MAX_FONT_SIZE, MIN_FONT_SIZE } from "@/stores/reader";
 import { ZH_MODES } from "@/features/reader/zhConvert";
@@ -413,6 +414,7 @@ export function ReaderFooterControls({
   progress,
   rsvpOn,
   onRsvp,
+  bookId,
 }: {
   speechStatus: "idle" | "playing" | "paused";
   onToggleSpeech: () => void;
@@ -432,6 +434,9 @@ export function ReaderFooterControls({
   /** Speed reading is running: the button shows it rather than only opening it. */
   rsvpOn: boolean;
   onRsvp: () => void;
+  /** The book, for the one control here that is about the page rather than
+   *  about reading: the scan chip. */
+  bookId: string;
 }) {
   /** Speech first, then the player, then auto-scroll — see the footer's own
    *  note on why the scroll button is not available in every layout. */
@@ -544,6 +549,12 @@ export function ReaderFooterControls({
         下一章 <CaretRight size={14} />
       </GlassButton>
       <span className="text-text-3 text-xs">{paged ? "← → 翻页" : "← → 翻章"}</span>
+      {/* Last, and the only thing here that is about the *page* rather than
+          about reading it: a page with no text layer, and the two ways to give
+          it one. It sits in the footer rather than on the paper — a notice
+          drawn over the page covers the page, and one drawn per page slot
+          covers a spread twice. */}
+      <ScanChip bookId={bookId} page={chapterIdx + 1} />
     </>
   );
 }

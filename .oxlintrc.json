@@ -99,6 +99,18 @@
       "rules": {
         "no-await-in-loop": "off"
       }
+    },
+    {
+      // A whole-book recognition run is one page at a time on purpose, and
+      // more so than anywhere else here: every step uploads about a megabyte
+      // to a vision model and waits for an answer. Two hundred of them in
+      // parallel would open two hundred sockets, spend the reader's uplink on
+      // contention and earn a 429 from any provider that meters. Sequential is
+      // the rate limit, not a missed `Promise.all`.
+      "files": ["src/features/reader/ocrBatch.ts"],
+      "rules": {
+        "no-await-in-loop": "off"
+      }
     }
   ],
   "ignorePatterns": [

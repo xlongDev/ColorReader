@@ -1923,6 +1923,7 @@ function ReaderView({
       progress={displayProgress}
       rsvpOn={readAloud.rsvpOpen}
       onRsvp={readAloud.toggleRsvp}
+      bookId={bookId}
     />
   );
 
@@ -2204,9 +2205,15 @@ function ReaderView({
       </div>
 
       {!fullscreen ? (
+        // `flex-wrap`, and the scan chip is one flex unit so it wraps whole:
+        // measured, the row's natural width is 1109px against the 1024px the
+        // window can still be, so at the minimum size the chip goes to a
+        // second line instead of squeezing every control on the first. The
+        // footer's height is watched (`readerFooterHeight`), so the paper and
+        // the speech pill both follow it down.
         <footer
           ref={footerRef}
-          className="border-hairline flex items-center justify-center gap-3 border-t px-6 py-3"
+          className="border-hairline flex flex-wrap items-center justify-center gap-3 border-t px-6 py-3"
         >
           {footerInner}
         </footer>
@@ -2216,7 +2223,7 @@ function ReaderView({
         <div className="group/hud-b absolute inset-x-0 bottom-0 z-40">
           <div className="h-7" aria-hidden />
           <div className="absolute inset-x-0 bottom-0 translate-y-full opacity-0 transition-all duration-200 ease-out group-hover/hud-b:translate-y-0 group-hover/hud-b:opacity-100 motion-reduce:transition-none">
-            <footer className="border-hairline flex items-center justify-center gap-3 border-t bg-(--glass-btn) px-6 py-3 backdrop-blur-xl">
+            <footer className="border-hairline flex flex-wrap items-center justify-center gap-3 border-t bg-(--glass-btn) px-6 py-3 backdrop-blur-xl">
               {footerInner}
             </footer>
           </div>
