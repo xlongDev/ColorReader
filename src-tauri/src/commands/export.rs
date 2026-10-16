@@ -66,3 +66,20 @@ pub async fn notes_export_selection(
     .await
     .map_err(|err| AppError::Message(format!("导出任务被中断：{err}")))?
 }
+
+/// `card.save` — writes a rendered share card (PNG bytes) where the reader
+/// pointed.
+///
+/// The bytes are the frontend's: the card is drawn on a canvas (see
+/// `quoteCard.ts`), so there is no library state to consult and no book id to
+/// look up — this is a plain file write with the notes export's job. It exists
+/// as a command rather than a frontend download because the desktop reader
+/// gets a real save panel; the browser build keeps using its own download.
+#[tauri::command]
+#[specta::specta]
+pub async fn card_save(path: String, bytes: Vec<u8>) -> AppResult<()> {
+    tauri::async_runtime::spawn_blocking(move || std::fs::write(PathBuf::from(&path), &bytes))
+        .await
+        .map_err(|err| AppError::Message(format!("保存任务被中断：{err}")))?
+        .map_err(|err| AppError::Message(format!("图片保存失败：{err}")))
+}

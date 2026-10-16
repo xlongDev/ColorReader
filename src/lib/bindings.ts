@@ -290,6 +290,17 @@ export const commands = {
    */
   notesExportSelection: (bookIds: string[], ids: string[], path: string, flavor: string | null) =>
     __TAURI_INVOKE<null>("notes_export_selection", { bookIds, ids, path, flavor }),
+  /**
+   *  `card.save` — writes a rendered share card (PNG bytes) where the reader
+   *  pointed.
+   *
+   *  The bytes are the frontend's: the card is drawn on a canvas (see
+   *  `quoteCard.ts`), so there is no library state to consult and no book id to
+   *  look up — this is a plain file write with the notes export's job. It exists
+   *  as a command rather than a frontend download because the desktop reader
+   *  gets a real save panel; the browser build keeps using its own download.
+   */
+  cardSave: (path: string, bytes: number[]) => __TAURI_INVOKE<null>("card_save", { path, bytes }),
   /**  `font.list` — every imported font, in the order they were added. */
   fontList: () => __TAURI_INVOKE<Font_Serialize[]>("font_list"),
   /**  `font.import` — `path` is the font file the reader picked. */
