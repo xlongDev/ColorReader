@@ -192,6 +192,14 @@ scheme 与资源协议同名（`resource.rs` 的 `colorreader`），靠 host 区
 
 Windows / Linux 是另一套机制：系统不认识「已在运行的那个实例」，而是**再启动一个进程**，把 URL 当作唯一参数递过去。于是这一侧由 `tauri-plugin-single-instance` 承担合流，且**必须在所有插件之前注册**——「这个进程是否留下」是它在自己的 setup 里决定的：第二进程把 argv 交给先到的实例，然后退出。开启它的 `deep-link` feature 后，这次交接在进入回调之前就被转成与 macOS 同一个 `deep-link://new-url` 事件，所以 `useDeepLink` 不必区分来源；回调只剩一件事——把窗口调到前面，否则读者在浏览器里点了链接，应用却在后面。首启就带参的情况由 deep-link 插件自己处理（它 setup 时读一遍 `std::env::args`）。
 
+### 金句卡片
+
+标注抽屉每行一个分享按钮，画一张 **1080×1440（3:4）的 PNG**：纸是读者**当前阅读表面的颜色**（护眼即暖黄、夜间即深色），正文用读者的阅读字体，标注色以 26% 透明度涂在文字背后（荧光笔质感），左上是一行「书名 · 作者」，下方是进度行，左下是 ColorReader 字标，**右下角一块恒白底的二维码**，内容是上面那条深链（`annotationLink` 与 Rust 侧 `link()` 由两侧测试钉同一字面量）。
+
+**为什么是 canvas 而不是 DOM 截图**：卡片是固定像素的静图，把整套阅读表面 CSS 搬进一个隐藏文档再光栅化，搬的东西比画的多。canvas 画的每一步测量（`measureText`）都是同一个引擎随后会兑现的像素。渲染器 `quoteCard.ts` 是纯布局 + 可注入测量，两个约束各有一条带名字的上限：引文按 76→30px 八档降号，**最小号仍放不下就整卡拒绝**（对话框说「这一句装不下」并给出字数，不提供别的按钮）；纸只能是纯色——纸纹/亚麻的纹理与自定义图 `fillStyle` 都吃不下，纹理留在屏幕上，卡片只带颜色。
+
+**两条保存通路按运行时分岔**：桌面走原生保存面板 + `card.save`（字节是前端产的，命令只负责落盘，契约同 `notes.export`）；浏览器没有面板也没有文件系统，走 `downloadBytes`，用面板本该给出的同一个文件名。对话框是 lazy 挂的（画 QR 和整块画布，同导出对话框的理由），画布在 Radix portal 里**晚一个提交挂载**，靠 ref 回调翻转的 `canvasReady` 触发重绘——这是页级事实不能假设首次 effect 时 DOM 已就绪的又一个例子。
+
 ### AI 助手
 
 Provider 选型收敛为一件事：**OpenAI 兼容的 `/chat/completions`**。Ollama、LM Studio、vLLM 与托管 API 都说这个协议，所以「OpenAI 兼容」不是厂商绑定，而是事实标准；用户只需要改 `base_url`。配置（地址、Key、模型、系统提示词）存 migration v5 引入的 `settings` KV 表——**Key 只存 Rust 侧**，渲染层 localStorage 里放 Key 等于向所有能读 profile 目录的东西公开，而发请求本来也是后端的事。
@@ -623,6 +631,8 @@ Liquid Glass 的代价是 `backdrop-filter`：**嵌套的玻璃会把模糊一�
 | E2E       | Playwright（Phase 3 起） | 启动 → 导入 → 阅读 → 标注 → 搜索 → 关闭 → 恢复进度        |
 
 ---
+
+前端每次跑测试都带 v8 覆盖率（`pnpm test` = `vitest run --coverage`，text-summary 进日志、json-summary 落 `coverage/`），CI 由 `scripts/coverage-report.mjs` 把按目录聚合的表写进 PR 摘要。**刻意不设门禁**：数字不是目标，「哪些模块改了却没有对应测试」在每个 PR 上看得见才是（O5）。
 
 ## 9. 尚未落地（后续阶段）
 

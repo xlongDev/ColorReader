@@ -71,12 +71,13 @@ AI Native · Local First · High Performance 的跨平台（Tauri 2）电子书�
 - **范围（实际）**：Rust 一个命令（`ocr.scanned_pages`）+ 前端一个纯函数（`ocrBatch.ts`）+ 一个 store + 一个条/一个确认框。
 - **红线不变**：vision 模型给词不给框，**划词仍不可用**（ARCHITECTURE 已判「设计而不是遗漏」），确认框里已明示。
 
-### F4 · 金句卡片分享图　【优先级 P2 · 小到中等】
+### F4 · 金句卡片分享图　【优先级 P2 · 小到中等 · ✅ 已落地 2026-10-16】
 
 - **问题**：P2 清单在列项；本地导出只有 md/csv，没有面向分享的单图。
 - **思路**：离屏 canvas 按 3:4（1080×1440）渲染：标注原文 + 书名/作者 + 阅读进度 + 右下角含深链的二维码（`export.rs::link` 的生成器已存在）。存盘走 `dialog:allow-save`（已授权）。**纯前端、无服务端**，符合 Local First。可复用霞鹜文楷字体链与 glass 材质语言。
 - **范围**：纯前端一个渲染模块 + 标注面板/灯箱一个入口 + 单测（换行与 CJK 度量需实测）。
 - **风险**：canvas 中 CJK 文本度量与 WebKit/Chromium 差异，e2e 双引擎各断言一次。
+- **落地形态（2026-10-16）**：`quoteCard.ts`（纯布局 + 可注入测量的渲染器）+ `QuoteCardDialog.tsx`（lazy 灯箱）+ 标注行分享按钮 + `card.save`（Rust 一个落盘命令，字节前端产）+ 浏览器 `downloadBytes` 回退。**纸跟随读者当前阅读表面**（护眼即暖黄、夜间即深色——用户确认的方向，比固定一套纸更贴合「撕下自己正在读的那一页」）；**二维码恒白底近黑模块**，可扫描性优先于表面保真。三个带名字的上限：引文 76→30px 八档降号、放不下整卡拒绝（说字数，不给别的按钮）、纸只能是纯色（纸纹/亚麻/自定义的纹理 `fillStyle` 吃不下）。一个实现注记：画布在 Radix portal 里晚一个提交挂载，靠 ref 回调的 `canvasReady` 触发重绘。测试：16 + 5 + 3 条单测 + `quote-card.spec.ts`（画布像素与 PNG 头双引擎）。ARCHITECTURE 已立「金句卡片」一节。
 
 ### F5 · OPDS 1.2 目录订阅　【优先级 P2 · 较大】
 
@@ -141,10 +142,11 @@ AI Native · Local First · High Performance 的跨平台（Tauri 2）电子书�
 - **代价（明写）**：新增 1 个依赖（`keyring` 4.2，macOS 上就是已在链接的 Security.framework 的薄封装）。Linux 上没有 Secret Service 时**保存凭据会失败并给出原因**，而不是悄悄退回明文。
 - **测试**：`secrets.rs` 16 条单测（封装往返、篡改、跨行/跨字段搬运、明文遗留、空值不封装、升级补封、真库读写、`SECRET_FIELDS` 覆盖完整性）+ `SecretsNotice` 4 条组件测试。🔴 **单测里 `master_key()` 返回固定值**（`#[cfg(test)]`）：headless CI 没有 Secret Service，需要真凭据库的套件只会挂。真凭据库的 I/O 由 `#[ignore]` 的 `keychain_round_trip` 覆盖，它用 `probe-account` 而非真账号名，否则删掉的是读者的真主密钥。
 
-### O5 · vitest 无覆盖率可见性　【P3】
+### O5 · vitest 无覆盖率可见性　【P3 · ✅ 已落地 2026-10-16】
 
 - **证据**：无 coverage 配置（清单 1.6 已记）；`pdfCanvas` 这类只能靠 e2e 兜，盲区位置不可见。
 - **方向**：加 v8 provider 的 `--coverage`，**只报告不设门禁**，并接进 CI 摘要。目标不是追数字，是把「哪些模块改了没有对应测试」照出来。
+- **落地形态（2026-10-16）**：`pnpm test` 即带 `--coverage`（v8，text-summary 进日志 + json-summary 落盘；vendor 与测试自身除外），CI 由 `scripts/coverage-report.mjs` 按目录聚合成表写进 PR 摘要（新依赖仅 `@vitest/coverage-v8`，版本钉到与 vitest 相同的 5.0.3）。无门禁无趋势线，一张表放在每个 PR 上。
 
 ### O6 · React Compiler 未启用，但它的 lint 规则已在把关　【P3 · 需实测】
 
@@ -169,5 +171,5 @@ AI Native · Local First · High Performance 的跨平台（Tauri 2）电子书�
 | 第一批（小、高感知） | ~~F2 更新角标 → O3 构建剔除字体~~                                                          | ✅ **已落地**（2026-10-12，全量门禁绿）                                                                                     |
 | 第二批（结构性）     | ~~F1 快捷键自定义（收编 → 面板）~~ → ~~O1 重跑 ReaderPage 量测~~ → **O1 按渲染分支拆文件** | ✅ **F1、量测、拆分均已落地**（2026-10-12 量测 / 2026-10-13 拆分，全量门禁绿）：三个分支 hook + 页面 2731 → 2553 行（见上） |
 | 第三批（数据与安全） | ~~O4 凭据加密~~ → O2 library 分层（纯移动）                                                | O4 **已落地**（2026-10-13）；O2 **全部落地**（2026-10-13，门禁绿）：分层 + `mobi.rs` 八文件 + `clippings.rs` 七文件         |
-| 第四批（按需）       | ~~F3 整本 OCR~~ → F4 金句卡片 → F5 OPDS                                                    | F3 **已落地**（2026-10-16，全量门禁绿）；F4、F5 未动                                                                        |
-| 随时                 | O5 覆盖率报告 → ~~O7 拆 backend.ts / flake 加重试~~                                        | ~~O7 **已落地**~~（2026-10-14：12 个领域文件 + 36 行转发表，flake 局部重试，全量门禁绿）；O5 未动                           |
+| 第四批（按需）       | ~~F3 整本 OCR~~ → ~~F4 金句卡片~~ → F5 OPDS                                                | F3、F4 **已落地**（2026-10-16，全量门禁绿）；F5 未动                                                                        |
+| 随时                 | ~~O5 覆盖率报告~~ → ~~O7 拆 backend.ts / flake 加重试~~                                    | ~~O7 **已落地**~~（2026-10-14）；~~O5 **已落地**~~（2026-10-16：报告进 PR 摘要，不设门禁）                                  |
