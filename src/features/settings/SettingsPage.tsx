@@ -29,16 +29,9 @@ import { useSavePath } from "@/hooks/useSavePath";
 import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
 import { useSaveSyncConfig, useSyncConfig, useSyncNow, useTestSyncConfig } from "@/hooks/useSync";
 import { useDeleteDictionary, useDictionaries, useImportDictionary } from "@/hooks/useDictionaries";
-import { useDeleteFont, useFonts, useImportFont, useInstallCatalogFont } from "@/hooks/useFonts";
+import { useDeleteFont, useFonts, useImportFont } from "@/hooks/useFonts";
 import { useDownloadCatalogFont, useRemoveCatalogFont } from "@/hooks/useCatalogFonts";
-import {
-  CATALOG_FILES,
-  CATALOG_FONTS,
-  catalogSheetBytes,
-  handImported,
-  type CatalogFont,
-  type CatalogFontFile,
-} from "@/lib/fontCatalog";
+import { CATALOG_FONTS, catalogSheetBytes, type CatalogFont } from "@/lib/fontCatalog";
 import { useUpdater, type UpdateState } from "@/stores/updater";
 import { useExportBackup, useStageBackup } from "@/hooks/useBackup";
 import { isDesktopRuntime } from "@/lib/ipc";
@@ -1034,17 +1027,14 @@ function LookupSourceRows() {
  * subsets stream per `unicode-range` while reading, so installing 霞鹜文楷
  * costs 0.2 MB rather than the face's twenty.
  *
- * The catalogue rows are offered, not installed: 下载 fetches the face and 删除
+ * The catalogue rows are offered, not installed: 下载 fetches the sheet and 删除
  * takes it back out, and both are honest about the one thing the reader gives up
  * — installing needs the network.
  *
- * The two kinds are two mechanisms, and they look it. A stylesheet font is a
- * *preference*: 下载 adopts the rules and flags the entry in `downloadedFonts`,
- * and nothing on disk changes. An archive font is a *file*: Rust unpacks it and
- * it joins the imported list, so its row is installed when a font carrying the
- * entry's id exists — and it is removed by the same call that removes any
- * imported font. That is also why the two kinds cannot share one row shape: one
- * asks "is this entry in the settings", the other "is this font on disk".
+ * A catalogue font is a *preference*, not a file: 下载 adopts the rules and
+ * flags the entry in `downloadedFonts`, and nothing on disk changes. That is why
+ * its row asks "is this entry in the settings" while the 已导入 list below asks
+ * "is this font on disk" — two different questions, so two row shapes.
  */
 function FontSection() {
   const fonts = useFonts();
@@ -1052,7 +1042,6 @@ function FontSection() {
   const remove = useDeleteFont();
   const catalogDownload = useDownloadCatalogFont();
   const catalogRemove = useRemoveCatalogFont();
-  const catalogInstall = useInstallCatalogFont();
   const downloaded = useSettings((state) => state.downloadedFonts);
   const [status, setStatus] = useState<{ tone: "ok" | "bad"; text: string } | null>(null);
 
@@ -1102,39 +1091,14 @@ function FontSection() {
     });
   };
 
-  const installArchive = (font: CatalogFontFile) => {
-    setStatus(null);
-    catalogInstall.mutate(font, {
-      onSuccess: () =>
-        setStatus({ tone: "ok", text: `「${font.name}」已安装，可以在阅读器的「字体」里选用。` }),
-      onError: (error) =>
-        setStatus({ tone: "bad", text: `「${font.name}」安装失败：${String(error)}` }),
-    });
-  };
-
-  // Removed through the *imported font* path, not the catalogue one: the face on
-  // disk is an ordinary imported font, and deleting it there is also what steps
-  // the picker off it when it was the one in use.
-  const removeArchive = (font: CatalogFontFile, id: string) => {
-    setStatus(null);
-    remove.mutate(id, {
-      onSuccess: () => setStatus({ tone: "ok", text: `「${font.name}」已移除。` }),
-      onError: (error) => setStatus({ tone: "bad", text: String(error) }),
-    });
-  };
-
-  // A catalogue face installed from an archive *is* an imported font, so it
-  // would otherwise be listed twice — once as the entry, once as the file. See
-  // `handImported` for which rows are held back, and why not all of them are.
   const all = fonts.data ?? [];
-  const list = handImported(all);
 
   return (
     <SettingsGroup
       id="fonts"
       icon={TextAa}
       title="字体"
-      description="导入 .ttf / .otf / .ttc / .woff / .woff2 文件，或从下方目录一键安装。样式表类条目只下载样式表（0.1–0.2 MB）并存在本机，装好之后断网也能用；正文字形在阅读时按 unicode-range 按需加载，读过的部分离线完整，没读过的字在断网时回退到字体栈里的下一款。HarmonyOS Sans 只从厂商的官方整包里取需要的那个字体文件（服务器不支持分段下载时退回整包），装好后整份离线可用。所有字体都只存在本机，不随应用分发。"
+      description="导入 .ttf / .otf / .ttc / .woff / .woff2 文件，或从下方目录一键安装。目录条目只下载样式表（0.1–0.2 MB）并存在本机，装好之后断网也能用；正文字形在阅读时按 unicode-range 按需加载，读过的部分离线完整，没读过的字在断网时回退到字体栈里的下一款。所有字体都只存在本机，不随应用分发。"
     >
       {CATALOG_FONTS.map((font) => {
         const installed = downloaded.includes(font.id);
@@ -1176,58 +1140,10 @@ function FontSection() {
         );
       })}
 
-      {CATALOG_FILES.map((font) => {
-        const installed = all.find((row) => row.catalogId === font.id);
-        const busy = catalogInstall.isPending && catalogInstall.variables?.id === font.id;
-        return (
-          <Row
-            key={font.id}
-            label={font.name}
-            // 🔴 `notice` is not decoration: HarmonyOS Sans's agreement
-            // (clause 2.1) requires the software to carry a prominent notice
-            // that its fonts are used, and this row is where the app keeps that
-            // promise — the repo's `THIRD-PARTY-NOTICES.md` is not shipped.
-            // Clause 2.4 wants the agreement itself kept with any copy of the
-            // fonts, which is why Rust writes the vendor's `LICENSE.txt` beside
-            // the face rather than only citing it here.
-            hint={`${font.notice} 从官方整包中只下载需要的成员（约 ${formatFileSize(font.downloadBytes)}），解出 ${formatFileSize(font.bytes)} 的字体文件。许可：${font.license}`}
-          >
-            {installed ? (
-              <button
-                type="button"
-                aria-label={`删除 ${font.name}`}
-                title={`删除 ${font.name}`}
-                onClick={() => removeArchive(font, installed.id)}
-                disabled={remove.isPending}
-                className="text-text-3 hover:text-danger focus-ring shrink-0 rounded-md p-1 transition-colors disabled:opacity-50"
-              >
-                <Trash size={14} />
-              </button>
-            ) : isDesktopRuntime ? (
-              <GlassButton
-                size="sm"
-                onClick={() => installArchive(font)}
-                disabled={busy}
-                aria-label={`下载 ${font.name}`}
-              >
-                {busy ? "下载中…" : "下载"}
-              </GlassButton>
-            ) : (
-              // The web build has no zip reader, so the honest offer is the path
-              // it does have: the reader downloads the archive themselves and
-              // imports the face out of it with the button below.
-              <span className="text-text-3 text-[12px] leading-relaxed">
-                浏览器端请自行下载后用「导入字体」
-              </span>
-            )}
-          </Row>
-        );
-      })}
-
-      {list.length === 0 ? (
+      {all.length === 0 ? (
         <Row label="已导入" hint="还没有导入字体。" />
       ) : (
-        list.map((font) => (
+        all.map((font) => (
           <Row key={font.id} label={font.name}>
             <button
               type="button"

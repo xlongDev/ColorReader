@@ -196,49 +196,11 @@ test("an installed font is still there after a reload with the CDN gone", async 
 });
 
 /**
- * 归档类条目在浏览器端只说明怎么拿到，不给一个点了必然失败的按钮。
- *
- * HarmonyOS Sans 是目录里唯一一个「从厂商整包里取成员」的条目，而取成员需要 zip
- * 读取器和文件系统 —— 浏览器两样都没有。这一条钉的是那份诚实：行还在、许可
- * 声明还在（协议第 2.1 条要求软件里写明用了这套字体，而这行是应用里唯一的
- * 落点），但按钮换成了指向「导入字体」的说明。渲染一个按钮、让它从 IPC 层里
- * 抛出「找不到某个全局量」，读起来是应用坏了，而不是「这条路浏览器走不了」。
- */
-test("the archive entry explains itself instead of offering a button the web build cannot honour", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1280, height: 900 });
-  await openFonts(page);
-
-  // Both shown while the font is *not* installed, which is when the reader is
-  // deciding — a notice that only appeared after installing would be no notice.
-  await expect(page.getByText("HarmonyOS Sans", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText(/本软件使用了 HarmonyOS Sans 字体/)).toBeVisible();
-  await expect(page.getByText(/从官方整包中只下载需要的成员/)).toBeVisible();
-
-  // The group's own description is the *second* place this claim lives, and the
-  // first cut of the range-route change updated only the row — so the page went
-  // on telling the reader to download the whole package while the row directly
-  // beneath it said 5.4 MB. Pin both: the stale sentence has to be gone, and the
-  // description has to make the same promise the row makes.
-  await expect(page.getByText(/要下载厂商官方整包/)).toHaveCount(0);
-  await expect(page.getByText(/只从厂商的官方整包里取需要的那个字体文件/)).toBeVisible();
-
-  await expect(page.getByRole("button", { name: "下载 HarmonyOS Sans" })).toHaveCount(0);
-  await expect(page.getByText("浏览器端请自行下载后用「导入字体」")).toBeVisible();
-
-  // Not a dead end: the import button below takes the face once the reader has
-  // fetched the archive themselves.
-  await expect(page.getByRole("button", { name: /导入字体/ })).toBeVisible();
-});
-
-/**
  * 寒蝉正楷体 是目录里唯一一个「作者已把字体从上游删掉」的条目。
  *
  * 字节来自社区重打包（`@xiao-xue-seng/chill-kai`），而许可仍然是上游的 OFL
- * 1.1 —— 所以这一行照常提供，只是没有厂商归档可指（`CATALOG_FILES` 那条路
- * 走不了）。这一条钉的是它确实作为一行出现、并且给的是样式表类的下载按钮：
- * 不点下载，所以不需要夹具，也不需要网络。
+ * 1.1 —— 所以这一行照常提供。这一条钉的是它确实作为一行出现、并且给的是普通
+ * 的下载按钮：不点下载，所以不需要夹具，也不需要网络。
  */
 test("the community-repackaged entry is offered like any other", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -246,8 +208,9 @@ test("the community-repackaged entry is offered like any other", async ({ page }
 
   await expect(page.getByText("寒蝉正楷体", { exact: true }).first()).toBeVisible();
   await expect(page.getByRole("button", { name: "下载 寒蝉正楷体" })).toBeVisible();
-  // 它和样式表类的其它条目并列，而不是和归档类并列 —— 后者在浏览器端不给按钮。
-  await expect(page.getByText("浏览器端请自行下载后用「导入字体」")).toHaveCount(1);
+  // 目录里的每一行现在都是同一种：下载样式表。归档类条目连同它在浏览器端的
+  // 「请自行下载后用『导入字体』」行内说明一起退役了，这行说明不该再出现。
+  await expect(page.getByText("浏览器端请自行下载后用「导入字体」")).toHaveCount(0);
 });
 
 /**

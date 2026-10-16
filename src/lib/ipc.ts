@@ -10,7 +10,6 @@ import type { BackupSummary, Outcome, SecretsStatus } from "@/lib/bindings";
 import type {
   AiDelta,
   BarFace,
-  CatalogInstall,
   GraphProgress,
   ImportOutcome,
   ImportProgress,
@@ -256,26 +255,6 @@ export const ipc = {
       throw new Error("桌面端走 font_import（路径），这里是浏览器端的入口");
     }
     return fromLocal("fontImportFile")(file) as Promise<LocalFont>;
-  },
-
-  /**
-   * Installs a catalogue face out of the vendor's own archive.
-   *
-   * Desktop-only, and the browser cannot route around it: the face is one member
-   * of a 50 MB zip, and unpacking it needs a zip reader and a filesystem that
-   * the web build does not have. Saying so is better than the alternative — a
-   * button that appears to work and then fails inside `__TAURI_INVOKE` with a
-   * message about a missing global.
-   *
-   * The web build still gets the font: the reader downloads the same archive
-   * themselves and uses 导入字体, which is the path the desktop takes for any
-   * font file. `SettingsPage` offers exactly that, in the same row.
-   */
-  fontInstallCatalog(request: CatalogInstall): Promise<LocalFont> {
-    if (!isDesktopRuntime) {
-      throw new Error("浏览器端没有解包能力：请自行下载字体文件后用「导入字体」添加");
-    }
-    return commands.fontInstallCatalog(request);
   },
 
   /**

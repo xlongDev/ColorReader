@@ -294,23 +294,6 @@ export const commands = {
   fontList: () => __TAURI_INVOKE<Font_Serialize[]>("font_list"),
   /**  `font.import` — `path` is the font file the reader picked. */
   fontImport: (path: string) => __TAURI_INVOKE<Font_Serialize>("font_import", { path }),
-  /**
-   *  `font.install_catalog` — installs one catalogue face from the vendor's own
-   *  archive.
-   *
-   *  The request carries the archive's URL and the member's sha256, both taken
-   *  from `src/lib/fontCatalog.ts`. That is the right side to keep the catalogue
-   *  on — it is data about where fonts come from, and it is compiled into the same
-   *  signed bundle this command is — and this side contributes what the frontend
-   *  cannot do: a zip reader, a filesystem, and the hash comparison that decides
-   *  whether the bytes are the ones that were pinned.
-   *
-   *  No `spawn_blocking` here: `font_archive::install` does its own, around the
-   *  half that is blocking. The download is genuinely async and must not be put on
-   *  a blocking thread.
-   */
-  fontInstallCatalog: (request: CatalogInstall) =>
-    __TAURI_INVOKE<Font_Serialize>("font_install_catalog", { request }),
   /**  `font.delete` — forgets one font and removes its bytes. */
   fontDelete: (id: string) => __TAURI_INVOKE<null>("font_delete", { id }),
   /**  `graph.status` — what the panel needs to decide what to show. */
@@ -775,38 +758,6 @@ export type Bookmark = {
 };
 
 /**
- *  One catalogue entry, as the settings page asks for it to be installed.
- *
- *  The catalogue itself lives in the frontend (`src/lib/fontCatalog.ts`) — it is
- *  data about where fonts come from, and the app's build is where it belongs.
- *  This side is handed the parts it needs to do the work, and pins nothing of
- *  its own: `sha256` comes across the boundary, and the comparison below is what
- *  makes it mean something. A pin the *backend* invented would be no pin at all,
- *  because the backend has no idea which bytes are legitimate.
- */
-export type CatalogInstall = {
-  /**
-   *  The catalogue entry's id — what marks the font as that entry's, and what
-   *  a later 删除 matches on.
-   */
-  catalogId: string;
-  /**
-   *  What the reader sees in the picker. Taken from the catalogue rather than
-   *  from the member's own name: `HarmonyOS_Sans_SC_Regular` is the vendor's
-   *  file name, not something anybody wants to pick a font by.
-   */
-  name: string;
-  /**  The vendor's archive, in order — the first source to answer wins. */
-  sources: string[];
-  /**  The member inside it that is the face. */
-  member: string;
-  /**  sha256 the member's bytes must have, lowercase hex. */
-  sha256: string;
-  /**  The vendor's licence file inside the same archive, when it ships one. */
-  licenseMember: string | null;
-};
-
-/**
  *  What the merge decided for one book. Struct variants so the serialized
  *  form is a flat `{ decision, title, progress }` object.
  */
@@ -943,22 +894,16 @@ export type Font_Deserialize = {
   file: string;
   addedAt: number;
   /**
-   *  Which catalogue entry installed this, when one did.
-   *
-   *  The catalogue's own record of a `file` font is this row and nothing
-   *  else: the bytes are here, the face is offered from here, and the
-   *  settings row finds its 删除 by looking for this id. `downloadedFonts`
-   *  in the settings store is the *webfont* kind's record and stays empty for
-   *  a face that arrives as a whole file.
-   */
-  catalogId?: string | null;
-  /**
    *  The licence file stored beside the face, when the vendor shipped one.
    *
-   *  Kept as a name rather than derived from the id, for the same reason
-   *  `file` is. HarmonyOS Sans's agreement asks that any copy of the fonts
-   *  carry its notice and terms, and this is what makes that true of the copy
-   *  on the reader's disk.
+   *  🔴 **Nothing writes this any more, and the field stays anyway.** The only
+   *  path that ever set it was the archive install — the vendor's own
+   *  agreement travelled with the vendor's own bytes — and that path went with
+   *  HarmonyOS Sans. What keeps the field alive is the readers who installed
+   *  it before: their `<id>.license.txt` is on disk, `remove` is the only
+   *  thing that can take it away, and dropping the field would strand a file
+   *  in the fonts directory that nothing will ever clean up. Kept as a name
+   *  rather than derived from the id, for the same reason `file` is.
    */
   license?: string | null;
 };
@@ -987,22 +932,16 @@ export type Font_Serialize = {
    */
   url: string;
   /**
-   *  Which catalogue entry installed this, when one did.
-   *
-   *  The catalogue's own record of a `file` font is this row and nothing
-   *  else: the bytes are here, the face is offered from here, and the
-   *  settings row finds its 删除 by looking for this id. `downloadedFonts`
-   *  in the settings store is the *webfont* kind's record and stays empty for
-   *  a face that arrives as a whole file.
-   */
-  catalogId?: string | null;
-  /**
    *  The licence file stored beside the face, when the vendor shipped one.
    *
-   *  Kept as a name rather than derived from the id, for the same reason
-   *  `file` is. HarmonyOS Sans's agreement asks that any copy of the fonts
-   *  carry its notice and terms, and this is what makes that true of the copy
-   *  on the reader's disk.
+   *  🔴 **Nothing writes this any more, and the field stays anyway.** The only
+   *  path that ever set it was the archive install — the vendor's own
+   *  agreement travelled with the vendor's own bytes — and that path went with
+   *  HarmonyOS Sans. What keeps the field alive is the readers who installed
+   *  it before: their `<id>.license.txt` is on disk, `remove` is the only
+   *  thing that can take it away, and dropping the field would strand a file
+   *  in the fonts directory that nothing will ever clean up. Kept as a name
+   *  rather than derived from the id, for the same reason `file` is.
    */
   license?: string | null;
 };
