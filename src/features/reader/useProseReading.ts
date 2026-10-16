@@ -58,6 +58,9 @@ export interface ProseReadingOptions {
   /** The font key, bundled or imported. */
   font: string;
   lineHeightIdx: number;
+  /** 正文加粗: the body text in the bold weight. Inherited by every paragraph
+   *  and run below, none of which carries a weight of its own. */
+  bodyBold: boolean;
   /** Applied horizontal margin, fullscreen bonus included. */
   margin: number;
   /** Applied vertical margin, fullscreen bonus included. */
@@ -106,6 +109,7 @@ export function useProseReading({
   fontSize,
   font,
   lineHeightIdx,
+  bodyBold,
   margin,
   blockMargin,
   columnWidth,
@@ -118,6 +122,12 @@ export function useProseReading({
     fontSize: `${fontSize}px`,
     fontFamily: resolveFont(font),
     lineHeight: LINE_HEIGHTS[lineHeightIdx],
+    // 正文加粗, inline on the flow so every paragraph and run inherits it —
+    // none of them declares a weight, and an inline declaration outranks
+    // anything globals.css could say about `.prose-reader p`. Absent rather
+    // than `normal` when off: the prose path has no book CSS to fight, so off
+    // means "leave the weight alone" exactly as it does in the section sheet.
+    ...(bodyBold ? { fontWeight: "bold" as const } : {}),
     // Wallpaper chapters read off the book's own paper art (light in both
     // themes), so the ink stays dark there instead of following the surface.
     color: wallpaperPath ? "#3f3629" : surface.fg,

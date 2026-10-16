@@ -62,9 +62,11 @@ const RULER_CUSTOM_FALLBACK = "#7cd92c";
 export function SettingsPanel({
   verticalAvailable = false,
   zhAvailable = false,
+  boldAvailable = false,
 }: {
   verticalAvailable?: boolean;
   zhAvailable?: boolean;
+  boldAvailable?: boolean;
 }) {
   const settings = useReaderSettings();
   const { update } = settings;
@@ -149,6 +151,28 @@ export function SettingsPanel({
             </Stepper>
           </div>
         </Group>
+        {/* 正文加粗 sits above the 书籍排版 gate rather than inside it: it is
+            the one accessibility override in this panel — the reader who needs
+            it needs it in the book's own layout too — and 跟随书籍 is the
+            default, so a gate would leave it doing nothing out of the box.
+            Offered wherever the app sets the body text itself: a PDF page is a
+            canvas from pdf.js and a comic entry is a plate, and neither has a
+            weight to change. */}
+        {boldAvailable && (
+          <Group label="正文加粗">
+            <Chips
+              options={[
+                { key: false, label: "常规" },
+                { key: true, label: "加粗" },
+              ]}
+              value={settings.bodyBold}
+              onChange={(value) => update({ bodyBold: value })}
+            />
+            <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
+              正文统一用加粗字重。字体带粗体面的用真粗体，只有单面的由浏览器合成。
+            </p>
+          </Group>
+        )}
         {/* 使用书籍排版: the book's own paragraph styles stand, so the three
             settings below it have nothing to win — they only appear when the
             reader takes the layout back, the way readest hides them. */}

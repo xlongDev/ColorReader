@@ -24,6 +24,15 @@ export type FoliateStyle = {
   /** Two-em first-line indent on every paragraph. */
   indent: boolean;
   /**
+   * 正文加粗: force the bold weight onto the body text.
+   *
+   * Not part of the 使用书籍排版 deal below, on purpose — see
+   * `ReaderState.bodyBold`. It is an accessibility override, and 跟随书籍 is
+   * the default, so standing it down with the rest would leave it doing
+   * nothing out of the box.
+   */
+  bodyBold: boolean;
+  /**
    * 使用书籍排版: the book keeps its own paragraph styles — line height,
    * paragraph gap, first-line indent — and the reader's three settings stand
    * down. Font size is not part of the deal: the reader always owns the
@@ -122,6 +131,7 @@ export const buildStyleSheet = ({
   lineHeight,
   paraGap,
   indent,
+  bodyBold,
   bookTypography,
   fg,
   bg,
@@ -137,10 +147,17 @@ export const buildStyleSheet = ({
    * (`fontFamily: null`) likewise leaves the book's faces alone. Font SIZE is
    * not part of either deal: it stays on html/body unconditionally, because
    * the book's em-based sizes scale with it, which keeps its headings and
-   * title pages at the proportions its designer chose. */
+   * title pages at the proportions its designer chose.
+   *
+   * 正文加粗 is the second exception, for a different reason: it is an
+   * accessibility override, not a typographic opinion, so it is not the book's
+   * to overrule. It lands in this same rule because the selector set below is
+   * exactly "the elements body text lives in" — the one thing a book restates
+   * its weight on, and the one `!important` has to reach. */
   const textSelectors = "html, body, p, li, blockquote, dd, dt, td, th, div";
   const forced = [
     fontFamily ? `font-family: ${fontFamily} !important;` : "",
+    bodyBold ? "font-weight: bold !important;" : "",
     bookTypography ? "" : `line-height: ${lineHeight} !important;`,
   ]
     .filter(Boolean)

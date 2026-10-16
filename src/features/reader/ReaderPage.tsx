@@ -644,6 +644,11 @@ function ReaderView({
    * wallpaper) keep their syntax untouched.
    */
   const zhAvailable = !chapterIsPage;
+  // 正文加粗 asks a different question of the same set of books: does the app
+  // set the body text, or is the text a picture of itself? A PDF page is a
+  // canvas pdf.js painted and a comic entry is a plate, so neither has a
+  // weight to change and the panel does not offer the switch there.
+  const boldAvailable = !chapterIsPage;
   const zhConverter = useZhConverter(zhAvailable ? settings.zhConvert : "off");
   const displayChapterData = useMemo(() => {
     if (!chapterData || !zhConverter) return chapterData;
@@ -1659,6 +1664,7 @@ function ReaderView({
     lineHeightIdx,
     paraGapIdx,
     indent,
+    bodyBold: settings.bodyBold,
     surface,
     invertImages: invertBookImages,
     fonts,
@@ -1744,6 +1750,7 @@ function ReaderView({
     fontSize,
     font,
     lineHeightIdx,
+    bodyBold: settings.bodyBold,
     margin,
     blockMargin,
     columnWidth,
@@ -2288,6 +2295,7 @@ function ReaderView({
         bookId={bookId}
         verticalAvailable={useFoliate}
         zhAvailable={zhAvailable}
+        boldAvailable={boldAvailable}
         // The drawer's own ✕. Same call as Escape's, so the two cannot drift
         // apart again — that drift is what left the highlights painted.
         onClose={closePanel}

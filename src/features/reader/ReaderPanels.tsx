@@ -55,6 +55,7 @@ export function ReaderPanels({
   ai,
   verticalAvailable,
   zhAvailable,
+  boldAvailable,
 }: {
   panel: Panel;
   bookId: string;
@@ -64,6 +65,10 @@ export function ReaderPanels({
   verticalAvailable: boolean;
   /** Whether the book has flowing text to convert — everything but PDF/CBZ. */
   zhAvailable: boolean;
+  /** Whether the app sets the body text itself and can therefore weight it —
+      the same set of books as `zhAvailable`, but a separate question: a
+      converter rewrites characters, this one changes a typeface. */
+  boldAvailable: boolean;
   toc: {
     chapters: ChapterMeta[];
     outline: PdfOutlineItem[];
@@ -130,7 +135,11 @@ export function ReaderPanels({
               />
             )}
             {panel === "settings" && (
-              <SettingsPanel verticalAvailable={verticalAvailable} zhAvailable={zhAvailable} />
+              <SettingsPanel
+                verticalAvailable={verticalAvailable}
+                zhAvailable={zhAvailable}
+                boldAvailable={boldAvailable}
+              />
             )}
             {panel === "annotations" && (
               <AnnotationList

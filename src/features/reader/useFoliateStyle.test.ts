@@ -17,6 +17,7 @@ function setup(overrides: Partial<FoliateStyleOptions> = {}) {
     lineHeightIdx: 1,
     paraGapIdx: 1,
     indent: true,
+    bodyBold: false,
     bookTypography: false,
     surface: surface(),
     invertImages: false,
@@ -53,6 +54,13 @@ describe("useFoliateStyle", () => {
 
     const on = setup({ surface: surface({ mode: "light" }), invertImages: true });
     expect(on.result.current.invertImages).toBe(true);
+  });
+
+  /** 正文加粗 is the one typography setting 使用书籍排版 does not gate — it is
+   *  an accessibility override, so it has to reach the sheet on its own. */
+  it("carries 正文加粗 through whatever 书籍排版 says", () => {
+    expect(setup({ bodyBold: false }).result.current.bodyBold).toBe(false);
+    expect(setup({ bodyBold: true, bookTypography: true }).result.current.bodyBold).toBe(true);
   });
 
   it("falls back to the default leading and gap for an index off the scale", () => {

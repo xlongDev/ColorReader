@@ -43,6 +43,8 @@ export interface FoliateStyleOptions {
   lineHeightIdx: number;
   paraGapIdx: number;
   indent: boolean;
+  /** 正文加粗: the body text in the bold weight, whatever 使用书籍排版 says. */
+  bodyBold: boolean;
   /** 使用书籍排版: the book's own paragraph styles stand over the reader's. */
   bookTypography: boolean;
   surface: ReadingSurface;
@@ -63,6 +65,7 @@ export function useFoliateStyle({
   lineHeightIdx,
   paraGapIdx,
   indent,
+  bodyBold,
   bookTypography,
   surface,
   invertImages,
@@ -78,6 +81,7 @@ export function useFoliateStyle({
       lineHeight: LINE_HEIGHTS[lineHeightIdx] ?? 1.7,
       paraGap: PARA_GAPS[paraGapIdx] ?? 0.9,
       indent,
+      bodyBold,
       bookTypography,
       fg: surface.fg,
       bg: surface.tint,
@@ -101,6 +105,7 @@ export function useFoliateStyle({
       lineHeightIdx,
       paraGapIdx,
       indent,
+      bodyBold,
       bookTypography,
       surface.fg,
       surface.mode,

@@ -10,6 +10,7 @@ const style = (over: Partial<FoliateStyle> = {}): FoliateStyle => ({
   lineHeight: 1.7,
   paraGap: 0.9,
   indent: true,
+  bodyBold: false,
   bookTypography: false,
   fg: "#c9ced8",
   bg: "#181c23",
@@ -95,6 +96,26 @@ describe("buildStyleSheet", () => {
     expect(css).not.toContain("text-indent");
     // The reader always owns the body size, typography or not.
     expect(css).toContain("font-size: 18px !important");
+  });
+
+  /**
+   * 正文加粗: the panel's one accessibility override, and therefore the one
+   * typography setting 使用书籍排版 does not stand down. 跟随书籍 is the
+   * default, so tying it to that gate would ship a switch that does nothing
+   * until the reader turns something else on first.
+   */
+  it("bolds the body text on its own switch, under either 书籍排版 setting", () => {
+    // Off injects nothing at all — the book's own weight is not ours to reset.
+    expect(buildStyleSheet(style({ dark: false }))).not.toContain("font-weight");
+
+    expect(buildStyleSheet(style({ bodyBold: true, dark: false }))).toContain(
+      "font-weight: bold !important",
+    );
+
+    // The point of the setting: it survives 跟随书籍, where line-height does not.
+    const followed = buildStyleSheet(style({ bodyBold: true, bookTypography: true, dark: false }));
+    expect(followed).toContain("font-weight: bold !important");
+    expect(followed).not.toContain("line-height:");
   });
 
   it("forces the typeface unless the reader picked 原书字体", () => {

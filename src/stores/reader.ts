@@ -51,6 +51,25 @@ interface ReaderState {
   /** Two-em text-indent at the start of every paragraph. */
   indent: boolean;
   /**
+   * 正文加粗: set the body text in the bold weight.
+   *
+   * An accessibility override rather than a typographic preference — the
+   * reader who needs it needs it in every book — so it stands **outside** the
+   * 使用书籍排版 deal and applies whichever way that gate is set. That is not
+   * a detail: 跟随书籍 is the default, so gating it on the same switch would
+   * leave it doing nothing out of the box, which is the one shape this panel
+   * refuses to ship.
+   *
+   * Deliberately two states and not a weight scale. Measured (2026-10-16, on
+   * both engines): a family with a single face renders at most **two**
+   * distinct weights — everything below 600 and a synthesised bold from 600
+   * up — so nine steps would be seven dead positions on six of the seven
+   * paths a reader can be on, and the same control would be a real mid-weight
+   * on 苹方 alone. Two states are what every path can honour: a path with a
+   * real bold face picks it, a single-face path synthesises one.
+   */
+  bodyBold: boolean;
+  /**
    * The writing direction the reader asks for. `auto` — the default — keeps
    * the book's own: a 古籍 or 日漫 that typesets itself vertical-rl reads
    * exactly as its author set it, with nothing injected. `horizontal` and
@@ -408,6 +427,7 @@ export const DEFAULT_READER_SETTINGS = {
   marginX: DEFAULT_MARGIN_X,
   marginY: DEFAULT_MARGIN_Y,
   indent: false,
+  bodyBold: false,
   writingMode: "auto",
   bookTypography: true,
   quoteReplace: false,

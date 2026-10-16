@@ -85,6 +85,7 @@ function options(over: Partial<ProseReadingOptions> = {}): ProseReadingOptions {
     fontSize: 18,
     font: "serif",
     lineHeightIdx: 1,
+    bodyBold: false,
     margin: 20,
     blockMargin: 24,
     columnWidth: undefined,
@@ -251,6 +252,22 @@ describe("useProseReading", () => {
     // Wallpaper chapters read off the book's own paper art, light in both
     // themes, so the ink cannot follow a dark surface there.
     expect(wallpaper.color).toBe("#3f3629");
+  });
+
+  /**
+   * 正文加粗 rides on the flow's own style so every paragraph and run inherits
+   * it — none of them declares a weight of its own, and an inline declaration
+   * outranks anything `globals.css` says about `.prose-reader p`. Off leaves
+   * the declaration out rather than writing `normal`: the prose path has no
+   * book CSS to fight, so off means "leave the weight alone".
+   */
+  it("bolds the flow only when asked", () => {
+    const off = renderHook(() => useProseReading(options())).result.current.articleStyle;
+    const on = renderHook(() => useProseReading(options({ bodyBold: true }))).result.current
+      .articleStyle;
+
+    expect(off.fontWeight).toBeUndefined();
+    expect(on.fontWeight).toBe("bold");
   });
 
   it("builds the column grid only for the paged layouts, with a measured page box", () => {
