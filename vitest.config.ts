@@ -20,5 +20,23 @@ export default defineConfig({
     css: false,
     include: ["src/**/*.test.{ts,tsx}"],
     restoreMocks: true,
+    coverage: {
+      // O5: make the blind spots visible. No thresholds on purpose — a hard
+      // limit would reward writing tests for the number's sake, and the
+      // report's job is to show which modules changed without one.
+      provider: "v8",
+      // text-summary is the compact table every run prints; json-summary is
+      // what the CI step reads to build the pull-request summary.
+      reporter: ["text-summary", "json-summary"],
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        // The vendored foliate fork is someone else's code, and the setup
+        // file is scaffolding: neither says anything about this app's tests.
+        "src/vendor/**",
+        "src/test/**",
+        "src/**/*.test.{ts,tsx}",
+        "src/**/*.d.ts",
+      ],
+    },
   },
 });

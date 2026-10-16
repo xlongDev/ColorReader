@@ -25,6 +25,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # CI has no proxy injecting NODE_OPTIONS, so plain verify works here.
       - run: pnpm verify
+      # `pnpm verify` runs the suite with `--coverage` (O5), which leaves
+      # `coverage/coverage-summary.json` behind. The table lands on the pull
+      # request itself — the whole point is that "which modules changed
+      # without tests" is visible on every review, not in someone's memory.
+      # No thresholds anywhere: the report only shows.
+      - name: Report test coverage
+        run: node scripts/coverage-report.mjs >> "$GITHUB_STEP_SUMMARY"
       # A CJK font, because the runner has none: `playwright install --with-deps`
       # brings Latin faces and nothing else, so every Chinese string here is laid
       # out in whatever fallback the image happens to carry. That is not only a
