@@ -1,7 +1,7 @@
 /**
  * 金句卡片 — the share card, in the browser.
  *
- * Three claims about the card are structural, and none of them is visible to
+ * Five claims about the card are structural, and none of them is visible to
  * a unit test, which is why it has a spec of its own:
  *
  * 1. It draws at **its own pixel size** (1080x1440) whatever the preview
@@ -10,6 +10,11 @@
  *    wordmark and the QR plate. A blank paper is the failure this catches.
  * 3. The **QR plate stays white** on every surface — including a night one,
  *    where the card's own ink is too pale to scan.
+ * 4. The paper is the **page's** surface, day or night. A dark appearance
+ *    must not be handed the day surface's paper: that is the bug a reader
+ *    reported — every card one colour, whatever surface was picked — and it
+ *    lived in the dialog resolving the surface by hand instead of asking the
+ *    same hook the reading page asks.
  *
  * The browser has no save panel, so 保存图片 is a download: the file is the
  * artifact the desktop's `card.save` would have written, and its PNG header
@@ -19,14 +24,10 @@
  * `lib/demo.ts`), so the drawer opens with something to share.
  */
 import { readFileSync } from "node:fs";
+import { expect, test, type Page } from "@playwright/test";
 
-import { expect, test } from "@playwright/test";
-
-test("金句卡片画在自己的纸上，保存成 PNG", async ({ page }) => {
-  test.setTimeout(120_000);
-  await page.setViewportSize({ width: 1280, height: 820 });
-  await page.goto("/?demo=1");
-
+/** Open the sample book, its annotation drawer, and the first card. */
+async function openCard(page: Page): Promise<void> {
   await page.getByRole("button", { name: "我们为什么会生病" }).first().click();
   await expect(page.getByRole("button", { name: "阅读设置" }).first()).toBeVisible({
     timeout: 20_000,
@@ -37,9 +38,32 @@ test("金句卡片画在自己的纸上，保存成 PNG", async ({ page }) => {
   await expect(page.getByText("3 条标注")).toBeVisible({ timeout: 15_000 });
   await page.getByRole("button", { name: "分享这一句" }).first().click();
 
-  const canvas = page.getByLabel("金句卡片预览");
-  await expect(canvas).toBeVisible();
+  await expect(page.getByLabel("金句卡片预览")).toBeVisible();
   await expect(page.getByRole("button", { name: "保存图片" })).toBeEnabled({ timeout: 20_000 });
+}
+
+/** One pixel of the drawn card, as [r, g, b]. */
+async function pixel(page: Page, x: number, y: number): Promise<number[] | null> {
+  return page.evaluate(
+    (at: { x: number; y: number }) => {
+      const element = document.querySelector<HTMLCanvasElement>(
+        'canvas[aria-label="金句卡片预览"]',
+      );
+      const context = element?.getContext("2d");
+      if (!element || !context) return null;
+      const { data } = context.getImageData(at.x, at.y, 1, 1);
+      return [data[0]!, data[1]!, data[2]!];
+    },
+    { x, y },
+  );
+}
+
+test("金句卡片画在自己的纸上，保存成 PNG", async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/?demo=1");
+
+  await openCard(page);
 
   // The card's own pixels: the size, and a canvas that actually drew.
   const drawn = await page.evaluate(() => {
@@ -80,4 +104,21 @@ test("金句卡片画在自己的纸上，保存成 PNG", async ({ page }) => {
   const bytes = readFileSync((await file.path())!);
   expect(bytes.length).toBeGreaterThan(1000);
   expect([...bytes.subarray(0, 4)]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+});
+
+test("夜间的纸也是夜间的：卡片跟着书页配色走", async ({ page }) => {
+  test.setTimeout(120_000);
+  // The page palette follows the app theme unless it is pinned, and a dark
+  // appearance is exactly what put the bug in front of a reader.
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.goto("/?demo=1");
+
+  await openCard(page);
+
+  // Empty paper, right of the wordmark and left of the plate.
+  const paper = await pixel(page, 540, 1300);
+  expect(paper).not.toBeNull();
+  // The night surface's own paper (#15181d), not the day surface's (#fbfbfd).
+  expect(Math.max(...paper!)).toBeLessThan(60);
 });

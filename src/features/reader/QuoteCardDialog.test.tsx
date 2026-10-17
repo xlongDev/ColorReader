@@ -36,7 +36,8 @@ vi.mock("@/lib/local/save", () => ({ downloadBytes }));
 // The card is drawn on the reader's own book; there is no library in a test,
 // so the hook answers with one directly. The dialog is its only consumer in
 // this file's graph, so the whole module is replaced rather than spread.
-vi.mock("@/hooks/useReader", () => ({ useBook: () => ({ data: BOOK }) }));
+const { bookRef } = vi.hoisted(() => ({ bookRef: { current: null as BookSummary | null } }));
+vi.mock("@/hooks/useReader", () => ({ useBook: () => ({ data: bookRef.current }) }));
 
 const BOOK: BookSummary = {
   id: "book-1",
@@ -72,6 +73,21 @@ const ANNOTATION: Annotation = {
   createdAt: 0,
 };
 
+/** Every paint call, with the style it painted with.
+ *
+ *  jsdom has no 2d context; the renderer only needs its calls to land. The
+ *  widths mirror the pure-layout test's map (CJK 10, Latin 6, space 3) so the
+ *  same quote fits the same zone here as it does there — and the styles are
+ *  kept because the paper colour *is* the claim this file makes about the
+ *  surface, and `fillStyle` is set once and read by everything after it. */
+interface Paint {
+  op: "fillRect" | "fillText" | "fill" | "stroke" | "drawImage";
+  style: string;
+  alpha: number;
+  args: unknown[];
+}
+const paints: Paint[] = [];
+
 /** jsdom has no 2d context; the renderer only needs its calls to land. The
  *  widths mirror the pure-layout test's map (CJK 10, Latin 6, space 3) so the
  *  same quote fits the same zone here as it does there. */
@@ -82,18 +98,39 @@ const measure = (text: string) => {
   return { width } as TextMetrics;
 };
 function fakeContext(): CanvasRenderingContext2D {
-  const record: Record<string, unknown> = {
+  const raw: Record<string, unknown> = {
     measureText: measure,
+    fillStyle: "#000000",
+    strokeStyle: "#000000",
+    globalAlpha: 1,
+    font: "",
+    lineWidth: 1,
+    textAlign: "",
+    textBaseline: "",
     fillRect: vi.fn(),
     fillText: vi.fn(),
+    stroke: vi.fn(),
     beginPath: vi.fn(),
     moveTo: vi.fn(),
     arcTo: vi.fn(),
     closePath: vi.fn(),
     fill: vi.fn(),
-    stroke: vi.fn(),
+    save: vi.fn(),
+    restore: vi.fn(),
+    clip: vi.fn(),
+    drawImage: vi.fn(),
   };
-  return record as unknown as CanvasRenderingContext2D;
+  for (const op of ["fillRect", "fillText", "fill", "stroke", "drawImage"] as const) {
+    (raw[op] as ReturnType<typeof vi.fn>).mockImplementation((...args: unknown[]) => {
+      paints.push({
+        op,
+        style: String(raw.fillStyle),
+        alpha: Number(raw.globalAlpha),
+        args,
+      });
+    });
+  }
+  return raw as unknown as CanvasRenderingContext2D;
 }
 
 /** A PNG's magic bytes — the canvas stub hands back bytes, the save command
@@ -121,13 +158,34 @@ const saveButton = async () => {
   return button;
 };
 
+/** The one paint that covers the whole canvas: the paper. */
+const paperFill = () =>
+  paints.find(
+    (paint) =>
+      paint.op === "fillRect" &&
+      paint.args[0] === 0 &&
+      paint.args[1] === 0 &&
+      paint.args[2] === 1080 &&
+      paint.args[3] === 1440,
+  );
+
 beforeEach(() => {
+  paints.length = 0;
   save.mockReset();
   cardSave.mockReset();
   downloadBytes.mockReset();
   runtime.desktop = true;
+  bookRef.current = { ...BOOK, coverUrl: null };
   // The card is the reader's own paper; the store's defaults are that paper.
-  useReaderSettings.setState({ surface: "standard", customSurface: null, fontFamily: "book" });
+  // `pageTheme: "day"` pins the *day* branch so the day cases below are not
+  // at the mercy of the app theme jsdom resolves to.
+  useReaderSettings.setState({
+    surface: "standard",
+    nightSurface: "night",
+    pageTheme: "day",
+    customSurface: null,
+    fontFamily: "book",
+  });
 });
 
 describe("QuoteCardDialog", () => {
@@ -139,6 +197,20 @@ describe("QuoteCardDialog", () => {
     // the 300px the preview shows it at.
     expect(canvas.width).toBe(1080);
     expect(canvas.height).toBe(1440);
+    // And on the day surface the store names.
+    expect(paperFill()?.style).toBe("#fbfbfd");
+  });
+
+  it("paints the night surface's paper on a night page", async () => {
+    // The bug this pins: the dialog once resolved the surface itself, reading
+    // the day setting unconditionally — so a night page shared day paper no
+    // matter which surface was picked, and the reader saw one colour forever.
+    // Sepia on the day side, pine on the night side: only one may appear.
+    useReaderSettings.setState({ surface: "sepia", nightSurface: "pine", pageTheme: "night" });
+    setup();
+    await saveButton();
+
+    expect(paperFill()?.style).toBe("#1b231e");
   });
 
   it("writes the bytes through the save command on the desktop", async () => {

@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { GlassButton } from "@/components/glass/button";
 import { GlassDialog } from "@/components/glass/overlay";
 import { useSavePath } from "@/hooks/useSavePath";
+import { useReadingSurface } from "@/hooks/useReadingSurface";
 import { useBook } from "@/hooks/useReader";
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { downloadBytes } from "@/lib/local/save";
@@ -11,7 +12,7 @@ import { useReaderSettings } from "@/stores/reader";
 import type { Annotation } from "@/types/ipc";
 
 import { annotationLink, renderQuoteCard } from "./quoteCard";
-import { resolveFont, type ReadingSurface, resolveSurface } from "./theme";
+import { resolveFont, type ReadingSurface } from "./theme";
 
 /**
  * The card, seen before it is kept.
@@ -25,7 +26,11 @@ import { resolveFont, type ReadingSurface, resolveSurface } from "./theme";
  * The paper and the font are the reader's *current* ones, which is the whole
  * point of the card: what they share is a page from the book as they are
  * reading it. A reader who switches to 护眼 gets warm cards; one who reads at
- * night gets dark ones.
+ * night gets dark ones. The surface comes from `useReadingSurface` — the same
+ * resolution the reading page itself uses, because a second one written out by
+ * hand is a second answer, and this file shipped exactly that bug once: it
+ * read the day surface unconditionally, so every card drawn on a night page
+ * wore the day paper no matter which surface was picked.
  */
 
 type Face = "loading" | "ready" | "too-long";
@@ -61,8 +66,7 @@ export function QuoteCardDialog({
 }) {
   const bookId = annotation?.bookId ?? null;
   const book = useBook(bookId);
-  const surfaceKey = useReaderSettings((state) => state.surface);
-  const customSurface = useReaderSettings((state) => state.customSurface);
+  const surface = useReadingSurface();
   const fontKey = useReaderSettings((state) => state.fontFamily);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // The canvas lives inside a Radix portal, which mounts its children one
@@ -81,7 +85,6 @@ export function QuoteCardDialog({
     if (!open || !annotation || !book.data || !canvasReady) return;
     const canvas = canvasRef.current;
     if (!canvas) return;
-    const surface = resolveSurface(surfaceKey, customSurface);
     let alive = true;
     setFace("loading");
     void renderQuoteCard(canvas, {
@@ -101,7 +104,7 @@ export function QuoteCardDialog({
     return () => {
       alive = false;
     };
-  }, [open, annotation, book.data, surfaceKey, customSurface, fontKey, canvasReady]);
+  }, [open, annotation, book.data, surface, fontKey, canvasReady]);
 
   const save = async () => {
     const canvas = canvasRef.current;
