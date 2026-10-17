@@ -15,6 +15,12 @@
  *    reported — every card one colour, whatever surface was picked — and it
  *    lived in the dialog resolving the surface by hand instead of asking the
  *    same hook the reading page asks.
+ * 5. The book's **cover** rides along, and the crop reaches the whole image.
+ *    The demo cover is a blue-to-pink diagonal gradient, so the red channel
+ *    has to climb from the box's top-left to its bottom-right. A crop that
+ *    samples the wrong region — which is what a nine-argument drawImage
+ *    straight off an SVG does on a canvas this size, in Chromium — paints
+ *    the box in one flat colour, and this pair of samples catches it.
  *
  * The browser has no save panel, so 保存图片 is a download: the file is the
  * artifact the desktop's `card.save` would have written, and its PNG header
@@ -95,6 +101,14 @@ test("金句卡片画在自己的纸上，保存成 PNG", async ({ page }) => {
   expect(drawn!.plate[0]).toBeGreaterThan(240);
   expect(drawn!.plate[1]).toBeGreaterThan(240);
   expect(drawn!.plate[2]).toBeGreaterThan(240);
+
+  // The cover, measured at both ends of its box: the demo cover's gradient
+  // runs blue to pink, so the red channel climbs a long way across it.
+  const coverTopLeft = await pixel(page, 100, 100);
+  const coverBottomRight = await pixel(page, 250, 318);
+  expect(coverTopLeft).not.toBeNull();
+  expect(coverBottomRight).not.toBeNull();
+  expect(coverBottomRight![0]! - coverTopLeft![0]!).toBeGreaterThan(60);
 
   // No save panel in a browser: the card lands as a download.
   const download = page.waitForEvent("download", { timeout: 30_000 });

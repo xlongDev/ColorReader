@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   annotationLink,
   canvasFont,
+  coverCrop,
   ellipsize,
   fitQuote,
   progressLine,
@@ -131,5 +132,46 @@ describe("progressLine", () => {
     // A shelf card with no progress has no percentage to read; inventing one
     // ("0%") would say something the app does not know.
     expect(progressLine(null, 0)).toBe("第 1 章");
+  });
+});
+
+describe("coverCrop", () => {
+  // The card's own box, and the ratio every case below is measured against.
+  const box = { width: 168, height: 236 };
+
+  it("passes a cover already at the box's ratio through untouched", () => {
+    // 420x590 is 168:236 exactly — nothing to crop, nothing to centre.
+    expect(coverCrop({ width: 420, height: 590 }, box)).toEqual({
+      sx: 0,
+      sy: 0,
+      sw: 420,
+      sh: 590,
+    });
+  });
+
+  it("crops the top and bottom of a taller cover", () => {
+    // 600x900 is 2:3, narrower than the box: the height is the binding side
+    // and the cover loses an equal band off both ends.
+    const crop = coverCrop({ width: 600, height: 900 }, box);
+    expect(crop.sw).toBe(600);
+    expect(crop.sh).toBeCloseTo(600 / (168 / 236));
+    expect(crop.sx).toBe(0);
+    expect(crop.sy).toBeCloseTo((900 - 600 / (168 / 236)) / 2);
+  });
+
+  it("crops the sides of a wider cover", () => {
+    const crop = coverCrop({ width: 900, height: 600 }, box);
+    expect(crop.sh).toBe(600);
+    expect(crop.sw).toBeCloseTo(600 * (168 / 236));
+    expect(crop.sy).toBe(0);
+    expect(crop.sx).toBeCloseTo((900 - 600 * (168 / 236)) / 2);
+  });
+
+  it("crops both sides of a square cover", () => {
+    // Square is wider than the box, so it loses the same two side bands.
+    const crop = coverCrop({ width: 800, height: 800 }, box);
+    expect(crop.sh).toBe(800);
+    expect(crop.sw).toBeCloseTo(800 * (168 / 236));
+    expect(crop.sx).toBeCloseTo((800 - 800 * (168 / 236)) / 2);
   });
 });

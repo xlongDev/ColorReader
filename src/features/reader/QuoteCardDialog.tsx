@@ -23,14 +23,14 @@ import { resolveFont, type ReadingSurface } from "./theme";
  * on open — not on mount of the row — because the canvas is one element
  * shared by whichever highlight was last pressed.
  *
- * The paper and the font are the reader's *current* ones, which is the whole
- * point of the card: what they share is a page from the book as they are
- * reading it. A reader who switches to 护眼 gets warm cards; one who reads at
- * night gets dark ones. The surface comes from `useReadingSurface` — the same
- * resolution the reading page itself uses, because a second one written out by
- * hand is a second answer, and this file shipped exactly that bug once: it
- * read the day surface unconditionally, so every card drawn on a night page
- * wore the day paper no matter which surface was picked.
+ * The paper, the font and the cover are the reader's *current* ones, which is
+ * the whole point of the card: what they share is a page from the book as
+ * they are reading it. A reader who switches to 护眼 gets warm cards; one who
+ * reads at night gets dark ones. The surface comes from `useReadingSurface` —
+ * the same resolution the reading page itself uses, because a second one
+ * written out by hand is a second answer, and this file shipped exactly that
+ * bug once: it read the day surface unconditionally, so every card drawn on a
+ * night page wore the day paper no matter which surface was picked.
  */
 
 type Face = "loading" | "ready" | "too-long";
@@ -68,6 +68,19 @@ export function QuoteCardDialog({
   const book = useBook(bookId);
   const surface = useReadingSurface();
   const fontKey = useReaderSettings((state) => state.fontFamily);
+  // The cover the library minted for this session, decoded through an <img> —
+  // the only thing that hands the renderer a bitmap, and the same element the
+  // reader's own header is already showing. It is stored *with the URL it came
+  // from* and read back through that URL, so a book with no cover — or a
+  // different one — cannot inherit the previous book's picture while its own
+  // is still loading. It rides along visually hidden: the preview is the
+  // canvas, not this.
+  const coverUrl = book.data?.coverUrl ?? null;
+  const [loadedCover, setLoadedCover] = useState<{
+    url: string;
+    img: HTMLImageElement;
+  } | null>(null);
+  const cover = loadedCover?.url === coverUrl ? loadedCover.img : null;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   // The canvas lives inside a Radix portal, which mounts its children one
   // commit late (a `mounted` flag set in a layout effect). An effect that
@@ -98,13 +111,14 @@ export function QuoteCardDialog({
       foreground: surface.fg,
       font: resolveFont(fontKey),
       link: annotationLink(book.data.id, annotation.id),
+      cover,
     }).then((drawn) => {
       if (alive) setFace(drawn ? "ready" : "too-long");
     });
     return () => {
       alive = false;
     };
-  }, [open, annotation, book.data, surface, fontKey, canvasReady]);
+  }, [open, annotation, book.data, surface, fontKey, cover, canvasReady]);
 
   const save = async () => {
     const canvas = canvasRef.current;
@@ -156,6 +170,16 @@ export function QuoteCardDialog({
           aria-label="金句卡片预览"
         />
       </div>
+      {coverUrl && (
+        <img
+          src={coverUrl}
+          alt=""
+          aria-hidden="true"
+          className="sr-only"
+          onLoad={(event) => setLoadedCover({ url: coverUrl, img: event.currentTarget })}
+          onError={() => setLoadedCover(null)}
+        />
+      )}
       {face === "loading" && <p className="text-text-3 mt-3 text-center text-xs">正在绘制…</p>}
       {face === "too-long" && (
         <p className="text-danger mt-3 text-center text-xs leading-relaxed">

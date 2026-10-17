@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { QuoteCardDialog } from "./QuoteCardDialog";
@@ -35,7 +35,8 @@ vi.mock("@/lib/local/save", () => ({ downloadBytes }));
 
 // The card is drawn on the reader's own book; there is no library in a test,
 // so the hook answers with one directly. The dialog is its only consumer in
-// this file's graph, so the whole module is replaced rather than spread.
+// this file's graph, so the whole module is replaced rather than spread — and
+// through a ref, because the cover case needs a book that has one.
 const { bookRef } = vi.hoisted(() => ({ bookRef: { current: null as BookSummary | null } }));
 vi.mock("@/hooks/useReader", () => ({ useBook: () => ({ data: bookRef.current }) }));
 
@@ -211,6 +212,58 @@ describe("QuoteCardDialog", () => {
     await saveButton();
 
     expect(paperFill()?.style).toBe("#1b231e");
+  });
+
+  it("keeps the coverless card's single metadata line", async () => {
+    // A book with no cover draws exactly the card it drew before the cover
+    // existed: one muted line at the top-left, and nothing else up there.
+    setup();
+    await saveButton();
+
+    const meta = paints.find(
+      (paint) => paint.op === "fillText" && paint.args[0] === "三体 · 刘慈欣",
+    );
+    expect(meta).toBeDefined();
+    expect(meta!.args[1]).toBe(88);
+    expect(meta!.args[2]).toBe(110);
+    expect(paints.some((paint) => paint.op === "drawImage")).toBe(false);
+  });
+
+  it("draws the book's cover, centre-cropped into its box", async () => {
+    bookRef.current = { ...BOOK, coverUrl: "blob:cover-1" };
+    setup();
+    // The dialog is portalled, so the cover element lives on the body.
+    const img = document.querySelector("img");
+    expect(img).not.toBeNull();
+    // jsdom decodes nothing: give the element the size the renderer asks for,
+    // then let it "load".
+    Object.defineProperty(img, "naturalWidth", { value: 600, configurable: true });
+    Object.defineProperty(img, "naturalHeight", { value: 900, configurable: true });
+    fireEvent.load(img!);
+
+    // Two draws: the composite into the offscreen bitmap, then the crop onto
+    // the card. The second carries the crop — and the first has to exist,
+    // because a nine-argument draw straight off an SVG mis-samples on a
+    // canvas this size (Chromium measured it: the crop selected the image's
+    // top-left corner and the whole box came out one flat colour).
+    await waitFor(() =>
+      expect(
+        paints.filter((paint) => paint.op === "drawImage" && paint.args.length === 9),
+      ).toHaveLength(1),
+    );
+    expect(
+      paints.filter((paint) => paint.op === "drawImage" && paint.args.length === 3),
+    ).toHaveLength(1);
+    const [, sx, sy, sw, sh, dx, dy, dw, dh] = paints.find(
+      (p) => p.op === "drawImage" && p.args.length === 9,
+    )!.args;
+    // Into the box at the margin, and cropped the way a 2:3 cover is cropped:
+    // full width, an equal band off the top and bottom.
+    expect([dx, dy, dw, dh]).toEqual([88, 88, 168, 236]);
+    expect(sw).toBe(600);
+    expect(sh).toBeCloseTo(600 / (168 / 236));
+    expect(sx).toBe(0);
+    expect(sy).toBeCloseTo((900 - 600 / (168 / 236)) / 2);
   });
 
   it("writes the bytes through the save command on the desktop", async () => {

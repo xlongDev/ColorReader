@@ -30,6 +30,11 @@
  *   be: highlights are short, and the failure mode of the greedy pass (a
  *   slightly early break) is invisible next to the failure mode of a
  *   misplaced kinsoku rule (a line that starts with punctuation).
+ * The cover, when the book has one, turns the top band into a title page: the
+ * thumbnail left, the book's name beside it, the quote zone dropping below
+ * them. It is contained — a rounded box with one hairline, never a full-bleed
+ * backdrop — because the paper is still the reader's and the quote is still
+ * the point. A book with no cover draws exactly the card it drew before.
  */
 
 import QRCode from "qrcode";
@@ -53,6 +58,12 @@ export interface QuoteCardInput {
   font: string;
   /** The deep link the QR carries. */
   link: string;
+  /**
+   * The book's cover, decoded. `null` — or an `<img>` that never finished
+   * loading — draws the card without one; the caller does not have to wait
+   * for the bytes to let the reader see their page.
+   */
+  cover: HTMLImageElement | null;
 }
 
 /** The slice of a 2D context the layout maths needs — small enough to fake. */
@@ -66,12 +77,26 @@ const CARD_H = 1440;
 /** One generous margin; the card is mostly air. */
 const MARGIN = 88;
 
-/** Where the quote may live, and how much of it. */
+/** The cover thumbnail, top-left, when the book has one. */
+const COVER_W = 168;
+const COVER_H = 236;
+const COVER_R = 14;
+/** Cover → the book's name beside it. */
+const COVER_GAP = 40;
+
+/** Where the quote may live. The bottom never moves — progress, wordmark and
+ *  plate keep the rhythm they have always had — and the top drops below the
+ *  cover band when the card carries one. */
+const QUOTE_ZONE_BOTTOM = 996;
 const QUOTE_ZONE_TOP = 296;
-const QUOTE_ZONE_H = 700;
+const QUOTE_ZONE_TOP_WITH_COVER = 380;
 /** Stepped down until the wrapped block fits; 30px is the floor. */
 const QUOTE_SIZES = [76, 64, 54, 46, 40, 36, 32, 30] as const;
 const LINE_HEIGHT = 1.55;
+
+/** The book's name, set beside the cover rather than above it. */
+const TITLE_SIZE = 36;
+const AUTHORS_SIZE = 26;
 
 /** The ink a highlight with no colour of its own had before colours existed. */
 const LEGACY_INK = "#ffd12e";
@@ -199,6 +224,26 @@ export function progressLine(progress: number | null, chapterIdx: number): strin
   return progress === null ? chapter : `读到 ${Math.round(progress * 100)}% · ${chapter}`;
 }
 
+/**
+ * The source rectangle that centre-crops `natural` into `box`'s aspect.
+ *
+ * The canvas spelling of `object-fit: cover`, which is how every cover in the
+ * app is already shown — a cover is drawn at whatever ratio its publisher
+ * chose, and the card's box is fixed. Wider than the box loses the sides,
+ * taller loses the top and bottom, square loses a little of both; a cover
+ * already at the box's ratio passes through untouched.
+ */
+export function coverCrop(
+  natural: { width: number; height: number },
+  box: { width: number; height: number },
+): { sx: number; sy: number; sw: number; sh: number } {
+  const boxRatio = box.width / box.height;
+  const wider = natural.width / natural.height > boxRatio;
+  const sw = wider ? natural.height * boxRatio : natural.width;
+  const sh = wider ? natural.height : natural.width / boxRatio;
+  return { sx: (natural.width - sw) / 2, sy: (natural.height - sh) / 2, sw, sh };
+}
+
 /** A rounded path without `roundRect` — the app ships on WKWebView versions
  *  older than Safari 16, and one helper keeps every corner the same. */
 function roundedPath(
@@ -243,25 +288,57 @@ export async function renderQuoteCard(
   };
 
   const quoteWidth = CARD_W - 2 * MARGIN;
-  const fit = fitQuote(withFont, input.quote, quoteWidth, QUOTE_ZONE_H);
+  // An `<img>` that never decoded has no size to crop, and the card it
+  // belongs to is the coverless one.
+  const cover =
+    input.cover && input.cover.naturalWidth > 0 && input.cover.naturalHeight > 0
+      ? input.cover
+      : null;
+  const zoneTop = cover ? QUOTE_ZONE_TOP_WITH_COVER : QUOTE_ZONE_TOP;
+  const zoneH = QUOTE_ZONE_BOTTOM - zoneTop;
+  const fit = fitQuote(withFont, input.quote, quoteWidth, zoneH);
   if (!fit) return false;
 
   // Paper.
   ctx.fillStyle = input.paper;
   ctx.fillRect(0, 0, CARD_W, CARD_H);
 
-  // Metadata: title · authors, top-left, held to one line.
-  const meta = ellipsize(withFont(30), [input.title, ...input.authors].join(" · "), quoteWidth);
+  // The top band. With a cover it is a title page — the thumbnail at the
+  // margin, the book's name beside it, the two set as one block against the
+  // cover's own height. Without one it is the single muted line the card has
+  // always opened with, unchanged.
   ctx.textAlign = "left";
   ctx.textBaseline = "alphabetic";
-  ctx.globalAlpha = 0.55;
-  ctx.fillStyle = input.foreground;
-  ctx.fillText(meta, MARGIN, MARGIN + 22);
+  if (cover) {
+    drawCover(ctx, cover, input.foreground);
+    const nameX = MARGIN + COVER_W + COVER_GAP;
+    const nameW = CARD_W - MARGIN - nameX;
+    const blockH = TITLE_SIZE * 1.25 + AUTHORS_SIZE * 1.25;
+    const top = MARGIN + (COVER_H - blockH) / 2;
+    const title = ellipsize(withFont(TITLE_SIZE), input.title, nameW);
+    const authors = input.authors.length
+      ? ellipsize(withFont(AUTHORS_SIZE), input.authors.join(" · "), nameW)
+      : "";
+    ctx.fillStyle = input.foreground;
+    ctx.font = `${TITLE_SIZE}px ${font}`;
+    ctx.globalAlpha = 0.9;
+    ctx.fillText(title, nameX, top + TITLE_SIZE * 0.8);
+    if (authors) {
+      ctx.font = `${AUTHORS_SIZE}px ${font}`;
+      ctx.globalAlpha = 0.55;
+      ctx.fillText(authors, nameX, top + TITLE_SIZE * 1.25 + AUTHORS_SIZE * 0.8);
+    }
+  } else {
+    const meta = ellipsize(withFont(30), [input.title, ...input.authors].join(" · "), quoteWidth);
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle = input.foreground;
+    ctx.fillText(meta, MARGIN, MARGIN + 22);
+  }
 
   // The quote, centred in its zone, with the marker behind it.
   const lineAdvance = fit.size * LINE_HEIGHT;
   const blockHeight = fit.lines.length * lineAdvance;
-  const firstBaseline = QUOTE_ZONE_TOP + (QUOTE_ZONE_H - blockHeight) / 2 + fit.size * 0.82;
+  const firstBaseline = zoneTop + (zoneH - blockHeight) / 2 + fit.size * 0.82;
   const ink = input.ink ?? LEGACY_INK;
 
   ctx.globalAlpha = WASH_ALPHA;
@@ -284,11 +361,7 @@ export async function renderQuoteCard(
   // Progress, below the zone, under the quote.
   ctx.font = `28px ${font}`;
   ctx.globalAlpha = 0.55;
-  ctx.fillText(
-    progressLine(input.progress, input.chapterIdx),
-    CARD_W / 2,
-    QUOTE_ZONE_TOP + QUOTE_ZONE_H + 56,
-  );
+  ctx.fillText(progressLine(input.progress, input.chapterIdx), CARD_W / 2, QUOTE_ZONE_BOTTOM + 56);
 
   // The wordmark, bottom-left, level with the plate's bottom edge.
   ctx.font = `26px ${font}`;
@@ -298,6 +371,43 @@ export async function renderQuoteCard(
 
   drawQr(ctx, input.link, CARD_W - MARGIN - QR_PLATE, CARD_H - MARGIN - QR_PLATE);
   return true;
+}
+
+/** The cover in its box: centre-cropped like every cover in the app, corners
+ *  rounded to match the plate, and one hairline so it reads as an object
+ *  lying on the paper rather than printed into it. */
+function drawCover(ctx: CanvasRenderingContext2D, cover: HTMLImageElement, fg: string): void {
+  // The intrinsic size, not `width`/`height` — those are the element's
+  // attributes and read 0 on an image the markup never sized.
+  const natural = { width: cover.naturalWidth, height: cover.naturalHeight };
+  const crop = coverCrop(natural, { width: COVER_W, height: COVER_H });
+
+  // An SVG cover is rasterised by the engine at draw time, and a
+  // nine-argument drawImage — the only form that crops — samples it wrongly
+  // on a canvas this size: Chromium measured the crop selecting the image's
+  // top-left corner instead of its centre, so the whole box came out one
+  // flat colour (the five-argument form, which cannot crop, was correct).
+  // Compositing the image once into a bitmap first turns the source into
+  // pixels the crop then addresses exactly, and costs one canvas the size
+  // of the cover. Raster covers did not need this; they get it anyway,
+  // because "is this an SVG" is not a question worth asking here.
+  const bitmap = document.createElement("canvas");
+  bitmap.width = natural.width;
+  bitmap.height = natural.height;
+  const source = bitmap.getContext("2d");
+  if (!source) return;
+  source.drawImage(cover, 0, 0);
+
+  roundedPath(ctx, MARGIN, MARGIN, COVER_W, COVER_H, COVER_R);
+  ctx.save();
+  ctx.clip();
+  ctx.drawImage(bitmap, crop.sx, crop.sy, crop.sw, crop.sh, MARGIN, MARGIN, COVER_W, COVER_H);
+  ctx.restore();
+  roundedPath(ctx, MARGIN, MARGIN, COVER_W, COVER_H, COVER_R);
+  ctx.strokeStyle = fg;
+  ctx.globalAlpha = 0.18;
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
 }
 
 /** The QR on its white plate: modules in a fixed near-black, quiet zone
