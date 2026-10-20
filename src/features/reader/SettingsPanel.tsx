@@ -30,7 +30,7 @@ import {
   pageIsNight,
   PARA_GAPS,
   RULER_COLORS,
-  useReaderSettings,
+  useBookSettings,
 } from "@/stores/reader";
 import { useFonts } from "@/hooks/useFonts";
 import { useSettings } from "@/stores/settings";
@@ -60,15 +60,18 @@ const RULER_CUSTOM_FALLBACK = "#7cd92c";
  * store, so nothing here needs an "apply" step.
  */
 export function SettingsPanel({
+  bookId = null,
   verticalAvailable = false,
   zhAvailable = false,
   boldAvailable = false,
 }: {
+  /** The book this panel belongs to: its typography and paper are its own. */
+  bookId?: string | null;
   verticalAvailable?: boolean;
   zhAvailable?: boolean;
   boldAvailable?: boolean;
 }) {
-  const settings = useReaderSettings();
+  const settings = useBookSettings(bookId);
   const { update } = settings;
   const fonts = useFonts().data ?? [];
   // The stacks every machine already has. A catalogue face is adopted into the

@@ -147,6 +147,7 @@ export function ReaderPanels({
             )}
             {panel === "settings" && (
               <SettingsPanel
+                bookId={bookId}
                 verticalAvailable={verticalAvailable}
                 zhAvailable={zhAvailable}
                 boldAvailable={boldAvailable}

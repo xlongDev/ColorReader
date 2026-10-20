@@ -49,7 +49,14 @@ export function useDeleteFont() {
   return useMutation({
     mutationFn: (id: string) => ipc.fontDelete(id),
     onSuccess: (_deleted, id) => {
-      if (selected === customFontKey(id)) update({ fontFamily: "system" });
+      const key = customFontKey(id);
+      // A book may have picked it too: leaving those pointing at a face that
+      // no longer exists is the silent fallback this hook exists to avoid.
+      const { byBook, setBook } = useReaderSettings.getState();
+      for (const [bookId, own] of Object.entries(byBook)) {
+        if (own.fontFamily === key) setBook(bookId, { fontFamily: "system" });
+      }
+      if (selected === key) update({ fontFamily: "system" });
       void queryClient.invalidateQueries({ queryKey: ["fonts"] });
     },
   });

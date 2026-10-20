@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { PictureInPicture } from "@phosphor-icons/react";
 
-import { useReadingSurface } from "@/hooks/useReadingSurface";
+import { useActiveReadingSurface } from "@/hooks/useReadingSurface";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import { cn } from "@/lib/cn";
@@ -75,7 +75,7 @@ export function TtsPlayer({
   const { tts, sleep: sleepTimer } = useTtsHost();
   const { voices, edgeError } = useSpeechVoices();
   const session = useSpeechSession();
-  const surface = useReadingSurface();
+  const surface = useActiveReadingSurface();
   const minimal = useReaderSettings((state) => state.speechPlayerStyle === "minimal");
   const rate = useReaderSettings((state) => state.speechRate);
   const storedVoice = useReaderSettings((state) => state.speechVoiceURI);

@@ -20,7 +20,7 @@ import { useCommandPalette } from "@/stores/command-palette";
 import { useSettings } from "@/stores/settings";
 import { useReaderSettings } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
-import { useReadingSurface } from "@/hooks/useReadingSurface";
+import { useActiveReadingSurface } from "@/hooks/useReadingSurface";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import { useDeepLink } from "@/hooks/useDeepLink";
 import { useFonts } from "@/hooks/useFonts";
@@ -145,7 +145,7 @@ export function AppShell() {
   const appTheme = useResolvedTheme();
   // The paper the reader is painting, which the shell re-roots its own glass
   // tokens from: one resolution for the whole app — see `useReadingSurface`.
-  const surface = useReadingSurface();
+  const surface = useActiveReadingSurface();
   const shellStyle = reading
     ? ({ ...readerGlassVars(surface), "--app-bg": surface.tint } as CSSProperties)
     : undefined;

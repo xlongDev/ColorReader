@@ -8,7 +8,7 @@ import { useBook } from "@/hooks/useReader";
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { downloadBytes } from "@/lib/local/save";
 import { filename } from "@/lib/filename";
-import { useReaderSettings } from "@/stores/reader";
+import { useBookSettings } from "@/stores/reader";
 import type { Annotation } from "@/types/ipc";
 
 import { annotationLink, renderQuoteCard } from "./quoteCard";
@@ -66,8 +66,8 @@ export function QuoteCardDialog({
 }) {
   const bookId = annotation?.bookId ?? null;
   const book = useBook(bookId);
-  const surface = useReadingSurface();
-  const fontKey = useReaderSettings((state) => state.fontFamily);
+  const surface = useReadingSurface(bookId);
+  const fontKey = useBookSettings(bookId).fontFamily;
   // The cover the library minted for this session, decoded through an <img> —
   // the only thing that hands the renderer a bitmap, and the same element the
   // reader's own header is already showing. It is stored *with the URL it came

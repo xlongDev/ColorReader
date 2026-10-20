@@ -18,11 +18,18 @@ import { useResolvedTheme } from "./useTheme";
  * whether or not a page is on screen. What callers must *not* do is apply the
  * result away from the reader: this is the paper of a page that is not there.
  */
-export function useReadingSurface(): ReadingSurface {
-  const pageTheme = useReaderSettings((state) => state.pageTheme);
-  const nightSurface = useReaderSettings((state) => state.nightSurface);
-  const daySurface = useReaderSettings((state) => state.surface);
-  const customSurface = useReaderSettings((state) => state.customSurface);
+export function useReadingSurface(bookId?: string | null): ReadingSurface {
+  const own = useReaderSettings((state) => (bookId ? state.byBook[bookId] : undefined));
+  const globalPageTheme = useReaderSettings((state) => state.pageTheme);
+  const globalNightSurface = useReaderSettings((state) => state.nightSurface);
+  const globalDaySurface = useReaderSettings((state) => state.surface);
+  const globalCustomSurface = useReaderSettings((state) => state.customSurface);
+  // A book's own paper wins when it has one; `null` is a real choice (跟随),
+  // so it is tested for rather than coalesced away.
+  const pageTheme = own && "pageTheme" in own ? own.pageTheme! : globalPageTheme;
+  const nightSurface = own?.nightSurface ?? globalNightSurface;
+  const daySurface = own?.surface ?? globalDaySurface;
+  const customSurface = own && "customSurface" in own ? own.customSurface! : globalCustomSurface;
   const appTheme = useResolvedTheme();
   return useMemo(
     () =>
@@ -34,4 +41,15 @@ export function useReadingSurface(): ReadingSurface {
       ),
     [pageTheme, nightSurface, daySurface, customSurface, appTheme],
   );
+}
+
+/**
+ * The paper of the book on screen, for chrome that has no book of its own —
+ * the window's background and the read-aloud pill. Falls back to the app-wide
+ * resolution when no reader is publishing (the shelf, the settings page).
+ */
+export function useActiveReadingSurface(): ReadingSurface {
+  const published = useReaderSettings((state) => state.activeSurface);
+  const fallback = useReadingSurface();
+  return published ?? fallback;
 }

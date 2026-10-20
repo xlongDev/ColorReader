@@ -99,7 +99,7 @@ import { usePageCounter } from "@/hooks/usePageCounter";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
 import { useReaderPanels } from "@/hooks/useReaderPanels";
-import { LINE_HEIGHTS, PARA_GAPS, useReaderSettings } from "@/stores/reader";
+import { LINE_HEIGHTS, PARA_GAPS, useBookSettings, useReaderSettings } from "@/stores/reader";
 import { useSettings } from "@/stores/settings";
 import { sessionNow, useSpeechSession } from "@/stores/speech";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
@@ -256,7 +256,9 @@ export function ReaderView({
   // every render, and a per-render `setProgress` would drag `goTo` and the
   // position effect along, snapping the scroll back to the top on each frame.
   const { mutate: setProgress } = useSetProgress(bookId);
-  const settings = useReaderSettings();
+  // This book's own typography and paper, on top of the app-wide values — a
+  // 对照阅读 pane changes the book it is showing, not its neighbour.
+  const settings = useBookSettings(bookId);
   const {
     fontSize,
     setFontSize,
@@ -1689,7 +1691,16 @@ export function ReaderView({
   // night palette, and both stay user-changeable in the settings panel. Shared
   // with the shell's read-aloud chrome, which floats on this same paper — see
   // `useReadingSurface`.
-  const surface = useReadingSurface();
+  const surface = useReadingSurface(bookId);
+  // The window's chrome wears the paper of the book being read — paper is per
+  // book now, and the shell has no book of its own. Only the active pane
+  // publishes; the other one clears on its way out.
+  const setActiveSurface = useReaderSettings((state) => state.setActiveSurface);
+  useEffect(() => {
+    if (secondary) return;
+    setActiveSurface(surface);
+    return () => setActiveSurface(null);
+  }, [secondary, surface, setActiveSurface]);
   // Re-root the glass token set on the reading surface: the header, footer and
   // every glass control inside the reader tint themselves from the same ink
   // and paper colours, so a sepia page reads warm edge to edge instead of

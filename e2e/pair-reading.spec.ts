@@ -280,7 +280,7 @@ test("对照阅读 keeps a panel in the book that opened it, and the picker clos
  * of the window: a pair shows it in the book the reader is working in, and
  * switching books moves it.
  */
-test("对照阅读 shows the reading ruler only in the book being read", async ({ page }) => {
+test("对照阅读 keeps the reading ruler with the book that turned it on", async ({ page }) => {
   await page.setViewportSize(VIEWPORT);
   await page.goto("/?demo=1&epub=1");
   await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
@@ -298,12 +298,59 @@ test("对照阅读 shows the reading ruler only in the book being read", async (
   await expect(panes.nth(0).locator("[data-reading-ruler]")).toHaveCount(1);
   await expect(panes.nth(1).locator("[data-reading-ruler]")).toHaveCount(0);
 
-  // The other book takes the ruler when it takes the window.
+  // The ruler is this book's setting, not the window's: handing the window
+  // over does not hand the band over with it.
   await panes
     .nth(1)
     .locator("[data-reading-viewport]")
     .click({ position: { x: 24, y: 24 } });
   await expect(panes.nth(1)).toHaveAttribute("data-pair-active", "true");
+  await expect(panes.nth(0).locator("[data-reading-ruler]")).toHaveCount(0);
+  await expect(panes.nth(1).locator("[data-reading-ruler]")).toHaveCount(0);
+
+  // Its own switch turns it on there, and the other book stays without one.
+  await page.getByRole("button", { name: "开启阅读标尺" }).click();
   await expect(panes.nth(1).locator("[data-reading-ruler]")).toHaveCount(1);
   await expect(panes.nth(0).locator("[data-reading-ruler]")).toHaveCount(0);
+});
+
+/**
+ * Typography belongs to the book, not to the window.
+ *
+ * 对照阅读 puts two books side by side; enlarging one of them is a statement
+ * about that book, and the neighbour keeps the page it had.
+ */
+test("对照阅读 keeps typography per book", async ({ page }) => {
+  await page.setViewportSize(VIEWPORT);
+  await page.goto("/?demo=1&epub=1");
+  await expect(page.locator("[data-shelf-scroller]")).toBeVisible();
+  await page.locator(EPUB_COVER).click();
+  await expect(page.locator("[data-reader-title]")).toHaveText("页码样书");
+  await page.getByRole("button", { name: "对照阅读" }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: /金色梦乡/ })
+    .click();
+  await expect(page.locator("[data-pair-pane]")).toHaveCount(2);
+  await page.waitForTimeout(800);
+
+  const companion = page.locator("[data-pair-pane]").nth(1);
+  const size = () =>
+    companion
+      .locator("article")
+      .first()
+      .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
+
+  const before = await size();
+  // The left book owns the window: two steps up must leave the right one alone.
+  await page.getByRole("button", { name: "放大字号" }).click();
+  await page.getByRole("button", { name: "放大字号" }).click();
+  await page.waitForTimeout(300);
+  expect(await size()).toBe(before);
+
+  // Its own stepper still works once it has the window.
+  await companion.locator("[data-reading-viewport]").click({ position: { x: 24, y: 24 } });
+  await expect(companion).toHaveAttribute("data-pair-active", "true");
+  await page.getByRole("button", { name: "放大字号" }).click();
+  await expect.poll(size, { timeout: 4000 }).toBeGreaterThan(before);
 });

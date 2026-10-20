@@ -1,14 +1,52 @@
+import { useMemo } from "react";
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
 import type { PaceSample } from "@/features/reader/pace";
 import { pushPace } from "@/features/reader/pace";
 import { DEFAULT_WPM } from "@/features/reader/rsvp";
-import type { LayoutMode, PageTransition, WritingMode } from "@/features/reader/theme";
+import type {
+  LayoutMode,
+  PageTransition,
+  ReadingSurface,
+  WritingMode,
+} from "@/features/reader/theme";
 import type { SpeechGranularity, SpeechPlayerStyle } from "@/features/reader/speech";
 import type { TtsWashStyle } from "@/features/reader/ttsWash";
 import type { ZhConvertMode } from "@/features/reader/zhConvert";
 import type { AnnotationStyle } from "@/types/ipc";
+
+/**
+ * The settings a book may keep for itself: its page's typography and paper.
+ *
+ * 对照阅读 puts two books side by side, and a reader who enlarges one of them
+ * is talking about that book, not about the app. Everything *not* in this list
+ * — voices, speeds, the ruler's appearance, reading positions — stays one
+ * value for the whole app, because those are properties of the reader rather
+ * than of a page.
+ */
+export const BOOK_SETTINGS = [
+  "fontFamily",
+  "fontSize",
+  "lineHeightIdx",
+  "paraGapIdx",
+  "indent",
+  "marginX",
+  "marginY",
+  "bodyBold",
+  "layoutMode",
+  "zhConvert",
+  "readingRuler",
+  "pageTheme",
+  "surface",
+  "nightSurface",
+  "customSurface",
+] as const;
+
+export type BookSetting = (typeof BOOK_SETTINGS)[number];
+export type BookSettings = Partial<Pick<ReaderState, BookSetting>>;
+
+const BOOK_SET: ReadonlySet<string> = new Set(BOOK_SETTINGS);
 
 /** Reading typography and viewing preferences, persisted across sessions. */
 interface ReaderState {
@@ -221,6 +259,17 @@ interface ReaderState {
     >,
   ) => void;
   setReadingSpeed: (charsPerMinute: number) => void;
+  /** The values each book keeps for itself, keyed by book id. */
+  byBook: Record<string, BookSettings>;
+  /** Merges a patch into one book's own values. */
+  setBook: (bookId: string, patch: BookSettings) => void;
+  /**
+   * The paper the reader on screen is painting, published so the window's
+   * chrome can wear it. Paper is per book now, and the shell has no book of
+   * its own: it wears whichever one is being read.
+   */
+  activeSurface: ReadingSurface | null;
+  setActiveSurface: (surface: ReadingSurface | null) => void;
 }
 
 /** Inclusive bounds for the font size stepper. */
@@ -465,6 +514,8 @@ export const DEFAULT_READER_SETTINGS = {
   speechWashColors: [],
   speechPlayerStyle: "full",
   speechMiniPlayer: true,
+  byBook: {},
+  activeSurface: null,
 } satisfies Partial<ReaderState>;
 
 export const useReaderSettings = create<ReaderState>()(
@@ -478,6 +529,11 @@ export const useReaderSettings = create<ReaderState>()(
           state.pageTheme === null ? { pageTheme: appIsDark ? "night" : "day" } : {},
         ),
       update: (patch) => set(patch),
+      setActiveSurface: (surface) => set({ activeSurface: surface }),
+      setBook: (bookId, patch) =>
+        set((state) => ({
+          byBook: { ...state.byBook, [bookId]: { ...state.byBook[bookId], ...patch } },
+        })),
       setReadingSpeed: (charsPerMinute) =>
         set({
           readingSpeed: Math.min(
@@ -580,3 +636,47 @@ export const useReaderSettings = create<ReaderState>()(
     },
   ),
 );
+
+/**
+ * The reader settings as one book sees them: the app-wide values with that
+ * book's own on top, and an `update` that writes to the book.
+ *
+ * Only `BOOK_SETTINGS` keys are kept per book. A patch that also carries an
+ * app-wide value (a voice, a speed) writes that one to the shared store, so
+ * the settings panel keeps working without knowing which is which.
+ *
+ * `null` means "no book" — the ordinary reader before one is open, and the
+ * chrome outside the reader — and then this is just the shared store.
+ */
+export function useBookSettings(bookId: string | null | undefined): ReaderState {
+  const settings = useReaderSettings();
+  const setBook = useReaderSettings((state) => state.setBook);
+
+  return useMemo(() => {
+    const own = bookId ? settings.byBook[bookId] : undefined;
+    const merged = own ? { ...settings, ...own } : settings;
+
+    const write = (patch: Partial<ReaderState>) => {
+      if (!bookId) {
+        settings.update(patch);
+        return;
+      }
+      const mine: Record<string, unknown> = {};
+      const shared: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(patch)) {
+        if (BOOK_SET.has(key)) mine[key] = value;
+        else shared[key] = value;
+      }
+      if (Object.keys(mine).length > 0) setBook(bookId, mine as BookSettings);
+      if (Object.keys(shared).length > 0) settings.update(shared as Partial<ReaderState>);
+    };
+
+    return {
+      ...merged,
+      update: write,
+      // The stepper is a book's too: it is the same number `update` writes.
+      setFontSize: (size: number) =>
+        write({ fontSize: Math.min(Math.max(size, MIN_FONT_SIZE), MAX_FONT_SIZE) }),
+    };
+  }, [bookId, settings, setBook]);
+}
