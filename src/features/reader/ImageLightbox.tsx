@@ -12,6 +12,7 @@ import { motion, useReducedMotion } from "motion/react";
 import { ipc } from "@/lib/ipc";
 import { DURATION, SPRING } from "@/lib/motion";
 import { assetMime } from "@/features/reader/assets";
+import { activeReadingViewport } from "@/features/reader/readingViewport";
 import type { BookImage, ChapterMeta } from "@/types/ipc";
 
 /** Lightbox zoom bounds and wheel/button step. */
@@ -35,7 +36,7 @@ const useReadingViewportRect = () => {
     height: window.innerHeight,
   });
   useLayoutEffect(() => {
-    const el = document.querySelector("[data-reading-viewport]");
+    const el = activeReadingViewport();
     if (!el) return;
     const measure = () => {
       const box = el.getBoundingClientRect();

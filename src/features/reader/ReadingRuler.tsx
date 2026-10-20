@@ -467,7 +467,13 @@ export function ReadingRuler({
     const box = host.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) return 0;
     const source =
-      lines ?? (() => lineRects(document, document.querySelector("[data-reading-content]")));
+      lines ??
+      (() =>
+        // This reader's own scroller, found under its own viewport: a pair has
+        // two `[data-reading-content]` boxes and "the first in the document"
+        // is always the left book's — measuring that one leaves this pane with
+        // no lines and the band never appears.
+        lineRects(document, host.querySelector("[data-reading-content]")));
     const raw = (source() ?? []).map((rect): RulerRect => ({
       top: rect.top - box.top,
       bottom: rect.bottom - box.top,

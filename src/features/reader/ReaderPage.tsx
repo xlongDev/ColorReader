@@ -8,12 +8,11 @@ import {
   useState,
   type CSSProperties,
 } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
-import { BookOpen, CaretLeft, CaretRight } from "@phosphor-icons/react";
+import { createPortal } from "react-dom";
+import { useSearchParams } from "react-router-dom";
+import { CaretLeft, CaretRight } from "@phosphor-icons/react";
 import { AnimatePresence, useReducedMotion } from "motion/react";
 
-import { EmptyState } from "@/components/common/EmptyState";
-import { GlassButton } from "@/components/glass/button";
 import { OverlayPortal } from "@/components/glass/overlay";
 import { isFoliateFormat } from "@/features/library/format";
 import { useAssetUrl } from "@/features/reader/assets";
@@ -24,6 +23,7 @@ import {
 } from "@/features/reader/chapterText";
 import { useFoliateReading } from "@/features/reader/useFoliateReading";
 import { useZhConverter } from "@/features/reader/zhConvert";
+import type { ZhConvertMode } from "@/features/reader/zhConvert";
 import { useFoliateStyle } from "@/features/reader/useFoliateStyle";
 import { useReaderFullscreen } from "@/features/reader/useReaderFullscreen";
 import { FULLSCREEN_MARGIN_BONUS, useReaderLayout } from "@/features/reader/useReaderLayout";
@@ -33,7 +33,17 @@ import { useProseReading } from "@/features/reader/useProseReading";
 import { setTtsWashRule } from "@/features/reader/pdfTextSelection";
 import type { CurlTurn } from "@/features/reader/pdfCurl";
 import { ImageLightbox } from "@/features/reader/ImageLightbox";
-import { ReaderFooterControls, ReaderHeaderBar } from "@/features/reader/ReaderChrome";
+import {
+  ReaderFooterControls,
+  ReaderHeaderBar,
+  ReaderToolButtons,
+  type ReaderToolButtonsProps,
+} from "@/features/reader/ReaderChrome";
+import { HeaderRule } from "@/features/reader/ReaderHeader";
+import { PairPicker } from "@/features/reader/PairPicker";
+import { ReaderHost } from "@/features/reader/ReaderHost";
+import { SplitReader } from "@/features/reader/SplitReader";
+import { usePairSlots, type PairIdentity } from "@/features/reader/pairLayout";
 import { ReaderPanels } from "@/features/reader/ReaderPanels";
 import { ReaderChapterView } from "@/features/reader/ReaderChapterView";
 import { PullBookmark } from "@/features/reader/PullBookmark";
@@ -81,13 +91,7 @@ import { useElementHeight } from "@/hooks/useElementHeight";
 import { useReadingSurface } from "@/hooks/useReadingSurface";
 import { useFonts } from "@/hooks/useFonts";
 import { useGamepadPager } from "@/hooks/useGamepadPager";
-import {
-  useBook,
-  useBookImages,
-  useChapter,
-  useReaderToc,
-  useSetProgress,
-} from "@/hooks/useReader";
+import { useBookImages, useChapter, useSetProgress } from "@/hooks/useReader";
 import { useAutoScroll } from "@/hooks/useAutoScroll";
 import { useImageLightbox } from "@/hooks/useImageLightbox";
 import { useHitJumps } from "@/hooks/useHitJumps";
@@ -99,6 +103,7 @@ import { LINE_HEIGHTS, PARA_GAPS, useReaderSettings } from "@/stores/reader";
 import { useSettings } from "@/stores/settings";
 import { sessionNow, useSpeechSession } from "@/stores/speech";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
+import { partnerOf, usePairView } from "@/stores/pairView";
 import { useChrome } from "@/stores/chrome";
 import { cn } from "@/lib/cn";
 import { isEditableTarget } from "@/lib/commands";
@@ -191,14 +196,37 @@ interface ReaderViewProps {
   /** What the 返回 button says; where it goes is `onBack`'s business. */
   backLabel: string;
   onBack: () => void;
+  /**
+   * Whether this reader is one of a 对照阅读 pair, and whether it is the one
+   * the reader is working in. `null` (or absent) is the ordinary reader: the
+   * only one in the window, with the whole chrome and all window-level input.
+   *
+   * A pair has one bar above the books (rendered by `SplitReader`, naming
+   * both) and one bar below them, which the active pane paints into through a
+   * portal (`pairLayout`). What stays with each pane is what is *per book* —
+   * position, annotations, ruler, the panels' own state, and the verbs its
+   * chrome carries; what is *per window* — keyboard, gamepad, the voice
+   * session — follows the active pane, so two mounted readers never both
+   * answer one keypress (see the `secondary` gates below).
+   */
+  pair?: { active: boolean; onActivate?: () => void } | null;
+  /** Opens the companion-book picker. Owned by the route, which is where the
+   *  URL lives; the chrome only carries the button. */
+  onOpenPair?: () => void;
+  /** Reports which book this is and where it is open, for the pair's top bar
+   *  to name both books and give each its own steppers. Pair mode only. */
+  onIdentity?: (identity: PairIdentity) => void;
 }
 
 /**
  * The reader surface. Rendered only once the book, chapter table and a saved
  * position are all known, so the resume position is captured synchronously in
  * the initial state instead of being back-filled by an effect.
+ *
+ * Exported for `ReaderHost`, which is what a 对照阅读 pair mounts twice —
+ * see the cycle note there.
  */
-function ReaderView({
+export function ReaderView({
   bookId,
   title,
   coverUrl,
@@ -213,7 +241,17 @@ function ReaderView({
   initialAnnotation,
   backLabel,
   onBack,
+  pair = null,
+  onOpenPair,
+  onIdentity,
 }: ReaderViewProps) {
+  /**
+   * The companion pane of a pair: reading happens here, window-level control
+   * does not. Every gate below reads this one flag — chrome, keyboard,
+   * gamepad, the speech session — so the two readers mounted side by side
+   * divide the window between them instead of fighting over it.
+   */
+  const secondary = pair !== null && !pair.active;
   // Destructure `mutate`: the mutation result object gets a new identity on
   // every render, and a per-render `setProgress` would drag `goTo` and the
   // position effect along, snapping the scroll back to the top on each frame.
@@ -438,6 +476,20 @@ function ReaderView({
     setSearch,
     close: closePanel,
   } = useReaderPanels(initialQuery, clearPaintedMatches);
+  /**
+   * A panel belongs to the book being read. Handing the window to the other
+   * book closes this one's drawer: left open, it kept dimming a page nobody
+   * was working on, and the bar's buttons — which now drive the other book —
+   * could no longer close it. That leftover drawer is what read as "the panel
+   * opened in the wrong book".
+   *
+   * Watches `panel` as well as `secondary`: a panel opened in the same tick
+   * that handed the window away (a tool clicked as the other book's activation
+   * lands) would otherwise arrive *after* this effect had already run.
+   */
+  useEffect(() => {
+    if (secondary && panel !== "none") closePanel();
+  }, [secondary, panel, closePanel]);
   /**
    * Scrolls the reading flow by one measured distance, in the scrolled layout,
    * and reports how far it actually went.
@@ -902,6 +954,13 @@ function ReaderView({
   useEffect(() => {
     if (adopted.current) return;
     adopted.current = true;
+    // The companion pane neither adopts a session nor steals one: the
+    // session belongs to whichever book the reader is working in, and a
+    // `stop()` from here would end the voice mid-sentence in the other pane.
+    // ponytail: a pane that becomes active later does not adopt on the
+    // switch — starting the voice afresh is one keypress, and the reverse
+    // (re-adoption) has no safe trigger.
+    if (secondary) return;
     if (inherited.bookId !== null && !ours) {
       stop();
       return;
@@ -916,7 +975,7 @@ function ReaderView({
     // or a CBZ needs neither: its chapter *is* the page the voice is on.
     if (useFoliate) reveal();
     else if (!chapterIsPage) pendingSpeechPara.current = inherited.units[tts.unit]?.source ?? null;
-  }, [stop, inherited, ours, tts.unit, tts.status, useFoliate, chapterIsPage, reveal]);
+  }, [stop, inherited, ours, tts.unit, tts.status, useFoliate, chapterIsPage, reveal, secondary]);
 
   // Set when the voice rolls off the end of a chapter, consumed by the
   // position effect below once the next chapter has rendered.
@@ -1319,6 +1378,11 @@ function ReaderView({
   // only while it is on, so without it the key that just turned the band on
   // would keep turning pages until something else changed.
   useEffect(() => {
+    // The companion pane answers no window-level keys: in a pair the keyboard
+    // belongs to the pane the reader is working in, which is what the click
+    // that activated it chose. Two mounted readers both bound would turn two
+    // pages per keypress.
+    if (secondary) return;
     const ctx: ReaderKeyContext = {
       lightboxOpen: lightboxPath !== null,
       rulerOn: settings.readingRuler,
@@ -1342,7 +1406,7 @@ function ReaderView({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [lightboxPath, paged, readsLeftward, runReaderKey, settings.readingRuler]);
+  }, [lightboxPath, paged, readsLeftward, runReaderKey, settings.readingRuler, secondary]);
 
   // One step of the page, whichever way this layout moves: a page turn in the
   // paged layouts, a chapter in the scrolled one — the same split the arrow
@@ -1364,7 +1428,8 @@ function ReaderView({
   // Off is the reader's own switch (手柄翻页 in the panel), for the pad shared
   // with something else that also uses the shoulders.
   useGamepadPager({
-    enabled: settings.gamepadPaging,
+    // Same rule as the keyboard: the pad pages the pane in use, not both.
+    enabled: settings.gamepadPaging && !secondary,
     onNext: () => pageStep(1),
     onPrev: () => pageStep(-1),
     onLineForward: () => stepAlongReading(1),
@@ -1837,8 +1902,11 @@ function ReaderView({
   // The queue itself is published by `useReadAloud`, which is what builds it.
   const publishSession = useSpeechSession((state) => state.publish);
   useEffect(() => {
+    // One session, one publisher: the pane in use. The companion's book is
+    // not what the shell's player is playing, so it does not get to say so.
+    if (secondary) return;
     publishSession({ bookId, title, coverUrl, chapter: headerChapter, chapterIdx, bookLanguage });
-  }, [publishSession, bookId, title, coverUrl, headerChapter, chapterIdx, bookLanguage]);
+  }, [publishSession, bookId, title, coverUrl, headerChapter, chapterIdx, bookLanguage, secondary]);
 
   // The toolbar's edit mode: when the reader tapped a painted highlight,
   // `pending` carries its id — resolve it to the whole annotation so the ink
@@ -1874,9 +1942,39 @@ function ReaderView({
     );
   };
 
+  // Everything the tool cluster needs, in one place: the ordinary reader's
+  // header mounts it inline, and a pair mounts the same cluster in its one
+  // bottom bar — there the bar above the books belongs to both of them.
+  //
+  // 字号 / 标尺 / 简繁 / 纸色 are *not* per book: they live in one settings
+  // store, so a change already applies to both panes at once. Panels (目录,
+  // 搜索, 标注, 图谱, AI 导读, 设置) and the bookmark are per book by nature and
+  // act on the active one.
+  const toolProps = {
+    isPdf,
+    onTogglePanel: togglePanel,
+    pdfZoom,
+    onZoom: (next: number) => stepPdfZoom(next / pdfZoom),
+    fontSize,
+    onFontSize: setFontSize,
+    atBookmark,
+    onToggleBookmark: addBookmark,
+    bookmarkPending: createBookmark.isPending || deleteBookmark.isPending,
+    fullscreen,
+    onToggleFullscreen: () => void toggleFullscreen(),
+    rulerOn: settings.readingRuler,
+    onToggleRuler: () => settings.update({ readingRuler: !settings.readingRuler }),
+    zhAvailable,
+    zhConvert: settings.zhConvert,
+    onZhConvert: (mode: ZhConvertMode) => settings.update({ zhConvert: mode }),
+    zhButton: settings.zhToolbarButton,
+    onHideZhButton: () => settings.update({ zhToolbarButton: false }),
+    paired: pair !== null,
+    onOpenPair,
+  } satisfies ReaderToolButtonsProps;
+
   const headerBar = (
     <ReaderHeaderBar
-      fullscreen={fullscreen}
       onBack={leaveReader}
       backLabel={backLabel}
       bookId={bookId}
@@ -1885,24 +1983,8 @@ function ReaderView({
       title={title}
       index={headerIndex}
       total={headerTotal}
-      isPdf={isPdf}
       chapterLabel={headerChapter}
-      onTogglePanel={togglePanel}
-      pdfZoom={pdfZoom}
-      onZoom={(next) => stepPdfZoom(next / pdfZoom)}
-      fontSize={fontSize}
-      onFontSize={setFontSize}
-      atBookmark={atBookmark}
-      onToggleBookmark={addBookmark}
-      bookmarkPending={createBookmark.isPending || deleteBookmark.isPending}
-      onToggleFullscreen={() => void toggleFullscreen()}
-      rulerOn={settings.readingRuler}
-      onToggleRuler={() => settings.update({ readingRuler: !settings.readingRuler })}
-      zhAvailable={zhAvailable}
-      zhConvert={settings.zhConvert}
-      onZhConvert={(mode) => settings.update({ zhConvert: mode })}
-      zhButton={settings.zhToolbarButton}
-      onHideZhButton={() => settings.update({ zhToolbarButton: false })}
+      {...toolProps}
     />
   );
 
@@ -1915,7 +1997,9 @@ function ReaderView({
   // type metrics, and this footer is not a fixed height.
   const footerRef = useRef<HTMLElement | null>(null);
   const setFooterHeight = useChrome((state) => state.setReaderFooterHeight);
-  useElementHeight(footerRef, setFooterHeight, !fullscreen);
+  // The companion pane has no footer, and reporting 0 while it is the one
+  // without one keeps the shell's pill anchored to the pane that has it.
+  useElementHeight(footerRef, setFooterHeight, !fullscreen && !secondary);
 
   const footerInner = (
     <ReaderFooterControls
@@ -1936,22 +2020,133 @@ function ReaderView({
       rsvpOn={readAloud.rsvpOpen}
       onRsvp={readAloud.toggleRsvp}
       bookId={bookId}
+      // The pair's one bottom bar spans the whole window, but the full set
+      // measures ~1109px against the ~994px a 1280px window still has beside
+      // the sidebar — without this the row wraps into a pile.
+      compact={pair !== null}
+      // A pair's top bar already gives each book its own steppers; this bar
+      // would otherwise ask "which book does 下一章 turn?".
+      chapterNav={pair === null}
     />
   );
 
+  // The pair's top bar names both books and gives each its own steppers; this
+  // pane's half of that is published upward (see `SplitReader`). The step
+  // wrapper is stable on purpose: `stepChapter` is rebuilt on most renders,
+  // and the bar lives in another component — without this the identity would
+  // republish every frame and re-render both blocks.
+  const stepRef = useRef(stepChapter);
+  useEffect(() => {
+    stepRef.current = stepChapter;
+  }, [stepChapter]);
+  const pairStep = useCallback((dir: 1 | -1) => stepRef.current(dir), []);
+  useEffect(() => {
+    if (pair === null) return;
+    onIdentity?.({
+      coverUrl,
+      title,
+      index: headerIndex,
+      total: headerTotal,
+      isPdf,
+      chapterLabel: headerChapter,
+      backLabel,
+      onBack,
+      onStep: pairStep,
+    });
+  }, [
+    pair,
+    onIdentity,
+    coverUrl,
+    title,
+    headerIndex,
+    headerTotal,
+    isPdf,
+    headerChapter,
+    backLabel,
+    onBack,
+    pairStep,
+  ]);
+
+  // The pair's one bottom bar, as this pane paints it. A portal moves DOM, not
+  // state: every control in it still drives *this* reader, so 目录 opens this
+  // book's contents and the voice reads from the pane that was active when it
+  // started. The companion pane paints nothing. Outside a pair the chrome
+  // renders inline, exactly as it always has.
+  const slots = usePairSlots();
+  const portaled = pair !== null && slots.bottom !== null;
+
+  const inlineFooter = (
+    // `flex-wrap`, and the scan chip is one flex unit so it wraps whole:
+    // measured, the row's natural width is 1109px against the 1024px the
+    // window can still be, so at the minimum size the chip goes to a second
+    // line instead of squeezing every control on the first. The footer's
+    // height is watched (`readerFooterHeight`), so the paper and the speech
+    // pill both follow it down.
+    <footer
+      ref={footerRef}
+      className="border-hairline flex flex-wrap items-center justify-center gap-3 border-t px-6 py-3"
+    >
+      {footerInner}
+    </footer>
+  );
+
+  // A pair's one bottom bar: the active book's controls, with the tool cluster
+  // that used to sit in the top bar. The bar above the books belongs to both
+  // of them and carries no per-book controls.
+  const pairFooter = (
+    <footer
+      ref={footerRef}
+      className="border-hairline flex flex-wrap items-center justify-center gap-3 border-t px-6 py-3"
+    >
+      <ReaderToolButtons {...toolProps} menuPlacement="up" />
+      <HeaderRule />
+      {footerInner}
+    </footer>
+  );
+
+  const topChrome =
+    pair !== null ? null : !fullscreen ? (
+      headerBar
+    ) : (
+      // Fullscreen: the toolbar lives above the top edge and slides in only
+      // while the pointer rests on the top strip of the reading area.
+      <div className="group/hud absolute inset-x-0 top-0 z-40">
+        <div className="-translate-y-full opacity-0 transition-all duration-200 ease-out group-hover/hud:translate-y-0 group-hover/hud:opacity-100 motion-reduce:transition-none">
+          {headerBar}
+        </div>
+      </div>
+    );
+
+  const bottomChrome =
+    pair !== null ? (
+      // A pair's bottom bar is always in the flow — no fullscreen HUD: the
+      // reader already has two books' worth of paper on screen, and a bar
+      // that hides itself on hover would keep taking the controls away.
+      portaled && !secondary && slots.bottom ? (
+        // The wrapper carries `readerVars`: a portaled bar is painted outside
+        // this reader's root, so the paper colour and the re-rooted glass
+        // tokens have to travel with it or a sepia/night page would wear the
+        // app's own palette along its edges.
+        createPortal(<div style={readerVars}>{pairFooter}</div>, slots.bottom)
+      ) : null
+    ) : !fullscreen ? (
+      inlineFooter
+    ) : (
+      // Fullscreen: the function bar docks below the bottom edge and slides
+      // up while the pointer rests on the bottom strip.
+      <div className="group/hud-b absolute inset-x-0 bottom-0 z-40">
+        <div className="h-7" aria-hidden />
+        <div className="absolute inset-x-0 bottom-0 translate-y-full opacity-0 transition-all duration-200 ease-out group-hover/hud-b:translate-y-0 group-hover/hud-b:opacity-100 motion-reduce:transition-none">
+          <footer className="border-hairline flex flex-wrap items-center justify-center gap-3 border-t bg-(--glass-btn) px-6 py-3 backdrop-blur-xl">
+            {footerInner}
+          </footer>
+        </div>
+      </div>
+    );
+
   return (
     <div className="flex h-full flex-col" style={readerVars}>
-      {!fullscreen ? (
-        headerBar
-      ) : (
-        // Fullscreen: the toolbar lives above the top edge and slides in only
-        // while the pointer rests on the top strip of the reading area.
-        <div className="group/hud absolute inset-x-0 top-0 z-40">
-          <div className="-translate-y-full opacity-0 transition-all duration-200 ease-out group-hover/hud:translate-y-0 group-hover/hud:opacity-100 motion-reduce:transition-none">
-            {headerBar}
-          </div>
-        </div>
-      )}
+      {topChrome}
 
       {/* Reading viewport. In paged modes the flip arrows reveal on hover or
           pointer-down and fade out after 2s, so they never sit on the text. */}
@@ -2061,6 +2256,9 @@ function ReaderView({
                 if (toolbarOpen) remeasureSelection();
               },
               onTocLoaded: setFoliateToc,
+              // A click on a book's text happens inside foliate's iframe and
+              // never reaches this document — the pane learns about it here.
+              onActivate: pair?.onActivate,
             }}
             plate={{ image: plate }}
             prose={{
@@ -2117,7 +2315,10 @@ function ReaderView({
         <ReadingRuler
           ref={rulerRef}
           hostRef={viewportRef}
-          enabled={settings.readingRuler}
+          // A pair shows the ruler in the book being read, not in both: the
+          // band is a reading aid for the page the reader is working on, and
+          // two of them at once halve the attention the aid is meant to focus.
+          enabled={settings.readingRuler && !secondary}
           vertical={readsLeftward}
           columns={!readsLeftward && layoutMode === "double" ? 2 : 1}
           pitch={fontSize * (LINE_HEIGHTS[lineHeightIdx] ?? 1.8)}
@@ -2202,7 +2403,7 @@ function ReaderView({
             hands it back on close — the page is the same page underneath.
             Read-aloud's own bar and card are not here: they belong to the shell
             (`AppShell`), so that a session survives leaving this page. */}
-        {readAloud.rsvpOpen && (
+        {!secondary && readAloud.rsvpOpen && (
           <RsvpPlayer
             onClose={readAloud.closeRsvp}
             tokens={readAloud.rsvpWords}
@@ -2214,37 +2415,99 @@ function ReaderView({
             background={surface.background}
           />
         )}
+        <ReaderPanels
+          // A secondary pane never paints a panel, whatever its own state says.
+          // The effect above is what clears that state; this is what makes the
+          // rule hold even for the frame before it runs.
+          panel={secondary ? "none" : panel}
+          bookId={bookId}
+          verticalAvailable={useFoliate}
+          zhAvailable={zhAvailable}
+          boldAvailable={boldAvailable}
+          // The drawer's own ✕. Same call as Escape's, so the two cannot drift
+          // apart again — that drift is what left the highlights painted.
+          onClose={closePanel}
+          paired={pair !== null}
+          toc={{
+            chapters: hasToc ? foliateChapters : chapters,
+            outline,
+            currentIdx: hasToc ? foliateTocIdx : chapterIdx,
+            bookmarks: bookmarks ?? [],
+            busy: createBookmark.isPending || deleteBookmark.isPending,
+            onJump: (idx) => {
+              setPanel("none");
+              if (hasToc) {
+                foliateRef.current?.goToEntry(idx);
+                return;
+              }
+              goTo(idx);
+            },
+            onJumpBookmark: (bookmark: Bookmark) => {
+              setPanel("none");
+              jumpTo(bookmark.chapterIdx, bookmark.fraction ?? 0);
+            },
+            onDeleteBookmark: (id) => deleteBookmark.mutate(id),
+            onAddBookmark: addBookmark,
+          }}
+          graph={{
+            onOpenChapter: (idx) => {
+              setPanel("none");
+              goTo(idx);
+            },
+          }}
+          search={{
+            useFoliate,
+            seed: searchSeed,
+            onFoliateSearch: (query) => foliateRef.current?.search(query) ?? Promise.resolve([]),
+            onFoliatePick: (cfi) => {
+              setPanel("none");
+              foliateRef.current?.goToCfi(cfi);
+            },
+            onPick: (hit, needle) => {
+              setSearch(needle);
+              pickHit(hit);
+            },
+          }}
+          annotations={{
+            items: annotations ?? [],
+            busy: deleteAnnotation.isPending || setAnnotationNote.isPending,
+            onDelete: (id) => deleteAnnotation.mutate(id),
+            onNote: (id, note) => setAnnotationNote.mutate({ id, note }),
+            onShare: (annotation) => setShareAnnotation(annotation),
+            onExport: () => setExportingNotes(true),
+            onJump: useFoliate
+              ? (annotation) => {
+                  setPanel("none");
+                  // A highlight with no anchor still has its text and the
+                  // chapter it was recorded in, and those are enough: the
+                  // chapter's own start is the landmark foliate can use,
+                  // and the view mints the anchor from the text once it
+                  // is there. The fraction is how the two numbering
+                  // schemes meet (see `rememberFoliateLocation`).
+                  foliateRef.current?.goToHighlight({
+                    id: annotation.id,
+                    cfi: annotation.cfi,
+                    text: annotation.text,
+                    fraction: globalProgress(chapters, annotation.chapterIdx, 0),
+                  });
+                }
+              : undefined,
+          }}
+          ai={{
+            context: aiContext,
+            onClearContext: () => setAiContext(null),
+            chapterTitle: chapterTitle || `第 ${chapterIdx + 1} 章`,
+            paragraphs: displayChapterData?.paragraphs ?? [],
+            onJumpCitation: jumpToCitation,
+          }}
+        />
       </div>
 
-      {!fullscreen ? (
-        // `flex-wrap`, and the scan chip is one flex unit so it wraps whole:
-        // measured, the row's natural width is 1109px against the 1024px the
-        // window can still be, so at the minimum size the chip goes to a
-        // second line instead of squeezing every control on the first. The
-        // footer's height is watched (`readerFooterHeight`), so the paper and
-        // the speech pill both follow it down.
-        <footer
-          ref={footerRef}
-          className="border-hairline flex flex-wrap items-center justify-center gap-3 border-t px-6 py-3"
-        >
-          {footerInner}
-        </footer>
-      ) : (
-        // Fullscreen: the function bar docks below the bottom edge and slides
-        // up while the pointer rests on the bottom strip.
-        <div className="group/hud-b absolute inset-x-0 bottom-0 z-40">
-          <div className="h-7" aria-hidden />
-          <div className="absolute inset-x-0 bottom-0 translate-y-full opacity-0 transition-all duration-200 ease-out group-hover/hud-b:translate-y-0 group-hover/hud-b:opacity-100 motion-reduce:transition-none">
-            <footer className="border-hairline flex flex-wrap items-center justify-center gap-3 border-t bg-(--glass-btn) px-6 py-3 backdrop-blur-xl">
-              {footerInner}
-            </footer>
-          </div>
-        </div>
-      )}
+      {bottomChrome}
 
       {/* Fullscreen exit hint: pops on entering fullscreen, eases out after
           3s (see the exitHint effect). Non-interactive on purpose. */}
-      {fullscreen && (
+      {fullscreen && !secondary && (
         <div
           aria-hidden={!exitHint}
           className={cn(
@@ -2260,137 +2523,58 @@ function ReaderView({
       )}
 
       {/* Selection toolbar (readest-style) or the 词典/翻译 popup — the
-          AnimatePresence inside handles the mount/unmount pop. */}
-      <SelectionOverlay
-        toolbar={
-          pending
-            ? {
-                x: pending.x,
-                y: pending.y,
-                bottom: pending.bottom,
-                annotation: pendingAnnotation,
-                defaultColor: settings.highlightColor,
-                defaultStyle: settings.highlightStyle,
-                onCopy: copySelection,
-                onSearch: searchSelection,
-                onSpeak: () => {
-                  if (!pending) return;
-                  readAloud.speakFromSelection(pending.range);
-                  window.getSelection()?.removeAllRanges();
-                  setPending(null);
-                },
-                onAsk: () => {
-                  if (!pending) return;
-                  askAboutSelection(pending.range);
-                },
-                onLookup: openLookup,
-                onHighlight: (color, style) => {
-                  if (!pending) return;
-                  createHighlight(pending.range, color, style);
-                },
-                onRestyle: (color, style) => {
-                  if (!pendingAnnotation) return;
-                  restyleHighlight(pendingAnnotation.id, color, style);
-                },
-                onNote: noteOnSelection,
-                onDelete: () => {
-                  if (!pendingAnnotation) return;
-                  deleteAnnotation.mutate(pendingAnnotation.id);
-                  setPending(null);
-                },
-                onClose: () => {
-                  window.getSelection()?.removeAllRanges();
-                  setPending(null);
-                },
-              }
-            : null
-        }
-        lookup={lookup}
-        onLookupClose={() => setLookup(null)}
-      />
-
-      <ReaderPanels
-        panel={panel}
-        bookId={bookId}
-        verticalAvailable={useFoliate}
-        zhAvailable={zhAvailable}
-        boldAvailable={boldAvailable}
-        // The drawer's own ✕. Same call as Escape's, so the two cannot drift
-        // apart again — that drift is what left the highlights painted.
-        onClose={closePanel}
-        toc={{
-          chapters: hasToc ? foliateChapters : chapters,
-          outline,
-          currentIdx: hasToc ? foliateTocIdx : chapterIdx,
-          bookmarks: bookmarks ?? [],
-          busy: createBookmark.isPending || deleteBookmark.isPending,
-          onJump: (idx) => {
-            setPanel("none");
-            if (hasToc) {
-              foliateRef.current?.goToEntry(idx);
-              return;
-            }
-            goTo(idx);
-          },
-          onJumpBookmark: (bookmark: Bookmark) => {
-            setPanel("none");
-            jumpTo(bookmark.chapterIdx, bookmark.fraction ?? 0);
-          },
-          onDeleteBookmark: (id) => deleteBookmark.mutate(id),
-          onAddBookmark: addBookmark,
-        }}
-        graph={{
-          onOpenChapter: (idx) => {
-            setPanel("none");
-            goTo(idx);
-          },
-        }}
-        search={{
-          useFoliate,
-          seed: searchSeed,
-          onFoliateSearch: (query) => foliateRef.current?.search(query) ?? Promise.resolve([]),
-          onFoliatePick: (cfi) => {
-            setPanel("none");
-            foliateRef.current?.goToCfi(cfi);
-          },
-          onPick: (hit, needle) => {
-            setSearch(needle);
-            pickHit(hit);
-          },
-        }}
-        annotations={{
-          items: annotations ?? [],
-          busy: deleteAnnotation.isPending || setAnnotationNote.isPending,
-          onDelete: (id) => deleteAnnotation.mutate(id),
-          onNote: (id, note) => setAnnotationNote.mutate({ id, note }),
-          onShare: (annotation) => setShareAnnotation(annotation),
-          onExport: () => setExportingNotes(true),
-          onJump: useFoliate
-            ? (annotation) => {
-                setPanel("none");
-                // A highlight with no anchor still has its text and the
-                // chapter it was recorded in, and those are enough: the
-                // chapter's own start is the landmark foliate can use,
-                // and the view mints the anchor from the text once it
-                // is there. The fraction is how the two numbering
-                // schemes meet (see `rememberFoliateLocation`).
-                foliateRef.current?.goToHighlight({
-                  id: annotation.id,
-                  cfi: annotation.cfi,
-                  text: annotation.text,
-                  fraction: globalProgress(chapters, annotation.chapterIdx, 0),
-                });
-              }
-            : undefined,
-        }}
-        ai={{
-          context: aiContext,
-          onClearContext: () => setAiContext(null),
-          chapterTitle: chapterTitle || `第 ${chapterIdx + 1} 章`,
-          paragraphs: displayChapterData?.paragraphs ?? [],
-          onJumpCitation: jumpToCitation,
-        }}
-      />
+          AnimatePresence inside handles the mount/unmount pop. The companion
+          pane of a pair leaves selection to the browser (a copy still works);
+          a toolbar per pane would put two anchors over one gesture. */}
+      {!secondary && (
+        <SelectionOverlay
+          toolbar={
+            pending
+              ? {
+                  x: pending.x,
+                  y: pending.y,
+                  bottom: pending.bottom,
+                  annotation: pendingAnnotation,
+                  defaultColor: settings.highlightColor,
+                  defaultStyle: settings.highlightStyle,
+                  onCopy: copySelection,
+                  onSearch: searchSelection,
+                  onSpeak: () => {
+                    if (!pending) return;
+                    readAloud.speakFromSelection(pending.range);
+                    window.getSelection()?.removeAllRanges();
+                    setPending(null);
+                  },
+                  onAsk: () => {
+                    if (!pending) return;
+                    askAboutSelection(pending.range);
+                  },
+                  onLookup: openLookup,
+                  onHighlight: (color, style) => {
+                    if (!pending) return;
+                    createHighlight(pending.range, color, style);
+                  },
+                  onRestyle: (color, style) => {
+                    if (!pendingAnnotation) return;
+                    restyleHighlight(pendingAnnotation.id, color, style);
+                  },
+                  onNote: noteOnSelection,
+                  onDelete: () => {
+                    if (!pendingAnnotation) return;
+                    deleteAnnotation.mutate(pendingAnnotation.id);
+                    setPending(null);
+                  },
+                  onClose: () => {
+                    window.getSelection()?.removeAllRanges();
+                    setPending(null);
+                  },
+                }
+              : null
+          }
+          lookup={lookup}
+          onLookupClose={() => setLookup(null)}
+        />
+      )}
 
       {/* Lightbox viewer: blank areas close, Esc closes, arrows flip the book's images. */}
       <OverlayPortal>
@@ -2453,18 +2637,6 @@ function ReaderView({
   );
 }
 
-/**
- * What the 返回 button is called, by the route it goes back to.
- *
- * The shelf routes are absent on purpose: they all read "返回书库", which is
- * what the button has always said and what every shelf-side test looks for.
- */
-const BACK_LABELS: Record<string, string> = {
-  "/notes": "返回笔记",
-  "/search": "返回搜索",
-  "/stats": "返回统计",
-};
-
 /** A non-negative integer query parameter, or `null` when absent or malformed. */
 function readOffset(value: string | null): number | null {
   if (value === null) return null;
@@ -2472,121 +2644,131 @@ function readOffset(value: string | null): number | null {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
+/**
+ * Route entry: one reader, or a 对照阅读 pair.
+ *
+ * The URL is the record of what is open (`?book=A&pair=B`); the persisted
+ * pair store is what a relaunch restores from. Both are kept in step here so
+ * neither can tell a story the other contradicts: closing the pair clears
+ * the store, and opening either book of a remembered pair puts the other one
+ * back beside it.
+ */
 export function ReaderPage() {
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const bookId = searchParams.get("book");
+  const pairedId = searchParams.get("pair");
   const initialChapter = readOffset(searchParams.get("chapter"));
   const initialOffset = readOffset(searchParams.get("at"));
   const initialQuery = searchParams.get("q") ?? "";
-  // Where this book was opened from. The shell wrote it down on the way in.
-  const returnPath = useChrome((s) => s.readerReturnPath);
-  const backLabel = BACK_LABELS[returnPath] ?? "返回书库";
-  const goBack = useCallback(() => navigate(returnPath), [navigate, returnPath]);
   // A `colorreader://` link lands here as a plain query parameter, so the deep
   // link and a search result reach the reader the same way.
   const initialAnnotation = searchParams.get("annotation");
+  const [picking, setPicking] = useState(false);
 
-  const book = useBook(bookId);
-  const toc = useReaderToc(bookId);
-  // Only when a link named a highlight: the row carries the position, and the
-  // reader has to be arranged around it *before* it mounts. Resolving it later
-  // would mean opening the book in the wrong place and then jumping — a scroll
-  // the reader would see. `null` leaves the query idle, so an ordinary open
-  // pays for nothing.
-  const linkedAnnotations = useAnnotations(initialAnnotation === null ? null : bookId);
-
-  const content = useMemo(() => {
-    if (!bookId) {
-      return (
-        <EmptyState
-          className="h-full"
-          icon={<BookOpen size={26} weight="duotone" />}
-          title="从书库选一本书"
-          description="在书库里点开一本书，正文会出现在这里。"
-        />
-      );
+  // One effect keeps the URL and the store telling the same story, and the
+  // order inside it is the whole point: a solo open of a book that is
+  // remembered in a pair must *restore* the pair, while a pair the reader
+  // just closed must stay closed — and both arrive as the same URL (`?book=A`
+  // with no `pair`). They are told apart by what the close did first: it
+  // cleared the store, so this reads it before anything can re-add the pair.
+  useEffect(() => {
+    if (bookId === null) {
+      // Nothing to sync, and nothing to sweep. The shell keeps rendering the
+      // reader it is leaving for a beat after the route changed (the route
+      // transition sends the old page out while the new one arrives), and that
+      // farewell render reads exactly like "a reader with no book" — clearing
+      // here would forget the pair every time the shelf was opened *from* it.
+      // The pair is forgotten by the 退出对照 that closes it, and by nothing
+      // else: a pair is a relationship between two books, not a mode one of
+      // them is in, and opening either of them later still brings the other
+      // back.
+      return;
     }
-    if (book.isPending || toc.isPending) {
-      return <p className="text-text-3 text-sm">正在打开…</p>;
+    if (pairedId !== null) {
+      // The URL is the record. A book paired with itself is not a pair, so
+      // that URL reads as solo and leaves nothing behind.
+      if (pairedId === bookId) usePairView.getState().clearPair();
+      else usePairView.getState().setPair(bookId, pairedId);
+      return;
     }
-    if (book.isError || toc.isError) {
-      return (
-        <EmptyState
-          className="h-full"
-          icon={<BookOpen size={26} weight="duotone" />}
-          // Two ways a book can be unopenable and only one of them is the
-          // app's fault: the index may have failed to build, or the file the
-          // index was built from may no longer be in the data directory (a
-          // move, or a restore that did not finish). Both are answered from
-          // the shelf, and the backend says which one it is when it can.
-          title="这本书打不开"
-          description="章节索引加载失败。若这本书的文件已不在数据目录里，可从备份恢复或重新导入；否则回到书库再试一次。"
-          action={
-            <GlassButton variant="subtle" onClick={goBack}>
-              {backLabel}
-            </GlassButton>
-          }
-        />
-      );
+    const store = usePairView.getState();
+    const partner = partnerOf(store.pair, bookId);
+    if (partner !== null) {
+      // A pair is a relationship between two books: opening either one
+      // brings the other back beside it.
+      const next = new URLSearchParams(searchParams);
+      next.set("pair", partner);
+      setSearchParams(next, { replace: true });
     }
-    if (initialAnnotation !== null && linkedAnnotations.isPending) {
-      return <p className="text-text-3 text-sm">正在定位这条标注…</p>;
-    }
-    return null;
-  }, [
-    bookId,
-    book.isPending,
-    book.isError,
-    toc.isPending,
-    toc.isError,
-    goBack,
-    backLabel,
-    initialAnnotation,
-    linkedAnnotations.isPending,
-  ]);
+    // No partner: nothing to restore, and nothing to sweep. A pair that does
+    // not involve this book stays remembered — opening one of *its* books
+    // later still restores it — and a pair that *did* involve this book was
+    // already cleared by the 退出对照 that closed it. Treating a plain solo
+    // open as "forget the pair" would make the pair survive one book but not
+    // two, which is not a rule anyone could predict.
+  }, [bookId, pairedId, searchParams, setSearchParams]);
 
-  if (content) {
-    return <div className="flex h-full flex-col px-8 py-6">{content}</div>;
-  }
+  // A book paired with itself is not a pair; the URL reads as solo so the
+  // reader page never renders the same book twice.
+  const split = bookId !== null && pairedId !== null && pairedId !== bookId;
 
-  const chapters = toc.data ?? [];
-  const bookSummary = book.data;
+  // One way out, shared by the seam's ✕ and the picker's own button.
+  const exitPair = () => {
+    // Forgetting the pair *first* is what keeps the sync effect above from
+    // reading it back: the store is already empty by the time the effect
+    // runs, so a closed pair stays closed.
+    setPicking(false);
+    usePairView.getState().clearPair();
+    const next = new URLSearchParams(searchParams);
+    next.delete("pair");
+    setSearchParams(next);
+  };
 
-  if (!bookId || !bookSummary || chapters.length === 0) {
+  const picker = (
+    <PairPicker
+      open={picking}
+      currentId={bookId}
+      partnerId={pairedId}
+      onPick={(id) => {
+        setPicking(false);
+        const next = new URLSearchParams(searchParams);
+        next.set("pair", id);
+        setSearchParams(next);
+      }}
+      onClose={() => setPicking(false)}
+      onExitPair={split ? exitPair : undefined}
+    />
+  );
+
+  if (split) {
     return (
-      <div className="flex h-full flex-col px-8 py-6">
-        <EmptyState
-          className="h-full"
-          icon={<BookOpen size={26} weight="duotone" />}
-          title="这本书没有章节"
-          description="这本书的格式暂时无法提取正文，重新导入可能可以解决。"
-          action={
-            <GlassButton variant="subtle" onClick={goBack}>
-              {backLabel}
-            </GlassButton>
-          }
+      <>
+        <SplitReader
+          bookId={bookId}
+          partnerId={pairedId}
+          initialChapter={initialChapter}
+          initialQuery={initialQuery}
+          initialOffset={initialOffset}
+          initialAnnotation={initialAnnotation}
+          onOpenPair={() => setPicking(true)}
+          onExitPair={exitPair}
         />
-      </div>
+        {picker}
+      </>
     );
   }
 
   return (
-    <ReaderView
-      bookId={bookId}
-      title={bookSummary.title}
-      coverUrl={bookSummary.coverUrl}
-      bookLanguage={bookSummary.language}
-      format={bookSummary.format}
-      chapters={chapters}
-      initialProgress={bookSummary.progress ?? 0}
-      initialCfi={bookSummary.location}
-      initialChapter={initialChapter}
-      initialQuery={initialQuery}
-      initialOffset={initialOffset}
-      initialAnnotation={initialAnnotation}
-      backLabel={backLabel}
-      onBack={goBack}
-    />
+    <>
+      <ReaderHost
+        bookId={bookId}
+        initialChapter={initialChapter}
+        initialQuery={initialQuery}
+        initialOffset={initialOffset}
+        initialAnnotation={initialAnnotation}
+        onOpenPair={() => setPicking(true)}
+      />
+      {picker}
+    </>
   );
 }

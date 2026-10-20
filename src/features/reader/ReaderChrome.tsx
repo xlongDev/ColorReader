@@ -7,6 +7,7 @@ import {
   ArrowsIn,
   ArrowsOut,
   BookmarkSimple,
+  Books,
   CaretLeft,
   CaretRight,
   Check,
@@ -47,51 +48,12 @@ export type Panel =
  * fill is a wash of the paper colour (`--glass-btn`), so the circles read as
  * liquid glass over the page without darkening it like an ink fill would.
  */
-const CHROME_BTN = "bg-(--glass-btn) border-hairline-strong shadow-glass";
+export const CHROME_BTN = "bg-(--glass-btn) border-hairline-strong shadow-glass";
 
-export function ReaderHeaderBar({
-  fullscreen,
-  onBack,
-  backLabel,
-  bookId,
-  coverUrl,
-  coverBoxRef,
-  title,
-  index,
-  total,
-  isPdf,
-  chapterLabel,
-  onTogglePanel,
-  pdfZoom,
-  onZoom,
-  fontSize,
-  onFontSize,
-  atBookmark,
-  onToggleBookmark,
-  bookmarkPending,
-  onToggleFullscreen,
-  rulerOn,
-  onToggleRuler,
-  zhAvailable,
-  zhConvert,
-  onZhConvert,
-  zhButton,
-  onHideZhButton,
-}: {
-  fullscreen: boolean;
-  onBack: () => void;
-  /** Where 返回 leads, named for the page it goes back to. */
-  backLabel: string;
-  bookId: string;
-  coverUrl: string | null;
-  coverBoxRef: RefObject<HTMLSpanElement | null>;
-  title: string;
-  /** 1-based position in the chapter list, or the page number for a PDF. */
-  index: number;
-  total: number;
+/** The controls a reader carries, independent of where they are mounted. */
+export interface ReaderToolButtonsProps {
+  /** PDF pages are fixed bitmaps: the steppers zoom the page, not the text. */
   isPdf: boolean;
-  /** Chapter heading, shown for prose books only. */
-  chapterLabel: string;
   onTogglePanel: (panel: Exclude<Panel, "none">) => void;
   pdfZoom: number;
   onZoom: (next: number) => void;
@@ -100,8 +62,9 @@ export function ReaderHeaderBar({
   atBookmark: boolean;
   onToggleBookmark: () => void;
   bookmarkPending: boolean;
+  fullscreen: boolean;
   onToggleFullscreen: () => void;
-  /** Whether the reading ruler is on: the header button shows it. */
+  /** Whether the reading ruler is on: the button shows it. */
   rulerOn: boolean;
   onToggleRuler: () => void;
   /** 简繁转换 needs a paginator or flowing prose; PDF pages and comics have
@@ -114,7 +77,267 @@ export function ReaderHeaderBar({
   zhButton: boolean;
   /** Hides the shortcut from this header (the menu's own affordance). */
   onHideZhButton: () => void;
-}) {
+  /** Whether a companion book is open beside this one. */
+  paired?: boolean;
+  /** Opens the companion-book picker — to start a pair, or to change the
+   *  book on the other side of one. Hidden when absent. */
+  onOpenPair?: () => void;
+  /** Which way the one popover in this cluster opens. A pair mounts the
+   *  cluster in the bar at the bottom, where "down" is off-screen. */
+  menuPlacement?: "down" | "up";
+}
+
+export interface ReaderHeaderBarProps extends ReaderToolButtonsProps {
+  fullscreen: boolean;
+  onBack: () => void;
+  /** Where 返回 leads, named for the page it goes back to. */
+  backLabel: string;
+  bookId: string;
+  coverUrl: string | null;
+  coverBoxRef: RefObject<HTMLSpanElement | null>;
+  title: string;
+  /** 1-based position in the chapter list, or the page number for a PDF. */
+  index: number;
+  total: number;
+  /** Chapter heading, shown for prose books only. */
+  chapterLabel: string;
+}
+
+/**
+ * The chrome's buttons, in one row.
+ *
+ * Shared by the ordinary reader's header and by the 对照阅读 pair's bottom bar:
+ * a pair merges both bars' controls into the one bar at the bottom, so the
+ * same cluster has to be mountable in either place. `paired` only changes what
+ * a control *says* (对照阅读 vs 更换对照书) and which controls are pointless
+ * mid-pair (a bookmark and a fullscreen toggle belong to a single book's
+ * page).
+ */
+export function ReaderToolButtons({
+  isPdf,
+  onTogglePanel,
+  pdfZoom,
+  onZoom,
+  fontSize,
+  onFontSize,
+  atBookmark,
+  onToggleBookmark,
+  bookmarkPending,
+  fullscreen,
+  onToggleFullscreen,
+  rulerOn,
+  onToggleRuler,
+  zhAvailable,
+  zhConvert,
+  onZhConvert,
+  zhButton,
+  onHideZhButton,
+  paired,
+  onOpenPair,
+  menuPlacement = "down",
+}: ReaderToolButtonsProps) {
+  return (
+    <div className="flex items-center gap-1">
+      <GlassIconButton
+        label="目录与书签"
+        size="sm"
+        className={CHROME_BTN}
+        onClick={() => onTogglePanel("toc")}
+      >
+        <ListBullets size={16} />
+      </GlassIconButton>
+      <GlassIconButton
+        label="搜索"
+        size="sm"
+        className={CHROME_BTN}
+        onClick={() => onTogglePanel("search")}
+      >
+        <MagnifyingGlass size={16} />
+      </GlassIconButton>
+      <GlassIconButton
+        label="标注"
+        size="sm"
+        className={CHROME_BTN}
+        onClick={() => onTogglePanel("annotations")}
+      >
+        <HighlighterCircle size={16} />
+      </GlassIconButton>
+      <HeaderRule />
+      <GlassIconButton
+        label="知识图谱"
+        size="sm"
+        className={CHROME_BTN}
+        onClick={() => onTogglePanel("graph")}
+      >
+        <Graph size={16} />
+      </GlassIconButton>
+      <GlassIconButton
+        label="AI 导读"
+        size="sm"
+        className={CHROME_BTN}
+        onClick={() => onTogglePanel("guide")}
+      >
+        <Sparkle size={16} />
+      </GlassIconButton>
+      <HeaderRule />
+      {/* A reading-aid toggle, not a panel: pressed state instead of an open
+          drawer, sitting with the other things that change the page itself. */}
+      <GlassIconButton
+        label={rulerOn ? "关闭阅读标尺" : "开启阅读标尺"}
+        size="sm"
+        className={CHROME_BTN}
+        aria-pressed={rulerOn}
+        onClick={onToggleRuler}
+      >
+        <span
+          className={cn("inline-flex transition-colors duration-300", rulerOn && "text-accent")}
+        >
+          <Ruler size={16} weight={rulerOn ? "fill" : "regular"} />
+        </span>
+      </GlassIconButton>
+      {/* 简繁转换 sits with the ruler: another thing that changes the page
+          itself rather than opening a drawer. Hidden on PDF/comics and when
+          the reader has turned the shortcut off in settings. */}
+      {zhAvailable && zhButton && (
+        <ZhConvertButton
+          mode={zhConvert}
+          onPick={onZhConvert}
+          onHide={onHideZhButton}
+          placement={menuPlacement}
+        />
+      )}
+      {/* 对照阅读: opens a second book beside this one — or, mid-pair, changes
+          which book is on the other side. Sits with the layout actions rather
+          than the drawers: it rearranges the window. */}
+      {onOpenPair && (
+        <GlassIconButton
+          label={paired ? "更换对照书" : "对照阅读"}
+          size="sm"
+          className={CHROME_BTN}
+          aria-pressed={paired}
+          onClick={onOpenPair}
+        >
+          <Books size={16} weight={paired ? "fill" : "regular"} />
+        </GlassIconButton>
+      )}
+      <GlassIconButton
+        label="阅读设置"
+        size="sm"
+        className={CHROME_BTN}
+        onClick={() => onTogglePanel("settings")}
+      >
+        <Faders size={16} />
+      </GlassIconButton>
+      {isPdf ? (
+        // PDF pages are fixed bitmaps; these steppers zoom the page.
+        <>
+          <GlassIconButton
+            label="缩小页面"
+            size="sm"
+            className={CHROME_BTN}
+            onClick={() => onZoom(pdfZoom / PDF_ZOOM_STEP)}
+            disabled={pdfZoom <= MIN_PDF_ZOOM}
+          >
+            <Minus size={16} />
+          </GlassIconButton>
+          <GlassIconButton
+            label="重置缩放"
+            size="sm"
+            className={CHROME_BTN}
+            onClick={() => onZoom(1)}
+          >
+            <span className="text-[11px] font-semibold tabular-nums">
+              {Math.round(pdfZoom * 100)}%
+            </span>
+          </GlassIconButton>
+          <GlassIconButton
+            label="放大页面"
+            size="sm"
+            className={CHROME_BTN}
+            onClick={() => onZoom(pdfZoom * PDF_ZOOM_STEP)}
+            disabled={pdfZoom >= MAX_PDF_ZOOM}
+          >
+            <Plus size={16} />
+          </GlassIconButton>
+        </>
+      ) : (
+        <>
+          <GlassIconButton
+            label="缩小字号"
+            size="sm"
+            className={CHROME_BTN}
+            onClick={() => onFontSize(fontSize - 1)}
+            disabled={fontSize <= MIN_FONT_SIZE}
+          >
+            <span className="text-[11px] font-semibold">A</span>
+          </GlassIconButton>
+          <GlassIconButton
+            label="放大字号"
+            size="sm"
+            className={CHROME_BTN}
+            onClick={() => onFontSize(fontSize + 1)}
+            disabled={fontSize >= MAX_FONT_SIZE}
+          >
+            <span className="text-sm font-semibold">A</span>
+          </GlassIconButton>
+        </>
+      )}
+      {!paired && (
+        <>
+          <HeaderRule />
+          <GlassIconButton
+            label={atBookmark ? "取消本书签" : "添加书签"}
+            size="sm"
+            className={CHROME_BTN}
+            onClick={onToggleBookmark}
+            disabled={bookmarkPending}
+          >
+            {/* Remounting on state flip restarts the pop; the icon eases between
+                outline and filled + accent instead of snapping. */}
+            <span
+              key={atBookmark ? "saved" : "idle"}
+              className={cn(
+                "inline-flex transition-colors duration-300",
+                atBookmark && "text-accent animate-[bookmark-pop_0.45s_ease-out]",
+              )}
+            >
+              <BookmarkSimple size={16} weight={atBookmark ? "fill" : "regular"} />
+            </span>
+          </GlassIconButton>
+          <GlassIconButton
+            label={fullscreen ? "退出全屏" : "全屏阅读"}
+            size="sm"
+            className={CHROME_BTN}
+            onClick={onToggleFullscreen}
+          >
+            {fullscreen ? <ArrowsIn size={16} /> : <ArrowsOut size={16} />}
+          </GlassIconButton>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The ordinary reader's header: which book, where in it, and the controls.
+ *
+ * A 对照阅读 pair does not use this — it has one top bar for both books
+ * (`SplitReader`) and merges the controls into its bottom bar.
+ */
+export function ReaderHeaderBar({
+  fullscreen,
+  onBack,
+  backLabel,
+  bookId,
+  coverUrl,
+  coverBoxRef,
+  title,
+  index,
+  total,
+  isPdf,
+  chapterLabel,
+  ...tools
+}: ReaderHeaderBarProps) {
   return (
     <header
       className={cn(
@@ -127,167 +350,15 @@ export function ReaderHeaderBar({
       </GlassIconButton>
       <HeaderCover bookId={bookId} coverUrl={coverUrl} boxRef={coverBoxRef} />
       <div className="min-w-0 flex-1">
-        <p className="text-text-1 truncate text-sm font-medium">{title}</p>
-        <p className="text-text-3 truncate text-xs">
+        <p className="text-text-1 truncate text-sm font-medium" data-reader-title>
+          {title}
+        </p>
+        <p className="text-text-3 truncate text-xs" data-reader-chapter>
           第 {index} / {total} {isPdf ? "页" : "章"}
           {!isPdf && chapterLabel && ` · ${chapterLabel}`}
         </p>
       </div>
-      <div className="flex items-center gap-1">
-        <GlassIconButton
-          label="目录与书签"
-          size="sm"
-          className={CHROME_BTN}
-          onClick={() => onTogglePanel("toc")}
-        >
-          <ListBullets size={16} />
-        </GlassIconButton>
-        <GlassIconButton
-          label="搜索"
-          size="sm"
-          className={CHROME_BTN}
-          onClick={() => onTogglePanel("search")}
-        >
-          <MagnifyingGlass size={16} />
-        </GlassIconButton>
-        <GlassIconButton
-          label="标注"
-          size="sm"
-          className={CHROME_BTN}
-          onClick={() => onTogglePanel("annotations")}
-        >
-          <HighlighterCircle size={16} />
-        </GlassIconButton>
-        <HeaderRule />
-        <GlassIconButton
-          label="知识图谱"
-          size="sm"
-          className={CHROME_BTN}
-          onClick={() => onTogglePanel("graph")}
-        >
-          <Graph size={16} />
-        </GlassIconButton>
-        <GlassIconButton
-          label="AI 导读"
-          size="sm"
-          className={CHROME_BTN}
-          onClick={() => onTogglePanel("guide")}
-        >
-          <Sparkle size={16} />
-        </GlassIconButton>
-        <HeaderRule />
-        {/* A reading-aid toggle, not a panel: pressed state instead of an open
-            drawer, sitting with the other things that change the page itself. */}
-        <GlassIconButton
-          label={rulerOn ? "关闭阅读标尺" : "开启阅读标尺"}
-          size="sm"
-          className={CHROME_BTN}
-          aria-pressed={rulerOn}
-          onClick={onToggleRuler}
-        >
-          <span
-            className={cn("inline-flex transition-colors duration-300", rulerOn && "text-accent")}
-          >
-            <Ruler size={16} weight={rulerOn ? "fill" : "regular"} />
-          </span>
-        </GlassIconButton>
-        {/* 简繁转换 sits with the ruler: another thing that changes the page
-            itself rather than opening a drawer. Hidden on PDF/comics and when
-            the reader has turned the shortcut off in settings. */}
-        {zhAvailable && zhButton && (
-          <ZhConvertButton mode={zhConvert} onPick={onZhConvert} onHide={onHideZhButton} />
-        )}
-        <GlassIconButton
-          label="阅读设置"
-          size="sm"
-          className={CHROME_BTN}
-          onClick={() => onTogglePanel("settings")}
-        >
-          <Faders size={16} />
-        </GlassIconButton>
-        {isPdf ? (
-          // PDF pages are fixed bitmaps; the header steppers zoom the page.
-          <>
-            <GlassIconButton
-              label="缩小页面"
-              size="sm"
-              className={CHROME_BTN}
-              onClick={() => onZoom(pdfZoom / PDF_ZOOM_STEP)}
-              disabled={pdfZoom <= MIN_PDF_ZOOM}
-            >
-              <Minus size={16} />
-            </GlassIconButton>
-            <GlassIconButton
-              label="重置缩放"
-              size="sm"
-              className={CHROME_BTN}
-              onClick={() => onZoom(1)}
-            >
-              <span className="text-[11px] font-semibold tabular-nums">
-                {Math.round(pdfZoom * 100)}%
-              </span>
-            </GlassIconButton>
-            <GlassIconButton
-              label="放大页面"
-              size="sm"
-              className={CHROME_BTN}
-              onClick={() => onZoom(pdfZoom * PDF_ZOOM_STEP)}
-              disabled={pdfZoom >= MAX_PDF_ZOOM}
-            >
-              <Plus size={16} />
-            </GlassIconButton>
-          </>
-        ) : (
-          <>
-            <GlassIconButton
-              label="缩小字号"
-              size="sm"
-              className={CHROME_BTN}
-              onClick={() => onFontSize(fontSize - 1)}
-              disabled={fontSize <= MIN_FONT_SIZE}
-            >
-              <span className="text-[11px] font-semibold">A</span>
-            </GlassIconButton>
-            <GlassIconButton
-              label="放大字号"
-              size="sm"
-              className={CHROME_BTN}
-              onClick={() => onFontSize(fontSize + 1)}
-              disabled={fontSize >= MAX_FONT_SIZE}
-            >
-              <span className="text-sm font-semibold">A</span>
-            </GlassIconButton>
-          </>
-        )}
-        <HeaderRule />
-        <GlassIconButton
-          label={atBookmark ? "取消本书签" : "添加书签"}
-          size="sm"
-          className={CHROME_BTN}
-          onClick={onToggleBookmark}
-          disabled={bookmarkPending}
-        >
-          {/* Remounting on state flip restarts the pop; the icon eases between
-              outline and filled + accent instead of snapping. */}
-          <span
-            key={atBookmark ? "saved" : "idle"}
-            className={cn(
-              "inline-flex transition-colors duration-300",
-              atBookmark && "text-accent animate-[bookmark-pop_0.45s_ease-out]",
-            )}
-          >
-            <BookmarkSimple size={16} weight={atBookmark ? "fill" : "regular"} />
-          </span>
-        </GlassIconButton>
-        <GlassIconButton
-          label={fullscreen ? "退出全屏" : "全屏阅读"}
-          size="sm"
-          className={CHROME_BTN}
-          onClick={onToggleFullscreen}
-        >
-          {fullscreen ? <ArrowsIn size={16} /> : <ArrowsOut size={16} />}
-        </GlassIconButton>
-      </div>
+      <ReaderToolButtons {...tools} isPdf={isPdf} fullscreen={fullscreen} />
     </header>
   );
 }
@@ -303,10 +374,14 @@ function ZhConvertButton({
   mode,
   onPick,
   onHide,
+  placement = "down",
 }: {
   mode: ZhConvertMode;
   onPick: (mode: ZhConvertMode) => void;
   onHide: () => void;
+  /** A pair mounts this button in the bottom bar, where a downward menu would
+   *  open past the edge of the window. */
+  placement?: "down" | "up";
 }) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLSpanElement>(null);
@@ -347,7 +422,10 @@ function ZhConvertButton({
         <div
           role="menu"
           aria-label="简繁转换"
-          className="border-hairline bg-surface-1 shadow-glass absolute top-[calc(100%+8px)] right-0 z-50 w-56 rounded-[14px] border p-1.5 backdrop-blur-xl"
+          className={cn(
+            "border-hairline bg-surface-1 shadow-glass absolute right-0 z-50 w-56 rounded-[14px] border p-1.5 backdrop-blur-xl",
+            placement === "up" ? "bottom-[calc(100%+8px)]" : "top-[calc(100%+8px)]",
+          )}
         >
           {ZH_MODES.map((entry) => {
             const on = entry.key === mode;
@@ -415,6 +493,8 @@ export function ReaderFooterControls({
   rsvpOn,
   onRsvp,
   bookId,
+  compact = false,
+  chapterNav = true,
 }: {
   speechStatus: "idle" | "playing" | "paused";
   onToggleSpeech: () => void;
@@ -437,6 +517,17 @@ export function ReaderFooterControls({
   /** The book, for the one control here that is about the page rather than
    *  about reading: the scan chip. */
   bookId: string;
+  /** Half a window (对照阅读): drop the units that only fit a full-width
+   *  row. The footer's natural width measures ~1109px; a paired pane is
+   *  ~500px, so the full set wraps into a three-line pile under the paper
+   *  instead of one row. The transport and the chapter nav are what a
+   *  comparison needs; the estimates, the flip hint and the scan chip
+   *  return the moment the pair closes. */
+  compact?: boolean;
+  /** Whether the bar carries 上一章/下一章. A pair's top bar already gives
+   *  each book its own steppers, so the bottom bar keeps only the progress
+   *  readout and no longer asks "which book does this turn?". */
+  chapterNav?: boolean;
 }) {
   /** Speech first, then the player, then auto-scroll — see the footer's own
    *  note on why the scroll button is not available in every layout. */
@@ -512,22 +603,26 @@ export function ReaderFooterControls({
           {autoScrolling ? <Pause size={16} /> : <ArrowDown size={16} />}
         </IconSwap>
       </GlassIconButton>
-      <GlassButton
-        variant="subtle"
-        size="sm"
-        onClick={() => onStepChapter(-1)}
-        disabled={chapterIdx === 0}
-      >
-        <CaretLeft size={14} /> 上一章
-      </GlassButton>
+      {chapterNav && (
+        <GlassButton
+          variant="subtle"
+          size="sm"
+          onClick={() => onStepChapter(-1)}
+          disabled={chapterIdx === 0}
+        >
+          <CaretLeft size={14} /> 上一章
+        </GlassButton>
+      )}
       {/* Two readings of the same number: how much is left, and what finishing
           it would ask of a day. The second is absent on short books and before
           the reader's own pace has been measured — see `planLabel`. */}
-      <span className="text-text-3 text-xs">
-        本章 {estimateLabel(chapterRemaining, readingSpeed)} · 全书{" "}
-        {estimateLabel(bookRemaining, readingSpeed)}
-        {plan ? ` · ${plan}` : ""}
-      </span>
+      {!compact && (
+        <span className="text-text-3 text-xs">
+          本章 {estimateLabel(chapterRemaining, readingSpeed)} · 全书{" "}
+          {estimateLabel(bookRemaining, readingSpeed)}
+          {plan ? ` · ${plan}` : ""}
+        </span>
+      )}
       {/* The readout pops as it changes: progress arriving silently next to
           buttons that all respond reads as frozen, not as steady. */}
       <motion.span
@@ -540,21 +635,25 @@ export function ReaderFooterControls({
       >
         {Math.round(progress * 100)}%
       </motion.span>
-      <GlassButton
-        variant="subtle"
-        size="sm"
-        onClick={() => onStepChapter(1)}
-        disabled={chapterIdx >= total - 1}
-      >
-        下一章 <CaretRight size={14} />
-      </GlassButton>
-      <span className="text-text-3 text-xs">{paged ? "← → 翻页" : "← → 翻章"}</span>
+      {chapterNav && (
+        <GlassButton
+          variant="subtle"
+          size="sm"
+          onClick={() => onStepChapter(1)}
+          disabled={chapterIdx >= total - 1}
+        >
+          下一章 <CaretRight size={14} />
+        </GlassButton>
+      )}
+      {/* The key hint repeats what the header's steppers already say; a half
+          pane spends its width better on the chapter nav it sits between. */}
+      {!compact && <span className="text-text-3 text-xs">{paged ? "← → 翻页" : "← → 翻章"}</span>}
       {/* Last, and the only thing here that is about the *page* rather than
           about reading it: a page with no text layer, and the two ways to give
           it one. It sits in the footer rather than on the paper — a notice
           drawn over the page covers the page, and one drawn per page slot
           covers a spread twice. */}
-      <ScanChip bookId={bookId} page={chapterIdx + 1} />
+      {!compact && <ScanChip bookId={bookId} page={chapterIdx + 1} />}
     </>
   );
 }

@@ -370,6 +370,11 @@ type Props = {
   onLocationChange?: (location: FoliateLocation) => void;
   /** Called once the book is open, with the flattened table of contents. */
   onTocLoaded?: (entries: FoliateTocEntry[]) => void;
+  /** A pointer went down on the book's text. It happens inside the section's
+   *  iframe, where this document hears nothing; the section handler forwards
+   *  it so 对照阅读 can hand the window's controls to the pane that was
+   *  clicked. */
+  onActivate?: () => void;
 };
 
 /**
@@ -733,6 +738,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
     onImageOpen,
     onLocationChange,
     onTocLoaded,
+    onActivate,
   },
   ref,
 ) {
@@ -757,11 +763,14 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
   const selectReport = useRef(onSelect);
   const clickReport = useRef(onAnnotationClick);
   const imageReport = useRef(onImageOpen);
+  // And for the pane activation, which the per-section handler calls.
+  const activateReport = useRef(onActivate);
   useEffect(() => {
     selectReport.current = onSelect;
     clickReport.current = onAnnotationClick;
     imageReport.current = onImageOpen;
-  }, [onSelect, onAnnotationClick, onImageOpen]); // Read through a ref inside the open effect: layout and style changes are
+    activateReport.current = onActivate;
+  }, [onSelect, onAnnotationClick, onImageOpen, onActivate]); // Read through a ref inside the open effect: layout and style changes are
   // applied by the dedicated effects below, and reopening the book on a
   // settings switch would lose the reading position.
   const layoutRef = useRef(layout);
@@ -1073,6 +1082,11 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
       doc.addEventListener("keydown", forwardKeyFromSection, true);
       doc.addEventListener("mouseup", () => captureSelection(doc), true);
       doc.addEventListener("click", onSectionClick, true);
+      // A press on the book's own text. It is the only signal this document
+      // ever gets from inside a section iframe, and in 对照阅读 it is what
+      // decides which pane owns the keyboard — without it a book could be
+      // selected and scrolled while the window kept answering for the other.
+      doc.addEventListener("pointerdown", () => activateReport.current?.(), true);
     },
     [captureSelection, onSectionClick],
   );

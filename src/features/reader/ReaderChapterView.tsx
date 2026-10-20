@@ -121,6 +121,10 @@ export function ReaderChapterView({
     onImageOpen: (path: string) => void;
     onLocationChange: (relocate: FoliateLocation) => void;
     onTocLoaded: (toc: FoliateTocEntry[]) => void;
+    /** A pointer went down on the book's own text (inside foliate's iframe,
+     *  where this document cannot hear it). 对照阅读 uses it to hand the
+     *  window's controls to the pane that was clicked. */
+    onActivate?: () => void;
   };
   plate: {
     /** Set when the chapter is a part-title page; otherwise `null`. */
@@ -262,6 +266,7 @@ export function ReaderChapterView({
           onImageOpen={foliate.onImageOpen}
           onLocationChange={foliate.onLocationChange}
           onTocLoaded={foliate.onTocLoaded}
+          onActivate={foliate.onActivate}
         />
       </Suspense>
     );

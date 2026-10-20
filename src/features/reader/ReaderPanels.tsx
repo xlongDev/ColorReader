@@ -48,6 +48,7 @@ export function ReaderPanels({
   panel,
   bookId,
   onClose,
+  paired = false,
   toc,
   graph,
   search,
@@ -60,6 +61,9 @@ export function ReaderPanels({
   panel: Panel;
   bookId: string;
   onClose: () => void;
+  /** True in a 对照阅读 pane — the drawer then fades in place instead of
+   *  sliding, which would carry it across the seam onto the other book. */
+  paired?: boolean;
   /** Whether this book has a paginator that can lay columns out vertically —
       a foliate book has one; prose and PDF are laid out here instead. */
   verticalAvailable: boolean;
@@ -115,7 +119,12 @@ export function ReaderPanels({
     // slides out, and clicking the dimmed backdrop dismisses it.
     <AnimatePresence>
       {panel !== "none" && (
-        <ReaderDrawer key="reader-drawer" title={panelTitle(panel)} onClose={onClose}>
+        <ReaderDrawer
+          key="reader-drawer"
+          title={panelTitle(panel)}
+          onClose={onClose}
+          paired={paired}
+        >
           {/* Keyed so a swap rises in. The drawer stays put while its
               content changes, and cutting between panels as different as a
               chapter list and a settings sheet reads as a jump rather than

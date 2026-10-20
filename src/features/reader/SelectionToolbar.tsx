@@ -22,6 +22,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useAiChat, useAiConfig } from "@/hooks/useAi";
 import { ipc, isDesktopRuntime } from "@/lib/ipc";
 import { cn } from "@/lib/cn";
+import { activeReadingViewport } from "@/features/reader/readingViewport";
 import { useSettings } from "@/stores/settings";
 import type { WebDefinition } from "@/lib/bindings";
 import { OverlayPortal } from "@/components/glass/overlay";
@@ -104,9 +105,12 @@ const GAP = 2;
  * and fall back to the outer viewport frame only during mount/tests.
  */
 function readingViewport(): DOMRect | null {
+  // The book being read, not "the first reading area in the document": a pair
+  // has two, and the left one is always first.
+  const host = activeReadingViewport();
   return (
-    document.querySelector("[data-reading-content]")?.getBoundingClientRect() ??
-    document.querySelector("[data-reading-viewport]")?.getBoundingClientRect() ??
+    host?.querySelector("[data-reading-content]")?.getBoundingClientRect() ??
+    host?.getBoundingClientRect() ??
     null
   );
 }
