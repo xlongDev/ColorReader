@@ -208,31 +208,38 @@ interface ReaderState {
   pageNumbers: PageNumberScope;
   /**
    * Where the page's palette comes from — the app theme, or a fixed choice.
-   * `null` means the reader has never decided, which is the state a fresh
-   * install (and an upgraded one) starts in; `snapPageTheme` resolves it once
-   * against the app theme of the day, and from then on it is a real choice the
-   * UI shows and can set back to `follow`.
+   * `null` is 跟随主题 and the shipped default: the page wears whatever the
+   * app theme wears, so a reader whose system goes dark at dusk gets a dark
+   * book without opening anything.
    *
-   * The page used to follow the app theme unconditionally. On a foliate book
-   * that is not free: foliate's `setStyles` re-injects the stylesheet into
-   * every loaded section and `expand()`s each one, so a theme switch
-   * re-paginates the whole book. Pinning it here leaves the app theme
-   * affecting only the chrome — and since the snapshot happens on first run,
-   * the cheap path is the one everybody gets without opting in.
+   * Following is not free on a foliate book — foliate's `setStyles` re-injects
+   * the stylesheet into every loaded section and `expand()`s each one, so a
+   * theme switch re-paginates the whole book. The page used to be pinned to
+   * the theme of the first launch to dodge that, which broke the promise
+   * instead of keeping it cheap: the pin never re-ran, so a reader who
+   * switched themes later got a shell that changed colour around a book that
+   * did not, with nothing in the UI saying why. Pinning is now only ever
+   * something the reader does themselves, in 书页配色, and the row says what
+   * it costs.
    */
   pageTheme: PageTheme | null;
-  /**
-   * Resolve an undecided `pageTheme` against the app theme, once. Idempotent:
-   * a page theme that is already a choice — including one the reader made back
-   * into `follow` — is left alone, so this never overrides a decision.
-   */
-  snapPageTheme: (appIsDark: boolean) => void;
   /** PDF only: pages fill the window edge to edge, ignoring the prose margins. */
   pdfFill: boolean;
-  /** PDF only: render text and vectors on the night palette, independent of
-   *  the paper surface — a light theme can ask for a dark PDF and vice versa.
-   *  Colours come from the `nightSurface` setting. */
-  pdfNight: boolean;
+  /**
+   * PDF only: which axis the page renders on — 原色, the colours the file was
+   * published with, or the night palette (text and vectors re-mapped, and
+   * optionally the pictures with them).
+   *
+   * Three states rather than a boolean, and the default is `follow`: a PDF is
+   * a *document*, and a document is not supposed to be re-inked because the
+   * reader's shell is dark. The old boolean could not say that — it had one
+   * answer for both questions, so shipping it as `true` meant every PDF was
+   * night-rendered even in daylight, and shipping it as `false` meant a reader
+   * who wanted a dark PDF on a light page had no way back. `follow` reads the
+   * same answer the page itself wears (`pageIsNight`), so 日间 gives the file
+   * its own colours and 夜间 darkens it, and either can be pinned.
+   */
+  pdfNight: PdfNight;
   /** PDF only: gutter between the two pages of a spread, in px (0 = seamless). */
   pdfGap: number;
   /** PDF only: invert images along with the text. Off keeps photographs in
@@ -300,12 +307,14 @@ export const PAGE_NUMBER_SCOPES: { key: PageNumberScope; label: string }[] = [
 /**
  * Where the page's own palette comes from.
  *
- * `follow` ties the page to the app theme, which is how it used to work
- * always — and on a foliate book it is also the expensive choice: foliate's
- * `setStyles` re-injects the whole stylesheet into every loaded section and
- * then calls `expand()` on each one, so switching the app theme re-paginates
- * the book. Pinning the page to `day` or `night` means an app-theme switch
- * touches only the chrome, and the book never re-paginates.
+ * `follow` ties the page to the app theme, and it is the default: a reader
+ * whose system goes dark gets a dark book. On a foliate book that is also the
+ * expensive choice — foliate's `setStyles` re-injects the whole stylesheet
+ * into every loaded section and then calls `expand()` on each one, so
+ * switching the app theme re-paginates the book. Pinning the page to `day` or
+ * `night` means an app-theme switch touches only the chrome, and the book
+ * never re-paginates; that is a trade the reader makes in 书页配色, not one
+ * the app makes for them on first launch.
  */
 export type PageTheme = "follow" | "day" | "night";
 
@@ -317,14 +326,33 @@ export const PAGE_THEMES: { key: PageTheme; label: string }[] = [
 ];
 
 /**
+ * PDF only: the axis a page is rendered on. Same three states as the page's
+ * own palette, for the same reason — `follow` is what lets the shell decide,
+ * and a pinned state is what keeps a document looking like itself.
+ */
+export type PdfNight = "follow" | "day" | "night";
+
+/** Chip labels for the PDF 页面 row, in display order. */
+export const PDF_NIGHTS: { key: PdfNight; label: string }[] = [
+  { key: "follow", label: "跟随主题" },
+  { key: "day", label: "原色" },
+  { key: "night", label: "夜间反色" },
+];
+
+/** The same three keys as a lookup, for the migration: what it accepts is
+ *  `PDF_NIGHTS` itself, so a fourth state added there cannot be silently
+ *  refused here. */
+const PDF_NIGHT_KEYS: Record<PdfNight, true> = { follow: true, day: true, night: true };
+
+/**
  * Whether the page wears its night palette, given the app theme and the
  * reader's own choice.
  *
  * `follow` is the only branch that reads the app theme, so it is the only one
- * that can change under a foliate book when the reader switches the app theme.
- * An undecided `null` reads as `follow`, which is what it was before the
- * snapshot lands — the snapshot therefore never changes the palette it
- * resolves to, only what happens on the *next* theme switch.
+ * that can change under a foliate book when the reader switches the app theme
+ * — which costs a re-pagination of every loaded section, and is the price of
+ * the page honestly tracking the shell. `null` is the shipped default and
+ * reads as `follow`.
  */
 export function pageIsNight(pageTheme: PageTheme | null, appIsDark: boolean): boolean {
   return pageTheme === "night" || (pageTheme !== "day" && appIsDark);
@@ -497,7 +525,9 @@ export const DEFAULT_READER_SETTINGS = {
   // opens two columns by default asks a first-time reader to work out what the
   // right-hand page is, and the scroll default before this hid paging entirely
   // behind a setting. 单页 is the one layout that needs no explaining; 双页 and
-  // 滚动 stay one click away in the layout switcher.
+  // 滚动 stay one click away in the layout switcher. **v12 migrate carries this
+  // to installs that already have the app** — see the note there, it is the
+  // half of the change that actually reaches them.
   layoutMode: "single",
   gamepadPaging: true,
   autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
@@ -506,7 +536,7 @@ export const DEFAULT_READER_SETTINGS = {
   pageNumbers: "off",
   pageTheme: null,
   pdfFill: true,
-  pdfNight: true,
+  pdfNight: "follow",
   pdfGap: 0,
   pdfInvertImages: false,
   invertBookImages: false,
@@ -529,10 +559,6 @@ export const useReaderSettings = create<ReaderState>()(
       ...DEFAULT_READER_SETTINGS,
       setFontSize: (size) =>
         set({ fontSize: Math.min(Math.max(size, MIN_FONT_SIZE), MAX_FONT_SIZE) }),
-      snapPageTheme: (appIsDark) =>
-        set((state) =>
-          state.pageTheme === null ? { pageTheme: appIsDark ? "night" : "day" } : {},
-        ),
       update: (patch) => set(patch),
       setActiveSurface: (surface) => set({ activeSurface: surface }),
       setBook: (bookId, patch) =>
@@ -554,7 +580,7 @@ export const useReaderSettings = create<ReaderState>()(
       // no bump — the default merge layers the persisted state over the
       // initial one.
       name: "fangce.reader",
-      version: 11,
+      version: 13,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are
       // continuous px now and the scale was rebased (old 特宽 = new 标准).
@@ -581,6 +607,13 @@ export const useReaderSettings = create<ReaderState>()(
       // v9: auto-scroll speeds were halved (see `MAX_AUTO_SCROLL_SPEED`). A
       //   stored px/s is halved with them, so a reader who chose 适中 keeps
       //   the speed they chose — only the number behind it changes.
+      // v12: the default layout became 单页 and `pdfNight` became a three-way
+      //   axis with `follow` at its head. Both live in the migrate body rather
+      //   than only in the defaults — an installed store keeps the old values,
+      //   and a default nobody reads is not a change.
+      // v13: the page palette is no longer snapshotted on first run — 跟随主题
+      //   is the default again, and the pin the snapshot left in the top-level
+      //   slot is dropped back to `null`.
       migrate: (persisted) => {
         const state = persisted as Partial<ReaderState> & {
           autoScrollIdx?: number;
@@ -636,6 +669,56 @@ export const useReaderSettings = create<ReaderState>()(
           next.writingMode = legacyVertical ? "vertical" : "auto";
           delete (next as { vertical?: unknown }).vertical;
         }
+        // v12: two defaults moved, and both were reached by the same two-step
+        // dance — change `DEFAULT_READER_SETTINGS`, which only a fresh install
+        // ever sees. An installed reader's persisted store still carries the old
+        // values, so without a line here the change ships and nothing happens
+        // for the people it was made for.
+        //
+        // **滚动 → 单页** (`layoutMode`). The default flipped a day earlier
+        // (87558c4) and this is the half of it that reaches anyone who already
+        // had the app. Only the top-level slot is rewritten: `layoutMode` is in
+        // `BOOK_SETTINGS`, so every change the reader makes in the panel goes
+        // to `byBook[bookId]` and the shared value is never theirs — it is
+        // simply the last default, so moving it is not overriding a choice.
+        const layout = next.layoutMode as string;
+        if (layout === "scroll" || (layout !== "single" && layout !== "double")) {
+          // An unrecognised value is not a preference to keep — it is a layout
+          // the panel has no chip for and `paged = layoutMode !== "scroll"`
+          // would read as paged anyway. Fall to the default rather than let it
+          // through as a page whose mode nothing can name. (`layout` is read as
+          // a plain string so the type checker does not collapse the union to
+          // just the two valid states and reject the final 异常值 guard.)
+          next.layoutMode = "single";
+        }
+        //
+        // **`pdfNight` 的布尔 → 三态**. `true` was the old default — every PDF
+        // night-rendered whatever the theme — so it means "never chose" and
+        // becomes `follow`, the same answer the fresh install gets. `false` was
+        // a reader who turned it *off*, and `follow` would hand it back to the
+        // night palette at dusk; it stays `day`, which is the pin they picked.
+        // Read off `state` rather than `next` on purpose: `next` is typed as
+        // the *new* shape, so the boolean this branch exists for is invisible
+        // to the compiler — which is exactly the value being read.
+        const legacyPdfNight = state.pdfNight as boolean | PdfNight | undefined;
+        next.pdfNight =
+          legacyPdfNight === false
+            ? "day"
+            : legacyPdfNight === true
+              ? "follow"
+              : legacyPdfNight !== undefined && legacyPdfNight in PDF_NIGHT_KEYS
+                ? legacyPdfNight
+                : "follow";
+        //
+        // v13: the page palette stopped being snapshotted, so `null` — 跟随主题
+        // — is a real default again rather than a launch that gets pinned
+        // within a frame. Every install carries a pinned value in the top-level
+        // slot, because the snapshot is the only thing that ever wrote it: a
+        // reader's own choice goes to `byBook[bookId]` (`pageTheme` is in
+        // `BOOK_SETTINGS`), so the shared slot was never theirs. Drop it back
+        // to `null` and the page follows the theme the way a fresh install
+        // does. Per-book values are real choices and are left alone.
+        next.pageTheme = null;
         return next;
       },
     },

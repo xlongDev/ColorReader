@@ -4,13 +4,10 @@ import { expect, test, type Page } from "@playwright/test";
  * Restoring every setting at once.
  *
  * Two things here cannot be checked from jsdom: that the reset reaches both
- * persisted stores, and that it re-snapshots the page palette rather than
- * leaving it undecided. The second is the one that bites — dropping
- * `pageTheme` back to `null` would quietly hand the reader back the setting
- * that makes foliate re-paginate the whole book on a theme switch, which is
- * the thing the snapshot exists to avoid. It is a store concern, so it is
- * pinned in `src/stores/reset.test.ts`; what this browser run adds is that the
- * control is reachable and actually does it.
+ * persisted stores, and that the page palette lands back on 跟随主题 with
+ * everything else. The second is a store concern — pinned in
+ * `src/stores/reset.test.ts`; what this browser run adds is that the control
+ * is reachable and actually does it.
  *
  * The theme radio is the probe because it is the one setting whose restored
  * value is visible without opening a book: it ships as 跟随系统, and the test

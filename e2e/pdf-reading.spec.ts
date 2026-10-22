@@ -346,20 +346,28 @@ test("a theme change repaints the page instead of reusing the paper it was raste
 }) => {
   await openPdf(page, "单页");
 
-  // A PDF opens on the night axis (`pdfNight` defaults to true), so the paper
-  // is already dark. Asserted relationally rather than by name: which axis is
-  // on is a default, and what matters here is that flipping it changes the
-  // paper and that the next turn follows.
-  const before = await paper(page, 1);
-  await letPrefetchSettle(page);
+  // Starts on 原色: `pdfNight` is `follow` and the page is a day page, so the
+  // file shows the colours it was published with. Pinned to the night axis for
+  // the duration — which is what the reader would have to do to see a dark
+  // PDF — so the flip under test is the one between the two rasters.
+  //
+  // Asserted as "the paper changed" rather than by a fixed colour: what
+  // matters here is that flipping the axis repaints, and that the next turn
+  // follows. Naming the axis would pin a default this file is not about.
+  expect(await paper(page, 1)).toBe("light");
 
   await page.getByRole("button", { name: "阅读设置" }).first().click();
-  const nightChip = page.getByRole("button", { name: "夜间反色", exact: true });
-  const wasNight = (await nightChip.getAttribute("aria-pressed")) === "true";
-  await page.getByRole("button", { name: wasNight ? "原色" : "夜间反色", exact: true }).click();
+  await page.getByRole("button", { name: "夜间反色", exact: true }).click();
+  await page.keyboard.press("Escape");
+  await expect.poll(() => paper(page, 1)).toBe("dark");
+  await letPrefetchSettle(page);
+
+  // Back to 原色 — the state a day page follows to.
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.getByRole("button", { name: "原色", exact: true }).click();
   await page.keyboard.press("Escape");
 
-  await expect.poll(() => paper(page, 1)).not.toBe(before);
+  await expect.poll(() => paper(page, 1)).toBe("light");
   const after = await paper(page, 1);
 
   // The turn is warm again, under the axis the page is wearing now.
@@ -374,4 +382,44 @@ test("a theme change repaints the page instead of reusing the paper it was raste
   // say "cached" here and put the other axis's paper on screen — this line is
   // the only thing that sees it.
   expect(await paper(page, 2)).toBe(after);
+});
+
+test("a PDF on 跟随主题 is re-inked by the theme and only by the theme", async ({ page }) => {
+  await openPdf(page, "单页");
+
+  // The default, and the promise the setting makes: a document shows its own
+  // colours in the day, and is darkened for a reader who works at night —
+  // without anyone going into the panel to say so.
+  expect(await paper(page, 1)).toBe("light");
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect.poll(() => paper(page, 1)).toBe("dark");
+  await letPrefetchSettle(page);
+
+  // The turn follows the axis the page is on now, not the one it opened on.
+  await page.keyboard.press("ArrowRight");
+  await expect(pageView(page, 2)).toHaveAttribute("data-pdf-raster", "cached", {
+    timeout: 10_000,
+  });
+  expect(await paper(page, 2)).toBe("dark");
+
+  await page.emulateMedia({ colorScheme: "light" });
+  // Back to 原色, and the page on screen is the one being repainted — the
+  // reader is on page 2 now, so that is the canvas whose axis has to flip.
+  await expect.poll(() => paper(page, 2)).toBe("light");
+});
+
+test("a PDF pinned to 原色 keeps it while the theme turns", async ({ page }) => {
+  await openPdf(page, "单页");
+
+  // The other half of the promise: 跟随 is a *default*, not a rule. A reader
+  // who reads a book whose colours matter can hold it there, and the theme
+  // then changes the chrome and nothing else.
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.getByRole("button", { name: "原色", exact: true }).click();
+  await page.keyboard.press("Escape");
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.waitForTimeout(500);
+  expect(await paper(page, 1)).toBe("light");
 });

@@ -21,7 +21,7 @@ describe("resetAllSettings", () => {
     useSettings.setState({ theme: "dark", shelfLayout: "list", sidebarCollapsed: true });
     useReaderSettings.setState({ fontSize: 26, marginX: 160, surface: "sepia" });
 
-    resetAllSettings(false);
+    resetAllSettings();
 
     expect(useSettings.getState().theme).toBe("system");
     expect(useSettings.getState().shelfLayout).toBe("grid");
@@ -31,14 +31,19 @@ describe("resetAllSettings", () => {
     expect(useReaderSettings.getState().surface).toBe("standard");
   });
 
-  it("re-snapshots the page palette instead of leaving it undecided", () => {
-    // The one default that is not free. A reset that dropped `pageTheme` back
-    // to `null` would quietly hand the reader back the setting that makes
-    // foliate re-paginate the whole book on every theme switch — the thing
-    // the snapshot exists to avoid.
+  it("leaves the page palette following the theme, pinned or not", () => {
+    // The page palette is no longer snapshotted, so a restore drops it back to
+    // 跟随主题 like everything else — the same thing a first launch gets. It
+    // used to be re-resolved here, and that is where the "dark shell, day
+    // book" a reader could not undo came from: the reset installed
+    // `theme: "system"` while pinning the page from the theme the reader had
+    // been on a moment before, and the pin never re-ran.
     useReaderSettings.setState({ pageTheme: "day" });
-    resetAllSettings(true);
-    expect(useReaderSettings.getState().pageTheme).toBe("night");
+
+    resetAllSettings();
+
+    expect(useReaderSettings.getState().pageTheme).toBeNull();
+    expect(useSettings.getState().theme).toBe("system");
   });
 
   it("puts the rebound keys back with everything else", () => {
@@ -47,7 +52,7 @@ describe("resetAllSettings", () => {
     // than left to the panel because the panel has its own 全部恢复默认 — two
     // buttons that have to mean the same thing.
     useSettings.getState().setKeyOverride("reader.chapter.next", [{ key: "n" }]);
-    resetAllSettings(false);
+    resetAllSettings();
     expect(useSettings.getState().keyOverrides).toEqual({});
   });
 
@@ -62,7 +67,7 @@ describe("resetAllSettings", () => {
     useSettings.setState({ downloadedFonts: ["lxgw"] });
     useReaderSettings.setState({ fontFamily: catalogKey("lxgw") });
 
-    resetAllSettings(false);
+    resetAllSettings();
 
     expect(useSettings.getState().downloadedFonts).toEqual([]);
     // …and the picker is back on 原书 rather than on a key whose sheet just

@@ -23,7 +23,6 @@ import { GlassInput, GlassSwitch } from "@/components/glass/input";
 import { useSettings, type ThemeMode } from "@/stores/settings";
 import { resetAllSettings } from "@/stores/reset";
 import { showToast } from "@/stores/toasts";
-import { useResolvedTheme } from "@/hooks/useTheme";
 import { useSystemInfo } from "@/hooks/useSystemInfo";
 import { useSavePath } from "@/hooks/useSavePath";
 import { useAiConfig, useSaveAiConfig, useTestAiConfig } from "@/hooks/useAi";
@@ -577,11 +576,10 @@ function stamp(): string {
  * evening tuning typography needs to know whether their books survive it.
  */
 function ResetSection() {
-  const appTheme = useResolvedTheme();
   const [asking, setAsking] = useState(false);
 
   const restore = () => {
-    resetAllSettings(appTheme === "dark");
+    resetAllSettings();
     showToast("success", "已还原所有设置");
     setAsking(false);
   };

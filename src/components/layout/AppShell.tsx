@@ -18,10 +18,8 @@ import { TtsHost } from "@/features/reader/TtsHost";
 import { TtsPlayer } from "@/features/reader/TtsPlayer";
 import { useCommandPalette } from "@/stores/command-palette";
 import { useSettings } from "@/stores/settings";
-import { useReaderSettings } from "@/stores/reader";
 import { useChrome } from "@/stores/chrome";
 import { useActiveReadingSurface } from "@/hooks/useReadingSurface";
-import { useResolvedTheme } from "@/hooks/useTheme";
 import { useDeepLink } from "@/hooks/useDeepLink";
 import { useFonts } from "@/hooks/useFonts";
 import { useHotkeys } from "@/hooks/useHotkeys";
@@ -142,7 +140,6 @@ export function AppShell() {
    * AnimatePresence holds on to keeps showing the page it is leaving.
    */
   const outlet = useOutlet();
-  const appTheme = useResolvedTheme();
   // The paper the reader is painting, which the shell re-roots its own glass
   // tokens from: one resolution for the whole app — see `useReadingSurface`.
   const surface = useActiveReadingSurface();
@@ -153,20 +150,6 @@ export function AppShell() {
   useEffect(() => {
     return registerCoreCommands({ openPalette: () => setOpen(true) });
   }, [setOpen]);
-
-  /**
-   * Decide the page palette once, from the app theme of the day.
-   *
-   * Nobody has to opt in: a foliate book re-paginates on every app-theme
-   * switch while the page follows it, and the fix — pinning the page — is not
-   * something a reader would think to look for. So the first launch pins it to
-   * whatever the theme is then. Idempotent, and it never overrides a page
-   * theme that is already a choice, including one set back to `follow`.
-   */
-  const snapPageTheme = useReaderSettings((s) => s.snapPageTheme);
-  useEffect(() => {
-    snapPageTheme(appTheme === "dark");
-  }, [appTheme, snapPageTheme]);
 
   const sidebarGone = sidebarHidden || readerFullscreen;
 

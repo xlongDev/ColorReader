@@ -89,7 +89,7 @@ import {
 } from "@/hooks/useAnnotations";
 import { useBookmarks, useCreateBookmark, useDeleteBookmark } from "@/hooks/useBookmarks";
 import { useElementHeight } from "@/hooks/useElementHeight";
-import { useReadingSurface } from "@/hooks/useReadingSurface";
+import { usePageIsNight, useReadingSurface } from "@/hooks/useReadingSurface";
 import { useFonts } from "@/hooks/useFonts";
 import { useGamepadPager } from "@/hooks/useGamepadPager";
 import { useBookImages, useChapter, useSetProgress } from "@/hooks/useReader";
@@ -100,7 +100,13 @@ import { usePageCounter } from "@/hooks/usePageCounter";
 import { useReadAloud } from "@/hooks/useReadAloud";
 import { useReadingClock, useReadingPace } from "@/hooks/useReading";
 import { useReaderPanels } from "@/hooks/useReaderPanels";
-import { LINE_HEIGHTS, PARA_GAPS, useBookSettings, useReaderSettings } from "@/stores/reader";
+import {
+  LINE_HEIGHTS,
+  PARA_GAPS,
+  pageIsNight,
+  useBookSettings,
+  useReaderSettings,
+} from "@/stores/reader";
 import { useSettings } from "@/stores/settings";
 import { sessionNow, useSpeechSession } from "@/stores/speech";
 import { boxOf, useBookHandoff } from "@/stores/book-handoff";
@@ -277,7 +283,7 @@ export function ReaderView({
     paceSamples,
     pageNumbers,
     pdfFill,
-    pdfNight: pdfNightOn,
+    pdfNight: pdfNightAxis,
     pdfGap,
     pdfInvertImages,
     invertBookImages,
@@ -1719,6 +1725,10 @@ export function ReaderView({
   // with the shell's read-aloud chrome, which floats on this same paper — see
   // `useReadingSurface`.
   const surface = useReadingSurface(bookId);
+  // Whether that page is on its night axis — the input the PDF's `follow`
+  // resolves against, so the PDF and the paper it sits on cannot end up on
+  // different answers to the same question.
+  const pageNight = usePageIsNight(bookId);
   // The window's chrome wears the paper of the book being read — paper is per
   // book now, and the shell has no book of its own. Only the active pane
   // publishes; the other one clears on its way out.
@@ -1750,12 +1760,18 @@ export function ReaderView({
       root.style.removeProperty("--reader-page");
     };
   }, [surface.tint]);
-  // The night switch is independent of the paper surface: colours always come
-  // from the night palette, so a light theme can ask for a dark PDF too. On a
-  // dark surface this resolves to the active surface itself. `tint` is the
-  // solid stand-in for `background`, which may be a gradient the canvas
-  // cannot take.
+  // Which axis a PDF page is rendered on. The three states resolve through the
+  // page's own palette (`usePageIsNight`), so 跟随主题 means "whatever the page
+  // is wearing" — a document is not re-inked because the shell went dark, and
+  // a page pinned to 日间 keeps its file's own colours at midnight. The page
+  // palette follows the app theme unless the reader pinned it, so the default
+  // answer moves with the shell without anyone opening the panel.
+  //
+  // The colours themselves always come from the night palette, so pinning 夜间
+  // on a light page still darkens it. `tint` rather than `background` for the
+  // canvas: `background` may be a gradient the canvas cannot take.
   const nightPalette = resolveSurface(settings.nightSurface, customSurface);
+  const pdfNightOn = pageIsNight(pdfNightAxis, pageNight);
   const pdfNight = pdfNightOn ? { fg: nightPalette.fg, bg: nightPalette.tint } : null;
   const fullscreenBonus = fullscreen ? FULLSCREEN_MARGIN_BONUS : 0;
   // 铺满屏幕: PDF pages meet the window edges like Preview; prose keeps the

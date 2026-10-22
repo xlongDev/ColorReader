@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   DEFAULT_READER_SETTINGS,
@@ -99,48 +99,21 @@ describe("pageIsNight", () => {
     expect(pageIsNight("night", true)).toBe(true);
   });
 
-  it("reads an undecided page as following — what the snapshot then replaces", () => {
-    // `null` is the state a first launch starts in. It has to resolve the same
-    // way `follow` does, or the frame before the snapshot lands would paint a
-    // different paper from the frame after it.
+  it("reads the shipped default as following — `null` is 跟随主题", () => {
+    // There is no snapshot resolving it any more: `null` *is* follow, so a
+    // fresh install and a reader who picked 跟随主题 get the same answer, and
+    // the page moves with the shell the moment the system theme does.
     expect(pageIsNight(null, false)).toBe(false);
     expect(pageIsNight(null, true)).toBe(true);
   });
 });
 
-describe("snapPageTheme", () => {
-  afterEach(() => {
-    useReaderSettings.setState(DEFAULT_READER_SETTINGS);
-  });
-
-  it("pins an undecided page to the theme of the day", () => {
-    useReaderSettings.setState({ pageTheme: null });
-    useReaderSettings.getState().snapPageTheme(true);
-    expect(useReaderSettings.getState().pageTheme).toBe("night");
-
-    useReaderSettings.setState({ pageTheme: null });
-    useReaderSettings.getState().snapPageTheme(false);
-    expect(useReaderSettings.getState().pageTheme).toBe("day");
-  });
-
-  it("leaves a choice alone, including one made back into follow", () => {
-    // This is what makes it safe to call from an effect that re-runs whenever
-    // the app theme changes: a page the reader pinned stays pinned, and a
-    // reader who asked the page to follow gets to keep asking.
-    useReaderSettings.setState({ pageTheme: "day" });
-    useReaderSettings.getState().snapPageTheme(true);
-    expect(useReaderSettings.getState().pageTheme).toBe("day");
-
-    useReaderSettings.setState({ pageTheme: "follow" });
-    useReaderSettings.getState().snapPageTheme(true);
-    expect(useReaderSettings.getState().pageTheme).toBe("follow");
-  });
-});
-
 /**
- * v8 has to tell "never chose" from "chose follow": the first launch now
- * snapshots the page palette from the app theme, and a stored `follow` is the
- * old default rather than a decision to keep following.
+ * v8 has to tell "never chose" from "chose follow": the first launch used to
+ * snapshot the page palette from the app theme, and a stored `follow` was the
+ * old default rather than a decision to keep following. v13 removed the
+ * snapshot, which took the reason to keep a stored pin in the shared slot with
+ * it — see the v13 describe below for what that half became.
  */
 function pageThemeOf(persisted: Record<string, unknown>): unknown {
   const options = useReaderSettings.persist.getOptions();
@@ -149,14 +122,18 @@ function pageThemeOf(persisted: Record<string, unknown>): unknown {
 }
 
 describe("v8 page-theme migration", () => {
-  it("reads a stored `follow` as never having chosen, so the snapshot runs", () => {
+  it("reads a stored `follow` as never having chosen", () => {
     expect(pageThemeOf({ pageTheme: "follow" })).toBeNull();
     expect(pageThemeOf({})).toBeNull();
   });
 
-  it("keeps a page the reader pinned themselves", () => {
-    expect(pageThemeOf({ pageTheme: "night" })).toBe("night");
-    expect(pageThemeOf({ pageTheme: "day" })).toBe("day");
+  it("leaves a stored pin where v8 is concerned — v13 is what drops it", () => {
+    // v8's own rule was that a pin is a choice. What turned out to be true is
+    // that the shared slot never held one: the snapshot was its only writer,
+    // and a reader's own choice goes to `byBook[bookId]`. So by the time the
+    // whole migrate body has run, both land on 跟随主题.
+    expect(pageThemeOf({ pageTheme: "night" })).toBeNull();
+    expect(pageThemeOf({ pageTheme: "day" })).toBeNull();
   });
 });
 
@@ -184,5 +161,122 @@ describe("v11 bundled-font-key migration", () => {
     for (const key of ["book", "song", "kai", "hei", "catalog:lxgw"]) {
       expect(fontFamilyOf({ fontFamily: key }), key).toBe(key);
     }
+  });
+});
+
+/**
+ * v12 carries two default changes to installs that already have the app — see
+ * the migrate body. Both are invisible without it, which is the whole reason
+ * they are here: a fresh install reads `DEFAULT_READER_SETTINGS`, an installed
+ * one reads its own persisted store, and the two are only the same on a machine
+ * that has never run this build.
+ */
+function v12(persisted: Record<string, unknown>): Record<string, unknown> {
+  const options = useReaderSettings.persist.getOptions();
+  if (!options.migrate) throw new Error("the store lost its migrate function");
+  return options.migrate(persisted, 11) as unknown as Record<string, unknown>;
+}
+
+describe("v12 default-layout migration", () => {
+  it("takes the old scrolled default to 单页 on an installed store", () => {
+    // The change itself landed a day earlier (87558c4); without this line the
+    // default only ever reached a fresh install, and every reader who already
+    // had the app kept opening books in 滚动.
+    expect(v12({ layoutMode: "scroll" }).layoutMode).toBe("single");
+  });
+
+  it("leaves a layout the reader picked alone", () => {
+    for (const key of ["single", "double"]) {
+      expect(v12({ layoutMode: key }).layoutMode, key).toBe(key);
+    }
+  });
+
+  it("refuses a value it does not know, so the row is never chipless", () => {
+    // Anything unrecognised lands on the default rather than surviving into a
+    // `layoutMode === "scroll"` test that silently means nothing.
+    expect(v12({ layoutMode: "columns" }).layoutMode).toBe("single");
+  });
+});
+
+describe("v12 pdfNight axis migration", () => {
+  it("reads the old `true` as never having chosen, so a PDF follows the theme", () => {
+    // `true` was the old default: every PDF night-rendered, in daylight too.
+    // Mapping it to the new `follow` is what finally gives a daylight PDF the
+    // colours it was published with.
+    expect(v12({ pdfNight: true }).pdfNight).toBe("follow");
+    expect(v12({}).pdfNight).toBe("follow");
+  });
+
+  it("keeps a reader who turned it off on 原色", () => {
+    // The asymmetry with the line above is the point: `false` was a choice,
+    // and `follow` would have handed the night palette back at dusk.
+    expect(v12({ pdfNight: false }).pdfNight).toBe("day");
+  });
+
+  it("keeps every state it already writes, and refuses the ones it does not", () => {
+    for (const key of ["follow", "day", "night"]) {
+      expect(v12({ pdfNight: key }).pdfNight, key).toBe(key);
+    }
+    // Same reasoning as the layout row: an unrecognised value must not survive
+    // into the picker, where it would render with no chip lit.
+    expect(v12({ pdfNight: "sepia" }).pdfNight).toBe("follow");
+  });
+});
+
+/**
+ * v13 retires the first-launch snapshot of the page palette: 跟随主题 is the
+ * default again, and the pin the snapshot left in the shared slot has to go
+ * with it. Same two-step as v12 — without the line in the migrate body the new
+ * default only ever reaches a fresh install, and every reader who already had
+ * the app keeps opening books on the palette their first launch happened to
+ * land on.
+ */
+function v13(persisted: Record<string, unknown>): Record<string, unknown> {
+  const options = useReaderSettings.persist.getOptions();
+  if (!options.migrate) throw new Error("the store lost its migrate function");
+  return options.migrate(persisted, 12) as unknown as Record<string, unknown>;
+}
+
+describe("v13 page-theme un-pin migration", () => {
+  it("drops the snapshot's pin back to 跟随主题", () => {
+    expect(v13({ pageTheme: "day" }).pageTheme).toBeNull();
+    expect(v13({ pageTheme: "night" }).pageTheme).toBeNull();
+    // Already following — including a store that never had the app installed
+    // long enough to be pinned.
+    expect(v13({ pageTheme: "follow" }).pageTheme).toBeNull();
+    expect(v13({}).pageTheme).toBeNull();
+  });
+
+  it("leaves a book's own pinned palette alone", () => {
+    // Per-book values are real choices: the reader made them in the panel
+    // while reading that book, which is the only place the panel can write.
+    // Only the shared slot was ever machine-written.
+    const byBook = { b1: { pageTheme: "night" }, b2: { pageTheme: "day" } };
+    expect(v13({ byBook }).byBook).toEqual(byBook);
+  });
+});
+
+describe("shipped defaults", () => {
+  it("opens a book paged, and leaves a PDF in the colours it was published with", () => {
+    // The two asks, as the *fresh install* sees them. The migration tests above
+    // cover the installed case; this one is the pair they are migrating to, so
+    // a default changed in one place and not the other shows up here.
+    expect(DEFAULT_READER_SETTINGS.layoutMode).toBe("single");
+    expect(DEFAULT_READER_SETTINGS.pdfNight).toBe("follow");
+    // And `follow` on a day page is 原色 — the promise the setting makes is
+    // only true if the predicate agrees with it.
+    expect(pageIsNight(DEFAULT_READER_SETTINGS.pdfNight, false)).toBe(false);
+    expect(pageIsNight(DEFAULT_READER_SETTINGS.pdfNight, true)).toBe(true);
+  });
+
+  it("lets the page follow the theme instead of pinning it on first launch", () => {
+    // The reversal of the 2026-09-19 decision. The snapshot kept theme
+    // switches cheap and quietly broke the promise instead: the pin never
+    // re-ran, so a reader who switched themes later got a shell that changed
+    // colour around a book that did not. Following is the default again and
+    // the re-pagination is a cost the reader opts into by pinning.
+    expect(DEFAULT_READER_SETTINGS.pageTheme).toBeNull();
+    expect(pageIsNight(DEFAULT_READER_SETTINGS.pageTheme, false)).toBe(false);
+    expect(pageIsNight(DEFAULT_READER_SETTINGS.pageTheme, true)).toBe(true);
   });
 });

@@ -21,13 +21,15 @@ import { DEFAULT_READER_SETTINGS, useReaderSettings } from "@/stores/reader";
  * impossible, and one the reader cannot undo without a reinstall. See
  * `forgetCatalogFonts`.
  *
- * `appIsDark` is the theme of the moment, and it is here because a reset drops
- * `pageTheme` back to "undecided". Resolving it straight away keeps a restore
- * from silently re-introducing the one setting whose undecided value is the
- * expensive one on a foliate book — the page would follow the app theme again
- * and re-paginate on every theme switch.
+ * The page palette goes back to 跟随主题 with everything else. It used to be
+ * re-resolved here, because a reset dropped it to `null` and the first-launch
+ * snapshot would otherwise have pinned it again within a frame — and that
+ * snapshot is what produced the "dark shell, day book" a reader could not
+ * undo. There is no snapshot any more: `null` follows the app theme, which is
+ * what a fresh install gets, so a restore and a first launch land on the same
+ * thing.
  */
-export function resetAllSettings(appIsDark: boolean): void {
+export function resetAllSettings(): void {
   useSettings.setState(DEFAULT_SETTINGS);
   useReaderSettings.setState(DEFAULT_READER_SETTINGS);
   // 🔴 After the reader store, never before. `fontFamily` is back on 原书 by
@@ -38,5 +40,4 @@ export function resetAllSettings(appIsDark: boolean): void {
   // end at the same render, because React batches the store writes; the order
   // is what keeps that from being load-bearing.)
   forgetCatalogFonts();
-  useReaderSettings.getState().snapPageTheme(appIsDark);
 }

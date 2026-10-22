@@ -26,6 +26,7 @@ import {
   MARGIN_X_PRESETS,
   PAGE_NUMBER_SCOPES,
   PAGE_THEMES,
+  PDF_NIGHTS,
   isPresetRulerColor,
   pageIsNight,
   PARA_GAPS,
@@ -514,18 +515,20 @@ export function SettingsPanel({
               value={settings.pdfGap}
               onChange={(value) => update({ pdfGap: value })}
             />
-            {/* Independent of the paper surface: night rendering can also be
-              asked for on light paper, and left off on dark paper. */}
+            {/* A PDF is a document: 跟随主题 (the default) gives it the colours
+              it was published with in the day and the night palette at night,
+              and 原色 / 夜间反色 pin either. Independent of the paper surface —
+              pinning 夜间 darkens a light page too. The second row asks about a
+              *picture*, so it only appears where a picture is being re-mapped:
+              跟随主题 in the day renders nothing to invert, and the row would be
+              a switch with no effect. */}
             <div className="mt-2 flex flex-wrap gap-1.5">
               <Chips
-                options={[
-                  { key: false, label: "原色" },
-                  { key: true, label: "夜间反色" },
-                ]}
+                options={PDF_NIGHTS}
                 value={settings.pdfNight}
-                onChange={(value) => update({ pdfNight: value })}
+                onChange={(key) => update({ pdfNight: key })}
               />
-              {settings.pdfNight && (
+              {pageIsNight(settings.pdfNight, pageNight) && (
                 <Chips
                   options={[
                     { key: false, label: "图片保色" },
@@ -536,6 +539,9 @@ export function SettingsPanel({
                 />
               )}
             </div>
+            <p className="text-text-3 mt-2 w-full text-[11px] leading-relaxed">
+              跟随主题：白天保持文件原色，切到夜间才反色。PDF 是文档，不因为外壳变暗就被重新上墨。
+            </p>
           </div>
         </Group>
       </Section>
@@ -544,8 +550,8 @@ export function SettingsPanel({
         <Group label="书页配色">
           <Chips
             options={PAGE_THEMES}
-            // `null` is a launch that has not been snapshotted yet — resolved
-            // within a frame, and it reads as `follow` meanwhile.
+            // `null` is 跟随主题 — the shipped default. The page wears the app
+            // theme until the reader pins it here.
             value={settings.pageTheme ?? "follow"}
             onChange={(value) => update({ pageTheme: value })}
           />
