@@ -142,6 +142,12 @@ function SearchView({ onManage }: { onManage: () => void }) {
 
       <div className="flex items-center gap-2">
         <GlassInput
+          // The shared input ships `w-full`, which in this flex line makes it
+          // claim the whole row and squeezes the button beside it. `flex-1
+          // min-w-0` is the canonical flex child: it fills the space that is
+          // left over and can shrink below its content, leaving the button its
+          // natural width. (`SourcePicker` above already works this way.)
+          className="min-w-0 flex-1"
           value={keyword}
           onChange={(event) => setKeyword(event.target.value)}
           onKeyDown={(event) => {

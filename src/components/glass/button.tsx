@@ -53,7 +53,13 @@ export const GlassButton = forwardRef<HTMLButtonElement, GlassButtonProps>(funct
       whileTap={disabled || m.reduce ? undefined : { scale: 0.94 }}
       transition={m.tap}
       className={cn(
-        "inline-flex items-center justify-center gap-2 border font-medium",
+        // `whitespace-nowrap` is load-bearing, not cosmetic: a button sits in a
+        // flex line next to a `GlassInput` (or a `w-full` sibling), and without
+        // it a squeezed button breaks its CJK label onto stacked lines — `h-*`
+        // pins the height, so it reads as deformed rather than merely small.
+        // `nowrap` also makes min-content == full label width, so `min-width:
+        // auto` stops the flex squeeze from ever getting that far.
+        "inline-flex items-center justify-center gap-2 border font-medium whitespace-nowrap",
         "focus-visible:focus-ring transition-colors disabled:pointer-events-none disabled:opacity-50",
         VARIANT[variant],
         SIZE[size],
