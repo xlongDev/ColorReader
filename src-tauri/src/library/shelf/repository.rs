@@ -487,12 +487,48 @@ pub fn delete(conn: &Connection, id: &str) -> AppResult<DeletedFiles> {
 /// per id meant one transaction, and one fsync, per book. All or nothing: an
 /// unknown id fails the batch and `with_tx` rolls the earlier deletes back,
 /// rather than leaving the shelf half-deleted.
-pub fn delete_many(tx: &Transaction<'_>, ids: &[String]) -> AppResult<Vec<DeletedFiles>> {
+///
+/// `on_progress` fires once per book, inside the transaction — before the
+/// commit. That is the only place the per-book work happens, so it is the only
+/// place a count can come from; the caller pre-checks every id
+/// ([`ensure_existing`]) so a rollback after a reported book is not reachable
+/// through the shelf's own ids.
+pub fn delete_many(
+    tx: &Transaction<'_>,
+    ids: &[String],
+    on_progress: &mut dyn FnMut(usize, usize, &str),
+) -> AppResult<Vec<DeletedFiles>> {
     let mut files = Vec::with_capacity(ids.len());
-    for id in ids {
-        files.push(delete_one(tx, id)?);
+    for (index, id) in ids.iter().enumerate() {
+        let deleted = delete_one(tx, id)?;
+        let path = deleted.book.as_deref().map(|p| p.to_string_lossy()).unwrap_or_default();
+        on_progress(index + 1, ids.len(), &path);
+        files.push(deleted);
     }
     Ok(files)
+}
+
+/// Fails with `NotFound` unless every id is on the shelf.
+///
+/// One `IN` query rather than a failure half-way through the batch's
+/// transaction: `delete_many` reports progress as it goes, and a batch that
+/// starts deleting and then rolls back would have shown the reader books as
+/// deleted that are all still there. Pre-flighting keeps the all-or-nothing
+/// guarantee and the progress honest at the cost of one indexed lookup.
+pub fn ensure_existing(conn: &Connection, ids: &[String]) -> AppResult<()> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let placeholders = std::iter::repeat_n("?", ids.len()).collect::<Vec<_>>().join(", ");
+    let sql = format!("SELECT id FROM books WHERE id IN ({placeholders})");
+    let found = conn
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(ids), |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<std::collections::HashSet<String>>>()?;
+    if let Some(missing) = ids.iter().find(|id| !found.contains(*id)) {
+        return Err(AppError::NotFound(missing.clone()));
+    }
+    Ok(())
 }
 
 /// Returns the id of the book holding this content hash, if any.
@@ -936,10 +972,15 @@ mod tests {
         add(&conn, "b2", "Dune", &[], "h2");
         add(&conn, "b3", "留下", &[], "h3");
 
+        let mut seen: Vec<(usize, usize)> = Vec::new();
         let tx = conn.unchecked_transaction().expect("transaction");
-        let files = delete_many(&tx, &["b1".into(), "b2".into()]).expect("delete many");
+        let files = delete_many(&tx, &["b1".into(), "b2".into()], &mut |done, total, _| {
+            seen.push((done, total));
+        })
+        .expect("delete many");
         tx.commit().expect("commit");
 
+        assert_eq!(seen, [(1, 2), (2, 2)]);
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].book.as_deref(), Some(Path::new("/books/b1.epub")));
         assert!(find_by_hash(&conn, "h1").expect("query").is_none());
@@ -958,12 +999,27 @@ mod tests {
         add(&conn, "b2", "Dune", &[], "h2");
 
         let tx = conn.unchecked_transaction().expect("transaction");
-        let outcome = delete_many(&tx, &["b1".into(), "nope".into(), "b2".into()]);
+        let outcome =
+            delete_many(&tx, &["b1".into(), "nope".into(), "b2".into()], &mut |_, _, _| {});
         assert!(matches!(outcome, Err(AppError::NotFound(_))));
         drop(tx);
 
         assert!(find_by_hash(&conn, "h1").expect("query").is_some());
         assert!(find_by_hash(&conn, "h2").expect("query").is_some());
+    }
+
+    /// The pre-flight that keeps reported progress honest: it fails before
+    /// `delete_many` deletes anything, naming the first id the shelf does not
+    /// have — the same error the batch itself would have produced.
+    #[test]
+    fn the_pre_flight_names_the_first_missing_id() {
+        let conn = seed();
+        add(&conn, "b1", "三体", &[], "h1");
+
+        assert!(ensure_existing(&conn, &["b1".into()]).is_ok());
+        assert!(ensure_existing(&conn, &[]).is_ok());
+        let missing = ensure_existing(&conn, &["b1".into(), "gone".into()]);
+        assert!(matches!(missing, Err(AppError::NotFound(id)) if id == "gone"));
     }
 
     #[test]

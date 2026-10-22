@@ -1,4 +1,4 @@
-//! ColorReader application entry point.
+//! 方册 application entry point.
 
 mod ai;
 mod commands;
@@ -25,13 +25,13 @@ use crate::state::AppState;
 
 /// Boot the desktop shell.
 ///
-/// Logging goes through `tracing`; set `RUST_LOG=colorreader=debug` to raise the level.
+/// Logging goes through `tracing`; set `RUST_LOG=fangce=debug` to raise the level.
 /// Production builds default to `info`.
 pub fn run() -> tauri::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("colorreader=info")),
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("fangce=info")),
         )
         .init();
 
@@ -41,7 +41,7 @@ pub fn run() -> tauri::Result<()> {
     let builder = tauri::Builder::default();
     // Registered first, and that is not decoration: this plugin decides inside
     // its own setup whether this process is the one that lives. Windows and
-    // Linux deliver a `colorreader://` link by starting the app *again* with
+    // Linux deliver a `fangce://` link by starting the app *again* with
     // the URL as its only argument, so the second launch must hand its argv to
     // the instance already running and quit. The `deep-link` feature is what
     // makes that handoff speak the plugin's own event, so `AppShell` follows a
@@ -52,7 +52,7 @@ pub fn run() -> tauri::Result<()> {
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
         // Worth a line at debug level: on the platforms this runs on, "the
         // link did nothing" is otherwise indistinguishable from "the second
-        // launch never reached us", and `RUST_LOG=colorreader=debug` is how
+        // launch never reached us", and `RUST_LOG=fangce=debug` is how
         // that gets separated on a real machine.
         tracing::debug!(?argv, "another launch handed its arguments over");
         // The link itself was dealt with above us. What is left is surfacing
@@ -66,13 +66,17 @@ pub fn run() -> tauri::Result<()> {
     let builder = builder
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        // Answers `colorreader://book/<id>?annotation=<id>` — the links the
+        // Answers `fangce://book/<id>?annotation=<id>` — the links the
         // notes export writes. macOS delivers them through `RunEvent::Opened`,
         // which the plugin turns into a `deep-link://new-url` event; the shell
         // is already running by then (or was launched for it) and follows it
         // from `AppShell`. On Windows and Linux the plugin reads them off its
         // own argv at startup, and the single-instance plugin above feeds it
         // the argv of every later launch.
+        //
+        // The scheme the plugin answers is the one string in `tauri.conf.json`'s
+        // `deep-link.desktop.schemes`; the front end parses the same one
+        // (`src/lib/deeplink.ts`).
         .plugin(tauri_plugin_deep_link::init())
         // Auto-update. The manifest comes from GitHub Releases (`latest.json`),
         // and the artifact is verified against the minisign public key pinned in
@@ -286,7 +290,7 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     let prev = MenuItem::with_id(app, "prev", "上一句", true, None::<&str>)?;
     let next = MenuItem::with_id(app, "next", "下一句", true, None::<&str>)?;
     let stop = MenuItem::with_id(app, "stop", "停止朗读", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出 ColorReader", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "退出 方册", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
         &[&show, &toggle, &prev, &next, &stop, &PredefinedMenuItem::separator(app)?, &quit],
@@ -297,10 +301,10 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     // five reading lines as a mask (`pnpm icons`).
     let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/trayTemplate.png"))?;
 
-    TrayIconBuilder::with_id("colorreader")
+    TrayIconBuilder::with_id("fangce")
         .icon(icon)
         .icon_as_template(true)
-        .tooltip("ColorReader")
+        .tooltip("方册")
         .menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
@@ -426,6 +430,7 @@ mod specta_bindings {
             // are not reachable from `collect_commands!` and have to be named
             // here or the frontend would have to hand-write them again.
             .typ::<commands::book::ImportProgress>()
+            .typ::<commands::book::DeleteProgress>()
             .typ::<commands::ai::AiDelta>()
             .typ::<commands::rag::RagProgress>()
             .typ::<commands::graph::GraphProgress>()

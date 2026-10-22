@@ -48,15 +48,30 @@ import {
  * input hands over `File`s, so that is what this takes. A file already on the
  * shelf is reported as a duplicate rather than stored twice — title and size
  * together are the cheap stand-in for the content hash the desktop uses.
+ *
+ * `onProgress` fires once per file, whatever its outcome, and each call means
+ * "the shelf's state just changed" — the desktop answers the same question
+ * with its `book://import-progress` event, which exists because there is no
+ * event channel out here. The shelf's caller coalesces the burst into one
+ * refetch per quiet stretch.
  */
-export async function bookImportFiles(files: File[]): Promise<ImportOutcome[]> {
+export async function bookImportFiles(
+  files: File[],
+  onProgress?: () => void,
+): Promise<ImportOutcome[]> {
   // The shelf is read once and kept up to date as rows go in, so two copies of
   // the same file in one batch cannot both land. Imports run in parallel — each
   // one is mostly parsing — and the shelf's own duplicate test is the cheap
   // stand-in for the content hash the desktop uses.
   const shelf = await db.all<StoredBook>("books");
   const seen = new Set(shelf.map((book) => `${book.title}\u0000${book.fileSize}`));
-  return Promise.all(files.map((file) => importOne(file, seen)));
+  return Promise.all(
+    files.map(async (file) => {
+      const outcome = await importOne(file, seen);
+      onProgress?.();
+      return outcome;
+    }),
+  );
 }
 
 async function importOne(file: File, seen: Set<string>): Promise<ImportOutcome> {
@@ -238,37 +253,105 @@ export async function bookGet(id: string): Promise<BookSummary | null> {
   return row ? summaryOf(row) : null;
 }
 
-export async function bookDelete(id: string): Promise<void> {
-  await db.del("books", id);
-  await db.del("files", id);
-  await db.del("files", `${id}:cover`);
+/** Everything a delete needs to know about a book's rows in the other stores.
+ *
+ * Read once for the whole batch, never once per book: the stores carry no index
+ * on `bookId` — `lib/local/db.ts` has no indexes at all — so finding a book's
+ * annotations means reading the store. Doing that per book made a batch
+ * quadratic in the size of the library: fifty books out of a shelf holding ten
+ * thousand highlights read those ten thousand rows fifty times, and every one
+ * of those full reads deserializes on the main thread, which is what "the page
+ * froze" looked like from the outside.
+ */
+interface DeleteContext {
+  /** Chapter keys per book id. A chapter key is `<bookId>:<idx>` and a book id
+   *  is a UUID, which contains no colon — so the split at the first colon is
+   *  exact, and no book's chapters can be mistaken for another's. */
+  chapters: Map<string, string[]>;
+  annotations: Map<string, string[]>;
+  bookmarks: Map<string, string[]>;
+}
+
+async function loadDeleteContext(ids: readonly string[]): Promise<DeleteContext> {
+  const wanted = new Set(ids);
+  const [chapterKeys, annotations, bookmarks] = await Promise.all([
+    db.keys("chapters"),
+    db.all<Annotation>("annotations"),
+    db.all<Bookmark>("bookmarks"),
+  ]);
+
+  const chapters = new Map<string, string[]>();
+  for (const key of chapterKeys) {
+    const colon = key.indexOf(":");
+    // A key with no colon is not a chapter row any writer of this store has
+    // ever made; it belongs to no book, exactly as the old `startsWith` test
+    // would have left it.
+    if (colon < 0) continue;
+    const bookId = key.slice(0, colon);
+    if (!wanted.has(bookId)) continue;
+    const bucket = chapters.get(bookId);
+    if (bucket) bucket.push(key);
+    else chapters.set(bookId, [key]);
+  }
+  const marks = <T extends { id: string; bookId: string }>(rows: T[]) => {
+    const grouped = new Map<string, string[]>();
+    for (const row of rows) {
+      if (!wanted.has(row.bookId)) continue;
+      const bucket = grouped.get(row.bookId);
+      if (bucket) bucket.push(row.id);
+      else grouped.set(row.bookId, [row.id]);
+    }
+    return grouped;
+  };
+
+  return { chapters, annotations: marks(annotations), bookmarks: marks(bookmarks) };
+}
+
+/** Takes one book off the shelf: its row, its bytes, its cover, and the
+ *  chapters, highlights and bookmarks hanging off it. Each store loses its
+ *  rows in one transaction rather than one transaction per row. */
+async function deleteOneBook(id: string, context: DeleteContext): Promise<void> {
+  await Promise.all([
+    db.del("books", id),
+    db.del("files", id),
+    db.del("files", `${id}:cover`),
+    db.delMany("chapters", context.chapters.get(id) ?? []),
+    db.delMany("annotations", context.annotations.get(id) ?? []),
+    db.delMany("bookmarks", context.bookmarks.get(id) ?? []),
+  ]);
   const url = coverUrls.get(id);
   if (url) {
     URL.revokeObjectURL(url);
     coverUrls.delete(id);
   }
-  const chapters = (await db.keys("chapters")).filter((key) => key.startsWith(`${id}:`));
-  const annotations = (await db.all<Annotation>("annotations")).filter((row) => row.bookId === id);
-  const bookmarks = (await db.all<Bookmark>("bookmarks")).filter((row) => row.bookId === id);
-  await Promise.all([
-    ...chapters.map((key) => db.del("chapters", key)),
-    ...annotations.map((row) => db.del("annotations", row.id)),
-    ...bookmarks.map((row) => db.del("bookmarks", row.id)),
-  ]);
 }
 
-export async function bookSetFavorite(id: string, favorite: boolean): Promise<void> {
-  await patchBook(id, { favorite });
+export async function bookDelete(id: string): Promise<void> {
+  const context = await loadDeleteContext([id]);
+  await deleteOneBook(id, context);
 }
 
 /** The shelf's batch bar, on this side.
  *
- * One `bookDelete` / `bookSetFavorite` per id: this backend keeps its rows in
- * separate object stores, so there is no cross-store transaction to put the
- * batch in. That is the honest limit of the browser build, and the reason the
- * desktop side gets a real one. */
+ * One `bookDelete` per id was one full scan of three stores per book, and one
+ * transaction per row: a batch of fifty books out of a large library spent
+ * minutes re-reading rows it had already read, with the shelf showing nothing
+ * the whole time. The batch now reads the library once, groups it in memory,
+ * and deletes each book's rows in a transaction per store — the books
+ * themselves in parallel.
+ *
+ * Still not atomic: this backend keeps its rows in separate object stores, so
+ * there is no cross-store transaction to put the batch in. That is the honest
+ * limit of the browser build, and the reason the desktop side gets a real one.
+ */
 export async function bookDeleteMany(ids: string[]): Promise<void> {
-  for (const id of ids) await bookDelete(id);
+  if (ids.length === 0) return;
+  const context = await loadDeleteContext(ids);
+  await Promise.all(ids.map((id) => deleteOneBook(id, context)));
+}
+
+export async function bookSetFavorite(id: string, favorite: boolean): Promise<void> {
+  await patchBook(id, { favorite });
 }
 
 export async function bookSetFavoriteMany(ids: string[], favorite: boolean): Promise<void> {

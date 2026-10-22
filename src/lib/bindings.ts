@@ -157,6 +157,10 @@ export const commands = {
    *  window. One bad file never aborts the batch; each outcome is returned so the
    *  UI can summarise what happened.
    *
+   *  The batch is hashed, parsed and copied four files at a time (see
+   *  [`import::import_files`]); the whole run still lives on one blocking task, so
+   *  the UI thread never waits on it.
+   *
    *  `password` only matters to `.ctzx` packs. It travels as an argument rather
    *  than in a prompt callback so the whole batch runs on one blocking task.
    */
@@ -206,6 +210,11 @@ export const commands = {
    *  book: twenty books meant twenty transactions, and twenty book-list
    *  invalidations on the frontend. All or nothing, so a stale id cannot leave
    *  the shelf half-deleted.
+   *
+   *  Emits [`DELETE_PROGRESS_EVENT`] once per book, so the shelf can count a long
+   *  batch down instead of watching a disabled bar. `book.delete` — one book —
+   *  emits nothing: a counter reading 1/1 is noise, and its dialog already has a
+   *  pending state on the confirm button.
    */
   bookDeleteMany: (ids: string[]) => __TAURI_INVOKE<null>("book_delete_many", { ids }),
   /**  `book.setFavorite` */
@@ -845,6 +854,18 @@ export type DayTotal = {
   seconds: number;
 };
 
+/**
+ *  Progress payload for [`DELETE_PROGRESS_EVENT`]. `path` is the source file of
+ *  the book whose rows just went — the same field import reports, and for the
+ *  same reason: the count is what the shelf draws, the path is what a log line
+ *  or a future summary can use.
+ */
+export type DeleteProgress = {
+  done: number;
+  total: number;
+  path: string;
+};
+
 /**  One imported dictionary, as the settings document and the UI hold it. */
 export type Dictionary = {
   id: string;
@@ -1294,7 +1315,7 @@ export type SourceProgress = {
 
 /**  Where the state document lives and how to sign in. */
 export type SyncConfig = {
-  /**  WebDAV collection, e.g. `https://dav.example.com/dav/ColorReader`. */
+  /**  WebDAV collection, e.g. `https://dav.example.com/dav/方册`. */
   url: string;
   /**  Empty means the server needs no authentication. */
   username?: string;

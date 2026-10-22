@@ -460,6 +460,54 @@ CREATE TABLE bookmark_tombstones (
 ALTER TABLE books ADD COLUMN chapters_pending INTEGER NOT NULL DEFAULT 0;
 "#,
     },
+    Migration {
+        version: 17,
+        name: "reading_sessions_book",
+        // The index the delete cascade was missing.
+        //
+        // Every other child table leads its index with `book_id`, so deleting a
+        // book searches its children by key. `reading_sessions` did not: its
+        // unique index leads with `day`, and its second index leads with `day`
+        // too — so the cascade that removes a book's reading history scanned the
+        // whole table once per deleted book. A batch of fifty books scanned it
+        // fifty times, on a table that grows one row per (day, book) forever.
+        //
+        // Measured on the child statement the cascade runs
+        // (`EXPLAIN QUERY PLAN DELETE FROM reading_sessions WHERE book_id = ?`):
+        // SCAN without this index, SEARCH USING INDEX with it.
+        sql: r#"
+CREATE INDEX reading_sessions_book ON reading_sessions (book_id);
+"#,
+    },
+    Migration {
+        version: 18,
+        name: "drop_chapters_fts",
+        // The trigram index is gone: search scans `chapters` instead.
+        //
+        // Measured on a real 194-book shelf (83 M characters of Chinese, the
+        // numbers are in `retrieval/search.rs` and ARCHITECTURE.md): the index
+        // was 1.12 GB — 4.6× the text it indexed, 78% of the entire database —
+        // and every import and every delete paid to maintain it. A 5.5 M-char
+        // book cost 3.7 s to index and 3.3 s to un-index, against 93 ms and
+        // 4 ms for the same rows without it. The `ad` trigger is what made
+        // deletion slow: an FTS5 external-content delete has to re-tokenize the
+        // whole chapter to find the postings it is removing.
+        //
+        // `trigram` was chosen for CJK substring matching (the default
+        // `unicode61` treats a run of Han characters as one token, so 世界
+        // never matched inside 你好世界), and it did that job — but a scan does
+        // it in 150 ms across the whole library, which is a price worth paying
+        // once per search rather than once per book.
+        //
+        // Dropping the table frees its pages to the freelist, not to the file:
+        // `Library::open` compacts when it finds a freelist worth compacting.
+        sql: r#"
+DROP TRIGGER IF EXISTS chapters_fts_ai;
+DROP TRIGGER IF EXISTS chapters_fts_ad;
+DROP TRIGGER IF EXISTS chapters_fts_au;
+DROP TABLE IF EXISTS chapters_fts;
+"#,
+    },
 ];
 
 /// Applies every pending migration and returns the resulting schema version.
@@ -619,6 +667,49 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM book_authors", [], |row| row.get(0))
             .expect("count");
         assert_eq!(left, 0, "外键级联没有生效");
+    }
+
+    /// The v17 index, pinned two ways: the history really goes with the book,
+    /// and the statement the cascade runs against the child table searches
+    /// rather than scans. `EXPLAIN QUERY PLAN` on the parent `DELETE` does not
+    /// show the cascade's own plan (verified), so the plan is read off the
+    /// child-keyed delete the cascade performs.
+    #[test]
+    fn deleting_a_book_cascades_to_its_reading_history_by_index() {
+        let mut conn = fresh();
+        migrate(&mut conn).expect("migrate");
+        conn.execute(
+            "INSERT INTO books (id, title, sort_title, format, content_hash, file_path, file_size, \
+             added_at, updated_at) VALUES ('b', 'T', 't', 'epub', 'h', 'p', 1, 1, 1)",
+            [],
+        )
+        .expect("insert book");
+        conn.execute(
+            "INSERT INTO reading_sessions (day, book_id, seconds) VALUES ('2026-10-22', 'b', 60)",
+            [],
+        )
+        .expect("insert session");
+
+        // EQP answers four columns — (id, parent, notused, detail) — and the
+        // plan text is the last one.
+        let plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN DELETE FROM reading_sessions WHERE book_id = 'b'",
+                [],
+                |row| row.get(3),
+            )
+            .expect("plan");
+        assert!(
+            plan.contains("reading_sessions_book"),
+            "级联删阅读历史必须走 book_id 索引，实际计划：{plan}"
+        );
+
+        conn.execute("DELETE FROM books WHERE id = 'b'", []).expect("delete");
+
+        let left: i64 = conn
+            .query_row("SELECT COUNT(*) FROM reading_sessions", [], |row| row.get(0))
+            .expect("count");
+        assert_eq!(left, 0, "阅读历史必须随书一起删除");
     }
 
     #[test]

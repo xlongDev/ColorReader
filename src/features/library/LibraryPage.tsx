@@ -10,11 +10,12 @@ import {
   useState,
 } from "react";
 import { useNavigate } from "react-router-dom";
-import { motion } from "motion/react";
-import { Upload } from "@phosphor-icons/react";
+import { AnimatePresence, motion } from "motion/react";
+import { Trash, Upload } from "@phosphor-icons/react";
 
 import { OverlayPortal } from "@/components/glass/overlay";
 import { ContinueReadingCard } from "@/features/library/ContinueReadingCard";
+import { DropImportOverlay } from "@/features/library/DropImportOverlay";
 import { ImportSummary } from "@/features/library/ImportSummary";
 import { pickBookFiles, pickPaths } from "@/features/library/importFiles";
 import { ShelfBatchBar } from "@/features/library/ShelfBatchBar";
@@ -40,11 +41,13 @@ import {
   useBooks,
   useDeleteBook,
   useDeleteBooks,
+  useDeleteProgress,
   useExportBookFile,
   useExportPack,
   useImportBooks,
   useImportFiles,
   useImportProgress,
+  useImportShelfSync,
   useLibraryStats,
   usePdfCovers,
   useSetFavorite,
@@ -53,7 +56,7 @@ import {
 } from "@/hooks/useLibrary";
 import { useMigrateEdition } from "@/hooks/useMigrateEdition";
 import { showToast } from "@/stores/toasts";
-import { DURATION, useMotion } from "@/lib/motion";
+import { useMotion } from "@/lib/motion";
 import { isDesktopRuntime } from "@/lib/ipc";
 import { useBookHandoff } from "@/stores/book-handoff";
 import { useSettings, type ShelfView } from "@/stores/settings";
@@ -259,6 +262,11 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
   const deleteBooks = useDeleteBooks();
   const updateBook = useUpdateBook();
   const progress = useImportProgress();
+  const deleteProgress = useDeleteProgress();
+  // Each book shows up as it lands; without this the shelf waits for the
+  // whole batch, which on 75 books is most of a minute of a shelf that has
+  // not changed.
+  useImportShelfSync();
   usePdfCovers(books.data ?? []);
 
   const list = useMemo(
@@ -553,26 +561,7 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
         </Suspense>
       )}
 
-      {(dragging || dropping) && (
-        <OverlayPortal>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ duration: m.reduce ? 0 : DURATION.base }}
-            className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-black/30"
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: m.reduce ? 1 : 0.94 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={m.panel}
-              className="glass-2 shadow-panel text-text-1 flex items-center gap-3 rounded-2xl px-6 py-5"
-            >
-              <Upload size={20} weight="duotone" />
-              <span className="text-sm font-medium">松开手指即可导入</span>
-            </motion.div>
-          </motion.div>
-        </OverlayPortal>
-      )}
+      <AnimatePresence>{(dragging || dropping) && <DropImportOverlay />}</AnimatePresence>
 
       {picking && progress && (
         <OverlayPortal>
@@ -585,6 +574,29 @@ export function LibraryPage({ filter }: { filter: LibraryFilter }) {
             <Upload size={16} className="text-accent" />
             <span className="text-sm">
               正在导入 {progress.done}/{progress.total}
+            </span>
+          </motion.div>
+        </OverlayPortal>
+      )}
+
+      {/* A batch delete with books in it is seconds of work on a big shelf —
+          enough that a disabled bar and a shelf that has not changed yet reads
+          as a frozen page. The count comes from `book://delete-progress`, one
+          event per book, the same contract import uses. A one-book delete is
+          excluded: a counter reading 1/1 is noise, and its dialog already
+          shows a pending state on the confirm button. */}
+      {deleteBooks.isPending && deleteProgress && deleteProgress.total > 1 && (
+        <OverlayPortal>
+          <motion.div
+            initial={{ opacity: 0, y: m.reduce ? 0 : 12 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={m.panel}
+            className="glass-2 shadow-panel text-text-1 fixed right-6 bottom-6 z-40 flex items-center gap-3 rounded-2xl px-5 py-4"
+            data-delete-progress
+          >
+            <Trash size={16} className="text-danger" />
+            <span className="text-sm">
+              正在删除 {deleteProgress.done}/{deleteProgress.total}
             </span>
           </motion.div>
         </OverlayPortal>

@@ -10,6 +10,7 @@ import type { BackupSummary, Outcome, SecretsStatus } from "@/lib/bindings";
 import type {
   AiDelta,
   BarFace,
+  DeleteProgress,
   GraphProgress,
   ImportOutcome,
   ImportProgress,
@@ -102,8 +103,10 @@ type LocalCommands = Pick<
   typeof commands,
   Exclude<(typeof LOCAL_COMMANDS)[number], "bookAsset" | "bookFile" | "bookImportFiles">
 > & {
-  /** Browser-only: the desktop imports by path instead. */
-  bookImportFiles: (files: File[]) => Promise<ImportOutcome[]>;
+  /** Browser-only: the desktop imports by path instead. `onProgress` fires
+   *  once per file, the browser's stand-in for the desktop's
+   *  `book://import-progress` event — there is no event channel out here. */
+  bookImportFiles: (files: File[], onProgress?: () => void) => Promise<ImportOutcome[]>;
 };
 
 const local: Partial<Record<keyof LocalCommands, (...args: never[]) => unknown>> = isDesktopRuntime
@@ -279,12 +282,16 @@ export const ipc = {
    * Imports files the *browser* picked. The desktop takes paths from its native
    * dialog instead (`bookImport`); this exists so the shelf's import button has
    * one shape to call in both builds.
+   *
+   * `onProgress` fires once per file — the browser's stand-in for the
+   * desktop's `book://import-progress` event, which exists because there is
+   * no event channel out here.
    */
-  bookImportFiles(files: File[]) {
+  bookImportFiles(files: File[], onProgress?: () => void) {
     if (isDesktopRuntime) {
       throw new Error("桌面端走 bookImport（路径），这里是浏览器端的入口");
     }
-    return fromLocal("bookImportFiles")(files) as Promise<ImportOutcome[]>;
+    return fromLocal("bookImportFiles")(files, onProgress) as Promise<ImportOutcome[]>;
   },
 
   /**
@@ -303,6 +310,9 @@ export const ipc = {
 
 /** Event the backend emits once per file while an import batch runs. */
 const IMPORT_PROGRESS_EVENT = "book://import-progress";
+
+/** Event the backend emits once per book while a batch delete runs. */
+const DELETE_PROGRESS_EVENT = "book://delete-progress";
 
 /** Event carrying streamed AI answer chunks. */
 const AI_STREAM_EVENT = "ai://stream";
@@ -372,6 +382,18 @@ export async function onImportProgress(
 ): Promise<UnlistenFn | undefined> {
   if (!isTauri()) return undefined;
   return listen<ImportProgress>(IMPORT_PROGRESS_EVENT, (event) => handler(event.payload));
+}
+
+/** Subscribes to backend batch-delete progress; no-op outside the Tauri shell.
+ *
+ *  Same contract as `onImportProgress`, and deliberately so: the browser
+ *  build deletes from IndexedDB on this thread, where a per-book event would
+ *  be the work announcing itself. */
+export async function onDeleteProgress(
+  handler: (progress: DeleteProgress) => void,
+): Promise<UnlistenFn | undefined> {
+  if (!isTauri()) return undefined;
+  return listen<DeleteProgress>(DELETE_PROGRESS_EVENT, (event) => handler(event.payload));
 }
 
 /** Subscribes to streamed AI chunks; no-op outside the Tauri shell. */

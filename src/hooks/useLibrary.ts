@@ -1,11 +1,17 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { ipc, isDesktopRuntime, onImportProgress } from "@/lib/ipc";
+import { ipc, isDesktopRuntime, onDeleteProgress, onImportProgress } from "@/lib/ipc";
 import { demoBooks, demoEnabled, demoLibraryStats } from "@/lib/demo";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { renderFirstPagePng } from "@/lib/pdf";
-import type { BookMetadataPatch, BookQuery, BookSummary, ImportProgress } from "@/types/ipc";
+import type {
+  BookMetadataPatch,
+  BookQuery,
+  BookSummary,
+  DeleteProgress,
+  ImportProgress,
+} from "@/types/ipc";
 
 /** Shelf contents for one filter/sort/search combination. */
 export function useBooks(query: BookQuery) {
@@ -102,11 +108,16 @@ export function useImportBooks() {
 }
 
 /** Imports files the browser picked, and refreshes the shelf when done. Same
- *  outcomes as `useImportBooks`, so the sheet that reports them is shared. */
+ *  outcomes as `useImportBooks`, so the sheet that reports them is shared.
+ *
+ *  `onProgress` is the browser build's stand-in for the desktop's
+ *  `book://import-progress` event: one call per file, so the shelf shows each
+ *  book as it lands instead of the whole batch arriving at the end. */
 export function useImportFiles() {
   const invalidate = useInvalidateShelf();
+  const refetch = useShelfRefetch();
   return useMutation({
-    mutationFn: (files: File[]) => ipc.bookImportFiles(files),
+    mutationFn: (files: File[]) => ipc.bookImportFiles(files, refetch),
     onSettled: invalidate,
   });
 }
@@ -142,7 +153,9 @@ export function useDeleteBook() {
 /** Deletes a whole selection in one transaction, for the shelf's batch bar.
  *
  * The per-id version refreshed the book list once per book — twenty books
- * meant twenty IPC round trips and twenty invalidations of the same query. */
+ * meant twenty IPC round trips and twenty invalidations of the same query.
+ * While the batch runs, `book://delete-progress` counts it down — see
+ * [`useDeleteProgress`]. */
 export function useDeleteBooks() {
   const invalidate = useInvalidateShelf();
   return useMutation({
@@ -197,4 +210,58 @@ export function useImportProgress(): ImportProgress | null {
   useTauriEvent(onImportProgress, setProgress);
 
   return progress;
+}
+
+/** Live batch-delete progress from the backend. Same shape of contract as
+ * [`useImportProgress`]: `null` between batches, and the last count of a
+ * finished batch stays readable until the next one starts — which is why the
+ * toast that draws it is gated on the mutation being in flight. */
+export function useDeleteProgress(): DeleteProgress | null {
+  const [progress, setProgress] = useState<DeleteProgress | null>(null);
+
+  useTauriEvent(onDeleteProgress, setProgress);
+
+  return progress;
+}
+
+/** How long a burst of import progress is coalesced into one shelf refetch.
+ *
+ * A 75-book import emits 75 events; refetching the whole book list 75 times is
+ * the cost the batch bar's single invalidation was built to avoid. One refetch
+ * per quiet stretch keeps the shelf current — a book that lands shows up on
+ * its own — while everything inside the window costs a single fetch. The call
+ * trails, so the last book of a batch is never stranded inside the window. */
+const SHELF_SYNC_MS = 400;
+
+/** A shelf refetch that coalesces bursts — see [`SHELF_SYNC_MS`]. Stable, and
+ *  it drops its pending timer when the caller unmounts. */
+function useShelfRefetch(): () => void {
+  const queryClient = useQueryClient();
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (timer.current !== null) clearTimeout(timer.current);
+    },
+    [],
+  );
+  return useCallback(() => {
+    if (timer.current !== null) return;
+    timer.current = setTimeout(() => {
+      timer.current = null;
+      void queryClient.invalidateQueries({ queryKey: ["books"] });
+    }, SHELF_SYNC_MS);
+  }, [queryClient]);
+}
+
+/** Keeps the shelf current while an import batch runs, so each book appears as
+ *  it lands rather than the whole batch arriving at the end.
+ *
+ *  The desktop emits one `book://import-progress` per file, *after* that
+ *  file's transaction commits — so a refetch at that moment sees the book.
+ *  The browser build has no event channel (see `onImportProgress`); its twin
+ *  reports through the callback `bookImportFiles` takes instead, wired in
+ *  [`useImportFiles`]. */
+export function useImportShelfSync(): void {
+  const refetch = useShelfRefetch();
+  useTauriEvent(onImportProgress, refetch);
 }

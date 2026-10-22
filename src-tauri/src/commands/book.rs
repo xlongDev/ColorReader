@@ -20,6 +20,10 @@ use crate::state::AppState;
 /// Emitted once per file while an import batch runs.
 pub const IMPORT_PROGRESS_EVENT: &str = "book://import-progress";
 
+/// Emitted once per book while a batch delete runs. Same shape and purpose as
+/// [`IMPORT_PROGRESS_EVENT`]: a long batch is a counter, not a frozen shelf.
+pub const DELETE_PROGRESS_EVENT: &str = "book://delete-progress";
+
 /// `book.list`
 #[tauri::command]
 #[specta::specta]
@@ -175,6 +179,10 @@ pub async fn book_cover_save(
 /// window. One bad file never aborts the batch; each outcome is returned so the
 /// UI can summarise what happened.
 ///
+/// The batch is hashed, parsed and copied four files at a time (see
+/// [`import::import_files`]); the whole run still lives on one blocking task, so
+/// the UI thread never waits on it.
+///
 /// `password` only matters to `.ctzx` packs. It travels as an argument rather
 /// than in a prompt callback so the whole batch runs on one blocking task.
 #[tauri::command]
@@ -195,7 +203,7 @@ pub async fn book_import(
             &layout,
             &targets,
             password.as_deref(),
-            &mut |done, total, path| {
+            &|done, total, path| {
                 // A closed window simply stops listening; losing the event is fine.
                 let _ = app.emit(
                     IMPORT_PROGRESS_EVENT,
@@ -325,13 +333,30 @@ pub async fn book_delete(state: State<'_, AppState>, id: String) -> AppResult<()
 /// book: twenty books meant twenty transactions, and twenty book-list
 /// invalidations on the frontend. All or nothing, so a stale id cannot leave
 /// the shelf half-deleted.
+///
+/// Emits [`DELETE_PROGRESS_EVENT`] once per book, so the shelf can count a long
+/// batch down instead of watching a disabled bar. `book.delete` — one book —
+/// emits nothing: a counter reading 1/1 is noise, and its dialog already has a
+/// pending state on the confirm button.
 #[tauri::command]
 #[specta::specta]
-pub async fn book_delete_many(state: State<'_, AppState>, ids: Vec<String>) -> AppResult<()> {
+pub async fn book_delete_many(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<String>,
+) -> AppResult<()> {
     let library = state.library.clone();
-    tauri::async_runtime::spawn_blocking(move || library::delete_books(&library, &ids))
-        .await
-        .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
+    tauri::async_runtime::spawn_blocking(move || {
+        library::delete_books(&library, &ids, &mut |done, total, path| {
+            // A closed window simply stops listening; losing the event is fine.
+            let _ = app.emit(
+                DELETE_PROGRESS_EVENT,
+                DeleteProgress { done, total, path: path.to_string() },
+            );
+        })
+    })
+    .await
+    .map_err(|err| AppError::Message(format!("删除任务被中断：{err}")))?
 }
 
 /// `book.setFavorite`
@@ -376,6 +401,18 @@ pub struct ImportProgress {
     pub path: String,
 }
 
+/// Progress payload for [`DELETE_PROGRESS_EVENT`]. `path` is the source file of
+/// the book whose rows just went — the same field import reports, and for the
+/// same reason: the count is what the shelf draws, the path is what a log line
+/// or a future summary can use.
+#[derive(specta::Type, Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteProgress {
+    pub done: usize,
+    pub total: usize,
+    pub path: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -396,5 +433,20 @@ mod tests {
     #[test]
     fn progress_event_is_namespaced() {
         assert!(IMPORT_PROGRESS_EVENT.starts_with("book://"));
+        assert!(DELETE_PROGRESS_EVENT.starts_with("book://"));
+        assert_ne!(IMPORT_PROGRESS_EVENT, DELETE_PROGRESS_EVENT);
+    }
+
+    #[test]
+    fn delete_progress_payload_is_camel_case() {
+        let value = serde_json::to_value(DeleteProgress {
+            done: 3,
+            total: 12,
+            path: "/books/b.epub".into(),
+        })
+        .expect("payload must serialize");
+        assert_eq!(value["done"], 3);
+        assert_eq!(value["total"], 12);
+        assert_eq!(value["path"], "/books/b.epub");
     }
 }

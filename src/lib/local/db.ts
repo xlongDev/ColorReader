@@ -43,7 +43,7 @@ const STORES: StoreName[] = [
   "meta",
 ];
 
-const NAME = "colorreader";
+const NAME = "fangce";
 /** Bumped when a store is added: `onupgradeneeded` creates the missing ones and
  *  leaves the rest alone, so an older library keeps its books. */
 const VERSION = 3;
@@ -117,6 +117,24 @@ export function get<T>(store: StoreName, key: string): Promise<T | null> {
 
 export function del(store: StoreName, key: string): Promise<void> {
   return run<void>(store, "readwrite", (object) => object.delete(key));
+}
+
+/**
+ * Deletes many keys in one transaction.
+ *
+ * One transaction per `del` is fine for one row and ruinous for a book's worth
+ * of them: a chapter store with four hundred of a book's chapters meant four
+ * hundred transactions to take the book off the shelf. The batch is the
+ * transaction `run` already settles writes on — the first request only exists
+ * to hang the listeners on; `complete` is what says all of them landed.
+ */
+export function delMany(store: StoreName, keysToDelete: string[]): Promise<void> {
+  if (keysToDelete.length === 0) return Promise.resolve();
+  return run<void>(store, "readwrite", (object) => {
+    const first = object.delete(keysToDelete[0]!);
+    for (const key of keysToDelete.slice(1)) object.delete(key);
+    return first;
+  });
 }
 
 /** Empties one store. Used by a restore, which replaces rather than merges. */

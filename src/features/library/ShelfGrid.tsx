@@ -1,11 +1,12 @@
 import type { RefObject } from "react";
-import { BookOpen, CaretDown, Sparkle, X } from "@phosphor-icons/react";
+import { BookOpen, CaretDown, X } from "@phosphor-icons/react";
 
 import { EmptyState } from "@/components/common/EmptyState";
 import { QueryError } from "@/components/common/QueryError";
 import { GlassButton } from "@/components/glass/button";
 import { BookCard } from "@/features/library/BookCard";
 import { SECTION_HEADER_H, type BookSection } from "@/features/library/group";
+import { ShelfEmptyState } from "@/features/library/ShelfEmptyState";
 import type { useShelfWindow } from "@/hooks/useShelfWindow";
 import { cn } from "@/lib/cn";
 import { staggerDelay, useMotion } from "@/lib/motion";
@@ -91,17 +92,13 @@ export function ShelfGrid({
       />
     );
   }
-  if (list.length === 0) {
+  if (list.length === 0 && search) {
     return (
       <EmptyState
         className="min-h-[40vh]"
         icon={<BookOpen size={26} weight="duotone" />}
-        title={search ? "没有找到匹配的书" : "书库还是空的"}
-        description={
-          search
-            ? "换个关键词试试，搜索会同时匹配书名和作者。"
-            : "把 EPUB、TXT 或 Markdown 文件拖进窗口，或者点击右上角的导入按钮。"
-        }
+        title="没有找到匹配的书"
+        description="换个关键词试试，搜索会同时匹配书名和作者。"
         action={
           // A search that matched nothing used to offer nothing at all: the
           // action was suppressed when `search` was set, which left the 13px ✕
@@ -116,18 +113,18 @@ export function ShelfGrid({
           //
           // It clears the *search*, not the label filter, so it cannot say
           // 「显示全部书籍」: on the 标签 shelf the tag narrowing stays put.
-          search ? (
-            <GlassButton size="md" onClick={onClearSearch}>
-              <X size={14} /> 清空搜索条件
-            </GlassButton>
-          ) : (
-            <GlassButton variant="primary" size="md" onClick={onImport}>
-              <Sparkle size={14} /> 导入书籍
-            </GlassButton>
-          )
+          <GlassButton size="md" onClick={onClearSearch}>
+            <X size={14} /> 清空搜索条件
+          </GlassButton>
         }
       />
     );
+  }
+  // A shelf with nothing in it gets its own state: the shelf of books, the
+  // formats the importer actually takes, and the import button — what a reader
+  // who just installed this needs, which a generic empty state cannot say.
+  if (list.length === 0) {
+    return <ShelfEmptyState className="min-h-[40vh]" onImport={onImport} />;
   }
 
   return (

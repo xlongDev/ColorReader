@@ -17,7 +17,7 @@ import { ShelfGrid } from "@/features/library/ShelfGrid";
 
 type Props = Parameters<typeof ShelfGrid>[0];
 
-const ERROR = new Error("database is locked: /Users/x/Library/Application Support/colorreader.db");
+const ERROR = new Error("database is locked: /Users/x/Library/Application Support/fangce.db");
 
 /** What the window hook returns; the error branch returns before anything
  *  reads it, so an empty window is honest rather than a convenient lie. */

@@ -19,6 +19,14 @@ export const BOOK_EXTENSIONS = [
   "markdown",
 ] as const;
 
+/** The same formats as a reader sees them, once each. Derived rather than
+    written out, so the empty shelf and the drop overlay can never advertise a
+    format the importer refuses (or forget one it takes). `markdown` folds into
+    the `Markdown` chip: the two extensions are one format. */
+export const BOOK_FORMAT_CHIPS = BOOK_EXTENSIONS.filter((ext) => ext !== "markdown").map((ext) =>
+  ext === "md" ? "Markdown" : ext.toUpperCase(),
+);
+
 /** Native open dialog, restricted to the formats the library understands.
  *  Answers **absolute paths** — the desktop's import takes those — which is why
  *  it is not the `pickFiles` the browser uses (that one can only return the
