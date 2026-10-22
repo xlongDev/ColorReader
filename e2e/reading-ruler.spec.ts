@@ -1,6 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 
+import { useScrollLayout } from "./layout";
+
 /**
  * The reading ruler: a band over a block of real lines, with everything outside
  * it washed toward the paper.
@@ -1107,6 +1109,9 @@ test("the band still hugs the text when the sidebar leaves the pane", async ({ p
   // afterwards). The key carries the measure the words were set in, so the
   // re-wrap is a different page as far as the band is concerned.
   await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  // 滚动: the band follows the words through the pane's second layout, which is
+  // a scroll position — chosen, not the store's default (单页 since 2026-10-21).
+  await useScrollLayout(page);
   await enableRuler(page);
 
   for (const label of ["折叠侧边栏", "隐藏侧边栏", "全屏阅读"]) {
@@ -1979,6 +1984,7 @@ test("in the scrolled layout the arrows walk the band, and the page follows past
   // steps under it, by exactly the measured distance between two blocks' first
   // lines — so the band holds its place on screen and stays on whole lines.
   await openBook(page, "/?demo=1", /我们为什么会生病/);
+  await useScrollLayout(page);
   await enableRuler(page);
 
   const scrollOf = () =>
@@ -2042,6 +2048,7 @@ test("in the scrolled layout Left/Right switch chapters while the ruler is on", 
   page,
 }) => {
   await openBook(page, "/?demo=1", /我们为什么会生病/);
+  await useScrollLayout(page);
   await enableRuler(page);
 
   const before = await progress(page);
@@ -2070,6 +2077,7 @@ test("on a real EPUB the absorbed steps hold the band on consecutive blocks", as
     }),
   );
   await openBook(page, "/?demo=1&epub=1", /页码样书/);
+  await useScrollLayout(page);
   await enableRuler(page);
 
   const scrollOf = () =>

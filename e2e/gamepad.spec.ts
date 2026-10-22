@@ -179,8 +179,11 @@ test("手柄翻页：肩键、方向键、摇杆三者都驱动阅读，滚动�
     true,
   );
 
-  // 滚动 first: this is the default layout and the one where a step of the page
-  // is a chapter, so it pins the pedal before any paged layout is involved.
+  // 滚动 first: the layout where a step of the page is a chapter, so it pins
+  // the pedal before any paged layout is involved. Chosen rather than assumed —
+  // the store's default is 单页 since 2026-10-21, and a test that does not say
+  // which layout it is in is testing whatever the default happens to be.
+  await chooseLayout(page, "滚动");
   const start = await progress(page);
   await press(page, 5); // R1
   await page.waitForTimeout(900);

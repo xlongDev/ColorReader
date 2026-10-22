@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { useScrollLayout } from "./layout";
+
 /**
  * Rebinding a key, from the panel to the press.
  *
@@ -20,9 +22,10 @@ import { expect, test, type Page } from "@playwright/test";
  * app in between: a fresh load reads the stored binding, which is the only
  * honest way to tell a setting from a panel's own state.
  *
- * `?demo=1` supplies the sample book, which opens in the 滚动 layout — the one
- * where ArrowRight steps a chapter rather than turning a page, so 「下一章」 is
- * the binding under test there.
+ * `?demo=1` supplies the sample book. The reader opens in whatever layout the
+ * store defaults to — 单页 since 2026-10-21 — so the test that presses keys
+ * switches to 滚动 first: that is the one where ArrowRight steps a chapter
+ * rather than turning a page, which is what 「下一章」 is under test for there.
  */
 
 const BOOK = /我们为什么会生病/;
@@ -128,6 +131,9 @@ test("the reader answers to the key the panel wrote", async ({ page }) => {
   // A reload in between: what is being tested is the stored binding, not the
   // panel's own state.
   await openBook(page);
+  // 滚动, so ArrowRight would step a chapter if it were still bound — the only
+  // way "the key is nobody's now" is observable.
+  await useScrollLayout(page);
 
   const before = await progress(page);
   // The key it used to answer to is nobody's now.

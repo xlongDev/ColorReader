@@ -3,6 +3,7 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -171,7 +172,7 @@ const NO_FONTS: LocalFont[] = [];
 interface ReaderViewProps {
   bookId: string;
   title: string;
-  /** Cover on the `colorreader` resource protocol, for the TTS player card. */
+  /** Cover on the `fangce` resource protocol, for the TTS player card. */
   coverUrl: string | null;
   /** Book's own language tag, for the TTS voice picker's language lead. */
   bookLanguage: string | null;
@@ -188,7 +189,7 @@ interface ReaderViewProps {
   /** Character offset of a search hit, scrolled into view once rendered. */
   initialOffset: number | null;
   /**
-   * A highlight named by a `colorreader://` link the reader followed. Wins
+   * A highlight named by a `fangce://` link the reader followed. Wins
    * over the saved position: following a link means "show me this", not
    * "carry on where I left off".
    */
@@ -352,7 +353,7 @@ export function ReaderView({
   // database are the same either way, so search, TTS and AI never care which
   // renderer is on screen.
   const useFoliate = isFoliateFormat(format);
-  // The highlight a followed `colorreader://` link names. A link carries an id,
+  // The highlight a followed `fangce://` link names. A link carries an id,
   // not a position, so the row has to be in hand before anything can be
   // anchored to it.
   const deepLinkTarget = useMemo(
@@ -1449,9 +1450,35 @@ export function ReaderView({
     [chapters, chapterIdx, setProgress, reportPace],
   );
 
-  const onScroll = useCallback(() => {
-    setPending(null);
+  /**
+   * The scroller's offset at the moment the toolbar opened.
+   *
+   * A scroll event reporting *this* offset is news of a scroll that already
+   * happened — the reveal that brought the words under the pointer — and the
+   * anchor was measured after it. Chromium dispatches that event a frame or
+   * two after the click, so dismissing on it closes the toolbar the same
+   * gesture just opened: a highlight out of view (the demo book opens at 18%)
+   * gets scrolled in, tapped, and the toolbar is gone before 记笔记 can be
+   * pressed. Only an offset the toolbar has not seen means the page moved
+   * under it, which is what the dismissal below is for.
+   *
+   * Layout effect, not a passive one: the reveal's scroll event can land in
+   * the very next frame, and a passive effect may not have run by then — the
+   * record has to exist before the browser can dispatch anything.
+   */
+  const openedScrollAt = useRef<{ left: number; top: number } | null>(null);
+  useLayoutEffect(() => {
     const el = scrollRef.current;
+    openedScrollAt.current = pending && el ? { left: el.scrollLeft, top: el.scrollTop } : null;
+  }, [pending]);
+
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current;
+    const at = openedScrollAt.current;
+    // Stale for the dismissal only: the page still moved, so everything
+    // below still runs — the reveal's own progress has to land.
+    const stale = !!el && !!at && el.scrollLeft === at.left && el.scrollTop === at.top;
+    if (!stale) setPending(null);
     if (!el) return;
     const pagedNow = layoutModeRef.current !== "scroll";
     const max = pagedNow ? el.scrollWidth - el.clientWidth : el.scrollHeight - el.clientHeight;
@@ -2671,7 +2698,7 @@ export function ReaderPage() {
   const initialChapter = readOffset(searchParams.get("chapter"));
   const initialOffset = readOffset(searchParams.get("at"));
   const initialQuery = searchParams.get("q") ?? "";
-  // A `colorreader://` link lands here as a plain query parameter, so the deep
+  // A `fangce://` link lands here as a plain query parameter, so the deep
   // link and a search result reach the reader the same way.
   const initialAnnotation = searchParams.get("annotation");
   const [picking, setPicking] = useState(false);

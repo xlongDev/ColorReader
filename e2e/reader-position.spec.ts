@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { useScrollLayout } from "./layout";
+
 /**
  * The reader's position engine: the one part of the app no unit test can see.
  *
@@ -131,6 +133,7 @@ test("翻章推进进度，第一章没有上一章", async ({ page }) => {
 test("从目录跳转落在该章章首", async ({ page }) => {
   await page.setViewportSize({ width: 520, height: 460 });
   await openBook(page);
+  await useScrollLayout(page);
   await ensureScrollable(page);
 
   // Scroll away from the head first: the jump has to *move* the position, and
@@ -159,6 +162,7 @@ test("从目录跳转落在该章章首", async ({ page }) => {
 test("滚动推进进度，回到顶部后回落", async ({ page }) => {
   await page.setViewportSize({ width: 520, height: 460 });
   await openBook(page);
+  await useScrollLayout(page);
   await ensureScrollable(page);
 
   const atTop = await progress(page);

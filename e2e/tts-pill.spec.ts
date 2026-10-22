@@ -1,5 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { useScrollLayout } from "./layout";
+
 /**
  * The read-aloud pill, and the one thing it exists for: a session outliving the
  * page it was started on.
@@ -363,6 +365,10 @@ test("coming back to the book hands the voice back to the reader", async ({ page
 test("coming back lands on the sentence being read, not on the chapter's top", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await openBook(page, "/?demo=1", DEMO_BOOK);
+  // 滚动: the landing has to bring a whole paragraph into the reading area, and
+  // in a paged layout the paragraph it lands on can sit in the next column —
+  // "visible on both axes" is a scroll-layout fact.
+  await useScrollLayout(page);
   await startSpeaking(page);
   await goToShelf(page);
 

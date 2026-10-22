@@ -71,7 +71,16 @@ export function ReaderDrawer({
         onClick={onClose}
       />
       <motion.div
-        className="absolute inset-y-0 right-0 w-80 max-w-[85vw] p-3"
+        // Two ceilings, and both bind on the same pane. `85vw` is the wide-pane
+        // one: a sheet that stops short of the window's left edge leaves a
+        // sliver of the book showing, so the reader keeps their place. `100%`
+        // is the narrow one — a 520px window leaves this reader ~230px, and a
+        // sheet wider than its own pane is clipped by the pane's
+        // `overflow-hidden`, which cuts the sheet's left column (the layout
+        // switcher among it) clean off and no scroll can bring it back. The
+        // aside spans the reading viewport, so `100%` is exactly that pane —
+        // including either half of a 对照阅读 pair.
+        className="absolute inset-y-0 right-0 w-80 max-w-[min(85vw,100%)] p-3"
         initial={sheetMotion.initial}
         animate={sheetMotion.animate}
         exit={sheetMotion.exit}

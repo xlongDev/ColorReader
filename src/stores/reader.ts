@@ -493,7 +493,12 @@ export const DEFAULT_READER_SETTINGS = {
   nightSurface: "night",
   customSurface: null,
   pageTransition: "pan",
-  layoutMode: "scroll",
+  // Single page for every book, deliberately (2026-10-21): a paged reader that
+  // opens two columns by default asks a first-time reader to work out what the
+  // right-hand page is, and the scroll default before this hid paging entirely
+  // behind a setting. 单页 is the one layout that needs no explaining; 双页 and
+  // 滚动 stay one click away in the layout switcher.
+  layoutMode: "single",
   gamepadPaging: true,
   autoScrollSpeed: DEFAULT_AUTO_SCROLL_SPEED,
   readingSpeed: DEFAULT_READING_SPEED,
@@ -545,10 +550,10 @@ export const useReaderSettings = create<ReaderState>()(
         set((state) => ({ paceSamples: pushPace(state.paceSamples, sample) })),
     }),
     {
-      name: "colorreader.reader",
       // Bump only when a stored value changes meaning; a newly added key needs
       // no bump — the default merge layers the persisted state over the
       // initial one.
+      name: "fangce.reader",
       version: 11,
       // v1 stored the auto-scroll speed as an index into [40, 80, 160, 320];
       // v2 stored the margin as an index into [16, 32, 48, 64]. Margins are

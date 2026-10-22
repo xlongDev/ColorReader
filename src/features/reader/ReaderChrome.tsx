@@ -104,7 +104,7 @@ export interface ReaderHeaderBarProps extends ReaderToolButtonsProps {
 }
 
 /**
- * The chrome's buttons, in one row.
+ * The chrome's buttons, in one row that may become two.
  *
  * Shared by the ordinary reader's header and by the 对照阅读 pair's bottom bar:
  * a pair merges both bars' controls into the one bar at the bottom, so the
@@ -112,6 +112,16 @@ export interface ReaderHeaderBarProps extends ReaderToolButtonsProps {
  * a control *says* (对照阅读 vs 更换对照书) and which controls are pointless
  * mid-pair (a bookmark and a fullscreen toggle belong to a single book's
  * page).
+ *
+ * It wraps rather than shrinks. The cluster measures ~490px natural width, and
+ * the pane it hangs in can be far less than that — a window dragged down to
+ * 520px leaves this reader ~230px once the sidebar is paid for. An unwrapped
+ * row does not squeeze there, it *escapes*: the reading pane is
+ * `overflow-hidden`, which clips but does not stop `scrollLeft`, so the first
+ * click past the right edge scrolls the whole reader sideways and takes the
+ * settings drawer with it off the left of the window. The footer already wraps
+ * for the same reason (measured 1109px against a 1024px minimum window); the
+ * header now takes the same treatment.
  */
 export function ReaderToolButtons({
   isPdf,
@@ -137,7 +147,7 @@ export function ReaderToolButtons({
   menuPlacement = "down",
 }: ReaderToolButtonsProps) {
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex flex-wrap items-center gap-1">
       <GlassIconButton
         label="目录与书签"
         size="sm"
@@ -341,7 +351,11 @@ export function ReaderHeaderBar({
   return (
     <header
       className={cn(
-        "border-hairline flex items-center gap-3 border-b px-6 py-3",
+        // `flex-wrap` keeps the row inside its pane: the title block truncates
+        // but the tool cluster cannot shrink below its own natural width, so on
+        // a narrow pane the cluster wraps to a second line as one unit instead
+        // of pushing the header — and with it the whole reader — out sideways.
+        "border-hairline flex flex-wrap items-center gap-3 border-b px-6 py-3",
         fullscreen && "bg-(--glass-btn) backdrop-blur-xl",
       )}
     >
