@@ -25,7 +25,7 @@ use crate::library::{cover_file, fonts, repository};
 
 /// Scheme registered with Tauri. Also the host prefix on Windows and Android,
 /// where custom protocols are served as `http://<scheme>.localhost`.
-pub const SCHEME: &str = "colorreader";
+pub const SCHEME: &str = "fangce";
 
 /// Path prefix under which cover images are addressed.
 const COVER_PREFIX: &str = "/cover/";
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn unregistered_requests_answer_service_unavailable() {
         let registry = Registry::default();
-        let response = registry.cover("6f1d2c3e", "colorreader://localhost/cover/6f1d2c3e");
+        let response = registry.cover("6f1d2c3e", "fangce://localhost/cover/6f1d2c3e");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 

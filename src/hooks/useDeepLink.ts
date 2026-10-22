@@ -6,7 +6,7 @@ import { deepLinkRoute, parseDeepLink } from "@/lib/deeplink";
 import { isDesktopRuntime } from "@/lib/ipc";
 
 /**
- * Follows the `colorreader://` links the operating system hands the app.
+ * Follows the `fangce://` links the operating system hands the app.
  *
  * Mounted once, inside the router, because a link arrives from outside on
  * whichever route the reader happens to be on — and following it means "open

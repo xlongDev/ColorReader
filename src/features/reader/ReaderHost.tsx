@@ -43,7 +43,7 @@ export interface ReaderHostProps {
   /** Character offset of a search hit, scrolled into view once rendered. */
   initialOffset?: number | null;
   /**
-   * A highlight named by a `colorreader://` link the reader followed. Wins
+   * A highlight named by a `fangce://` link the reader followed. Wins
    * over the saved position: following a link means "show me this", not
    * "carry on where I left off".
    */

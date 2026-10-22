@@ -23,4 +23,4 @@ pub(super) fn blocks(lines: &[&str]) -> String {
     format!("{}\n", lines.join("\n\n"))
 }
 
-pub(super) const LINK: &str = "colorreader://book/b1?annotation=a1";
+pub(super) const LINK: &str = "fangce://book/b1?annotation=a1";

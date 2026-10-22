@@ -425,7 +425,7 @@ mod tests {
         let library = seeded();
         let parsed = parse_csv(
             "章节,原文,笔记,颜色,样式,链接\n\
-             1,The Moon rose over the Halls.,,,,colorreader://book/b?annotation=a1\n",
+             1,The Moon rose over the Halls.,,,,fangce://book/b?annotation=a1\n",
         );
         assert_eq!(parsed.highlights[0].title, "", "旧表本来就没有书名列");
 

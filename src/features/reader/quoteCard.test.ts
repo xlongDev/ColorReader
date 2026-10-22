@@ -32,7 +32,7 @@ describe("annotationLink", () => {
     // The other end of this contract: `export.rs`'s `link` is pinned by
     // `the_link_format_is_the_one_the_frontend_parses` to exactly this string,
     // and `deeplink.ts` parses both. Three call sites, one format.
-    expect(annotationLink("book-1", "note-1")).toBe("colorreader://book/book-1?annotation=note-1");
+    expect(annotationLink("book-1", "note-1")).toBe("fangce://book/book-1?annotation=note-1");
   });
 });
 

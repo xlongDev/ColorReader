@@ -3,17 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>ColorReader</title>
+    <title>方册</title>
     <!-- NOTE: no <meta name="color-scheme"> here on purpose. Under system dark
          it flips every frame's used color scheme, and WebKit then paints
          transparent-root iframe canvases opaque, which hides the reader's
          #background wallpaper layer behind an opaque white sheet. -->
     <script>
       // Apply the persisted theme before paint to avoid a flash of the wrong background.
-      // Mirrors the logic in src/stores/settings.ts; keep in sync.
+      // Mirrors the logic in src/stores/settings.ts; keep in sync. The key is the
+      // persisted store's own name; renaming either one silently drops the
+      // theme this script reads.
       (function () {
         try {
-          var raw = localStorage.getItem("colorreader.settings");
+          var raw = localStorage.getItem("fangce.settings");
           var theme = "system";
           if (raw) {
             var parsed = JSON.parse(raw);

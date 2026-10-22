@@ -452,7 +452,7 @@ function BackupSection() {
     let path: string | null = null;
     if (isDesktopRuntime) {
       path = await choose({
-        defaultPath: `colorreader-backup-${stamp()}.zip`,
+        defaultPath: `fangce-backup-${stamp()}.zip`,
         filters: [{ name: "书库备份", extensions: ["zip"] }],
       });
       if (!path) return;
@@ -1246,7 +1246,7 @@ function SyncForm({ initial }: { initial: SyncConfig }) {
         <GlassInput
           value={draft.url}
           onChange={(event) => set("url")(event.target.value)}
-          placeholder="https://dav.jianguoyun.com/dav/ColorReader"
+          placeholder="https://dav.jianguoyun.com/dav/方册"
           aria-label="服务器目录"
           spellCheck={false}
         />

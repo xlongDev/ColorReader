@@ -40,7 +40,15 @@ use crate::error::{AppError, AppResult};
 
 /// Service name in the platform credential store. The bundle identifier, so an
 /// entry is attributable to this app in Keychain Access / 凭据管理器.
-const SERVICE: &str = "dev.xlong.colorreader";
+///
+/// 🔴 Renaming this strands every sealed credential: the master key lives under
+/// this name in the reader's keychain, and an AI key that no longer opens is an
+/// error, not an empty string. It was changed with the 2026-10-21 rename (the
+/// pre-release one, where identifier went `dev.xlong.colorreader` →
+/// `dev.xlong.fangce`): before the first release there is no reader to strand,
+/// and the two names must stay the same string — the data directory is derived
+/// from the identifier, so they can only be renamed together.
+const SERVICE: &str = "dev.xlong.fangce";
 
 /// The rows and fields that hold a credential.
 ///

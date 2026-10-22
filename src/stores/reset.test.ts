@@ -8,7 +8,7 @@ import { DEFAULT_READER_SETTINGS, useReaderSettings } from "@/stores/reader";
 
 /** The `localStorage` key the catalogue sheets live under — see
  *  `catalogFont.test.ts` for why it is spelled out rather than imported. */
-const SHEET_STORE = "colorreader.catalogFontSheets";
+const SHEET_STORE = "fangce.catalogFontSheets";
 
 describe("resetAllSettings", () => {
   afterEach(() => {

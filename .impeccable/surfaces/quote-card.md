@@ -59,7 +59,7 @@ cover's height, the quote centred below them with the highlighter wash behind
 its lines; without one — the single muted metadata line top-left and the quote
 in the zone it always occupied. Progress + chapter line below the quote; white
 QR plate anchored bottom-right with the deep link inside; a small
-"ColorReader" wordmark bottom-left in ink-3. Save button bottom-right of the
+"方册" wordmark bottom-left in ink-3. Save button bottom-right of the
 preview dialog.
 
 FORM: The dialog is a lightbox over the reading surface (the suggestions doc's

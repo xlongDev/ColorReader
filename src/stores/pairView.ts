@@ -47,10 +47,10 @@ export const usePairView = create<PairViewState>()(
       clearPair: () => set({ pair: null }),
     }),
     {
-      name: "colorreader.pair",
       // No migrations yet: the only value is a pair of book ids, and a pair
       // naming a book that no longer exists simply fails to open (the pane
       // says so), which is the honest answer anyway.
+      name: "fangce.pair",
       version: 1,
     },
   ),

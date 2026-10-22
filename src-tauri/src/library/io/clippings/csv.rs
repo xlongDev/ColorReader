@@ -193,7 +193,7 @@ mod tests {
     fn a_link_names_the_book_it_came_from() {
         let csv = parse_csv(
             "书名,章节,原文,笔记,颜色,样式,链接\n\
-             三体,1,你好,,,,colorreader://book/b1?annotation=a1\n",
+             三体,1,你好,,,,fangce://book/b1?annotation=a1\n",
         );
         assert_eq!(csv.highlights[0].book_id.as_deref(), Some("b1"));
     }

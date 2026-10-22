@@ -7,7 +7,7 @@ import type { SecretsStatus, SystemInfo } from "@/types/ipc";
  *  `browser` rather than inventing a version, so a reader reading it knows it
  *  is the browser build's own panel and not a stale one. */
 const IN_BROWSER: SystemInfo = {
-  appName: "colorreader",
+  appName: "方册",
   appVersion: "dev",
   os: "browser",
   arch: "wasm",

@@ -15,7 +15,7 @@ const state = (page: Page) =>
   page.evaluate(
     () =>
       new Promise<{ books: number; annotations: number; chapters: number }>((resolve) => {
-        const request = indexedDB.open("colorreader");
+        const request = indexedDB.open("fangce");
         request.addEventListener("success", () => {
           const tx = request.result.transaction(["books", "annotations", "chapters"], "readonly");
           const books = tx.objectStore("books").getAll();
@@ -51,7 +51,7 @@ test("备份导出、清库、再恢复，书与笔记都回得来", async ({ pa
   // toolbar would test the toolbar, and this is about what a backup carries.
   await page.evaluate(async () => {
     const database = await new Promise<IDBDatabase>((resolve) => {
-      const request = indexedDB.open("colorreader");
+      const request = indexedDB.open("fangce");
       request.addEventListener("success", () => resolve(request.result));
     });
     const tx = database.transaction("annotations", "readwrite");
@@ -86,7 +86,7 @@ test("备份导出、清库、再恢复，书与笔记都回得来", async ({ pa
   const archive = await download;
   const path = await archive.path();
   expect(path, "备份应该下载下来").toBeTruthy();
-  expect(archive.suggestedFilename()).toMatch(/colorreader-backup-.*\.json(\.gz)?$/);
+  expect(archive.suggestedFilename()).toMatch(/fangce-backup-.*\.json(\.gz)?$/);
   await expect(page.getByText(/已备份 \d+ 个文件/)).toBeVisible({ timeout: 60_000 });
 
   // Wipe it the way a browser's "clear site data" would. Emptying the stores
@@ -96,7 +96,7 @@ test("备份导出、清库、再恢复，书与笔记都回得来", async ({ pa
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
-        const request = indexedDB.open("colorreader");
+        const request = indexedDB.open("fangce");
         request.addEventListener("success", () => {
           const stores = [
             "books",

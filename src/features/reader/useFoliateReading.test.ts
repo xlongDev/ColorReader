@@ -10,13 +10,13 @@ import type { Annotation, ChapterMeta } from "@/types/ipc";
  * The one promise here that fails silently is the CFI the view opens at:
  * foliate opens at a CFI or not at all, and a wrong answer sends the reader to
  * the book's first page with nothing on screen to say so. A followed
- * `colorreader://` link's CFI wins (it names where the reader asked to go),
+ * `fangce://` link's CFI wins (it names where the reader asked to go),
  * then the saved position, then the key a book parked in localStorage before
  * the database had a column for it — and a non-foliate book never reads any of
  * them.
  */
 
-const CFI_KEY = "colorreader:foliate:book-1";
+const CFI_KEY = "fangce:foliate:book-1";
 
 const CHAPTERS: ChapterMeta[] = [
   { idx: 0, title: "第一章", chars: 100 },

@@ -896,7 +896,7 @@ mod tests {
     fn the_service_still_returns_audio_and_word_timings() {
         let clip = waiting_out_the_egress_quota("clip", || {
             tauri::async_runtime::block_on(speak(
-                "你好，这是 ColorReader 的语音引擎测试。",
+                "你好，这是 方册 的语音引擎测试。",
                 "zh-CN-YunjianNeural",
             ))
         });

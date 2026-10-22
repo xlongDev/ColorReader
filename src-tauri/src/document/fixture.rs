@@ -22,15 +22,14 @@ pub fn temp_dir(tag: &str) -> PathBuf {
         .duration_since(std::time::UNIX_EPOCH)
         .expect("system clock is before the epoch")
         .as_nanos();
-    let dir =
-        std::env::temp_dir().join(format!("colorreader-{tag}-{}-{nanos}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("fangce-{tag}-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir
 }
 
 /// Bytes that stand in for a cover image. Nothing inspects the content.
 pub fn png_bytes() -> Vec<u8> {
-    b"\x89PNG\r\n\x1a\ncolorreader-fixture".to_vec()
+    b"\x89PNG\r\n\x1a\nfangce-fixture".to_vec()
 }
 
 /// Writes a minimal but spec-shaped EPUB and returns its path.

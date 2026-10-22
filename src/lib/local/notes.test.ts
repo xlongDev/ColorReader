@@ -54,11 +54,11 @@ describe("renderMarkdown", () => {
         "\n" +
         "第三章的伏笔\n" +
         "\n" +
-        "[在 ColorReader 中打开](colorreader://book/b1?annotation=a1)\n" +
+        "[在 方册 中打开](fangce://book/b1?annotation=a1)\n" +
         "\n" +
         "> 再见\n" +
         "\n" +
-        "[在 ColorReader 中打开](colorreader://book/b1?annotation=a2)\n" +
+        "[在 方册 中打开](fangce://book/b1?annotation=a2)\n" +
         "\n" +
         "## 第 3 章\n" +
         "\n" +
@@ -66,7 +66,7 @@ describe("renderMarkdown", () => {
         "\n" +
         "记一笔\n" +
         "\n" +
-        "[在 ColorReader 中打开](colorreader://book/b1?annotation=a3)\n",
+        "[在 方册 中打开](fangce://book/b1?annotation=a3)\n",
     );
   });
 
@@ -101,7 +101,7 @@ describe("the link format", () => {
   it("is the one the frontend parses", () => {
     // The other end of this contract is `parseDeepLink`, and the desktop pins
     // the same string in `export.rs`.
-    expect(link("book-1", "note-1")).toBe("colorreader://book/book-1?annotation=note-1");
+    expect(link("book-1", "note-1")).toBe("fangce://book/book-1?annotation=note-1");
   });
 });
 
@@ -115,14 +115,14 @@ describe("the Obsidian dialect", () => {
         'authors: ["刘慈欣"]\n' +
         "progress: 0.50\n" +
         "tags:\n" +
-        "  - ColorReader\n" +
+        "  - 方册\n" +
         "---\n\n" +
         "# [[三体]] 标注与笔记\n\n" +
         "刘慈欣 · 1 条标注 · 1 条有笔记 · 阅读进度 50%\n\n" +
         "## 第 1 章\n\n" +
         "> [!quote]\n> 你好\n\n" +
         "伏笔\n\n" +
-        "[在 ColorReader 中打开](colorreader://book/b1?annotation=a1)\n",
+        "[在 方册 中打开](fangce://book/b1?annotation=a1)\n",
     );
   });
 
@@ -144,7 +144,7 @@ describe("renderCsv", () => {
   it("is one row per highlight, with a byte-order mark", () => {
     expect(renderCsv(notes([entry("a1", 0, "你好", "伏笔")]))).toBe(
       "\uFEFF书名,章节,原文,笔记,颜色,样式,链接\n" +
-        "三体,1,你好,伏笔,,,colorreader://book/b1?annotation=a1\n",
+        "三体,1,你好,伏笔,,,fangce://book/b1?annotation=a1\n",
     );
   });
 

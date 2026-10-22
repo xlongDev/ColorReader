@@ -171,7 +171,7 @@ def main(out: str) -> None:
     opf = f"""<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="zh">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="bookid">urn:uuid:colorreader-sparse-title</dc:identifier>
+    <dc:identifier id="bookid">urn:uuid:fangce-sparse-title</dc:identifier>
     <dc:title>稀疏标题页样书</dc:title>
     <dc:language>zh</dc:language>
     <meta property="dcterms:modified">2026-10-05T00:00:00Z</meta>

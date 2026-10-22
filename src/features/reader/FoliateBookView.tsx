@@ -269,7 +269,7 @@ const BLOCK_SELECTOR =
   "p, li, blockquote, dd, dt, figcaption, pre, h1, h2, h3, h4, h5, h6, td, th, div";
 
 /** Overlayer key of the transient read-aloud wash (one unit at a time). */
-const TTS_KEY = "colorreader-tts";
+const TTS_KEY = "fangce-tts";
 
 /**
  * Smallest rendered box (px, each axis) that opens the image viewer when
@@ -1154,7 +1154,7 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
             new File([demoBytes], `${bookId}.${container.ext}`, { type: container.type }),
           );
         } else if (format === "epub" && isDesktopRuntime) {
-          // EPUB streams over the ColorReader protocol with HTTP Range requests,
+          // EPUB streams over the 方册 protocol with HTTP Range requests,
           // so opening no longer waits on the whole file crossing IPC.
           try {
             const sourceUrl = await ipc.bookSourceUrl(bookId);

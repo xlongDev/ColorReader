@@ -22,13 +22,13 @@ const chillKai = catalogFontById("chill-kai")!;
  * The `localStorage` key the adopted sheets live under, spelled out rather than
  * imported.
  *
- * It is a compatibility surface, not an implementation detail: renaming it
- * silently discards every sheet on every reader's machine — the fonts all
- * re-download on the next launch, and nobody is told. A test that goes red when
- * someone renames it is the whole point, so this one deliberately does not
- * follow the constant.
+ * It is a storage contract, not an implementation detail: the key is what every
+ * already-downloaded sheet hangs on, and renaming it silently discards all of
+ * them — the fonts all re-download on the next launch, and nobody is told. A
+ * test that goes red when someone renames it is the whole point, so this one
+ * deliberately does not follow the constant.
  */
-const SHEET_STORE = "colorreader.catalogFontSheets";
+const SHEET_STORE = "fangce.catalogFontSheets";
 
 /** What a restart looks like from here: the document is new, so the adopted
  *  `<style>` is gone, and whatever the previous session kept is all that is

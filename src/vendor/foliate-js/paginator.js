@@ -3943,7 +3943,7 @@ export class Paginator extends HTMLElement {
     /**
      * True when the primary section sits at its first/last page and a
      * neighbouring linear section exists — i.e. the next page turn should
-     * cross a section boundary. ColorReader uses this to make keyboard
+     * cross a section boundary. 方册 uses this to make keyboard
      * cross-chapter paging explicit and deterministic instead of relying on
      * `next()`/`prev()`'s implicit scroll-probe edge detection, which only
      * crosses when `#scrollNext`/`#scrollPrev` happen to report the page edge.

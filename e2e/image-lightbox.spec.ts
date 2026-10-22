@@ -131,7 +131,7 @@ async function forgetImageLists(page: Page): Promise<void> {
         input.addEventListener("error", () => reject(input.error));
       });
 
-    const database = await settled(indexedDB.open("colorreader"));
+    const database = await settled(indexedDB.open("fangce"));
     const store = database.transaction("books", "readwrite").objectStore("books");
     const rows = (await settled(store.getAll())) as Record<string, unknown>[];
     for (const row of rows) {
@@ -152,7 +152,7 @@ async function forgetImageLists(page: Page): Promise<void> {
 async function storedImages(page: Page): Promise<{ path: string }[] | null> {
   return page.evaluate(async () => {
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open("colorreader");
+      const request = indexedDB.open("fangce");
       request.addEventListener("success", () => resolve(request.result));
       request.addEventListener("error", () => reject(request.error));
     });

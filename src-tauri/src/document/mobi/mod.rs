@@ -756,7 +756,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "real-book probe: cargo test -p colorreader --lib mobi -- --ignored --nocapture"]
+    #[ignore = "real-book probe: cargo test -p fangce --lib mobi -- --ignored --nocapture"]
     fn probe_real_book_wallpapers() {
         let dir = "/Users/xiaolong/Downloads";
         for name in ["金色梦乡 (伊坂幸太郎) (z-library.sk, 1lib.sk, z-lib.sk).mobi"] {

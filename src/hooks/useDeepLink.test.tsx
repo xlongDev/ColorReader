@@ -45,7 +45,7 @@ const location = () => screen.getByTestId("location").textContent;
 
 describe("useDeepLink", () => {
   it("follows the link the app was launched with", async () => {
-    getCurrent.mockResolvedValue([`colorreader://book/${BOOK}?annotation=${NOTE}`]);
+    getCurrent.mockResolvedValue([`fangce://book/${BOOK}?annotation=${NOTE}`]);
     mount();
 
     await waitFor(() => expect(location()).toBe(`/reader?book=${BOOK}&annotation=${NOTE}`));
@@ -57,7 +57,7 @@ describe("useDeepLink", () => {
     expect(location()).toBe("/");
 
     const [handler] = onOpenUrl.mock.calls[0] as [(urls: string[]) => void];
-    handler([`colorreader://book/${BOOK}`]);
+    handler([`fangce://book/${BOOK}`]);
 
     await waitFor(() => expect(location()).toBe(`/reader?book=${BOOK}`));
   });

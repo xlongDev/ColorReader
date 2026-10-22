@@ -23,7 +23,7 @@ import type { Annotation } from "@/types/ipc";
  */
 export interface FoliateReadingOptions extends Omit<FoliateBookOptions, "cfiKey"> {
   bookId: string;
-  /** The highlight a followed `colorreader://` link names. A link carries an
+  /** The highlight a followed `fangce://` link names. A link carries an
    *  id, not a position, so the row has to be in hand before anything can be
    *  anchored to it. */
   deepLinkTarget: Annotation | null;
@@ -79,7 +79,7 @@ export function useFoliateReading({
   // progress model cannot express. It rides in `books.location`; the
   // localStorage key it used to park in is read once as a fallback and
   // cleared the moment the database has the value.
-  const cfiKey = `colorreader:foliate:${bookId}`;
+  const cfiKey = `fangce:foliate:${bookId}`;
   const startCfi = useMemo(() => {
     if (!useFoliate) return null;
     return deepLinkTarget?.cfi ?? initialCfi ?? localStorage.getItem(cfiKey);

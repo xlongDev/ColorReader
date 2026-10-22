@@ -166,7 +166,7 @@ function navCommand(to: string, title: string, id: string, icon: ReactNode): Com
 /** The event a command dispatches to reach the router. Commands live outside
     React (the registry is a plain store), so navigation goes through the
     window rather than through a hook. */
-const NAVIGATE_EVENT = "colorreader:navigate";
+const NAVIGATE_EVENT = "fangce:navigate";
 
 /** Sends the shell to a route from anywhere, including outside React. */
 export function navigateTo(to: string): void {

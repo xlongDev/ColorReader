@@ -4,7 +4,7 @@
  * A page torn out of the reader's own book: the paper is the surface they are
  * reading on right now, the words sit in their reading font, and their own
  * highlight ink paints behind them like a real marker. The QR bottom-right
- * carries the deep link back to the exact highlight (`colorreader://book/<id>
+ * carries the deep link back to the exact highlight (`fangce://book/<id>
  * ?annotation=<id>`, the link the notes export already writes — mirrored here
  * as one line, pinned by a test against the Rust side's own).
  *
@@ -117,7 +117,7 @@ const QR_MAX_CELL = 8;
  * literal the Rust test asserts, so the two cannot drift apart silently.
  */
 export const annotationLink = (bookId: string, annotationId: string): string =>
-  `colorreader://book/${bookId}?annotation=${annotationId}`;
+  `fangce://book/${bookId}?annotation=${annotationId}`;
 
 /** `resolveFont` can hand back a CSS variable (`var(--font-sans)` for the
  *  book and system keys), and a canvas cannot resolve one — the variable's
@@ -367,7 +367,7 @@ export async function renderQuoteCard(
   ctx.font = `26px ${font}`;
   ctx.globalAlpha = 0.45;
   ctx.textAlign = "left";
-  ctx.fillText("ColorReader", MARGIN, CARD_H - MARGIN);
+  ctx.fillText("方册", MARGIN, CARD_H - MARGIN);
 
   drawQr(ctx, input.link, CARD_W - MARGIN - QR_PLATE, CARD_H - MARGIN - QR_PLATE);
   return true;

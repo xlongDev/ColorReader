@@ -28,7 +28,7 @@ import { downloadBytes } from "@/lib/local/save";
 import * as db from "@/lib/local/db";
 
 /** Identifies the archive, and the shape of what is inside it. */
-const FORMAT = "colorreader-web-backup";
+const FORMAT = "fangce-web-backup";
 const VERSION = 1;
 
 /** One row as it is stored, under the key it is stored by. */
@@ -140,7 +140,7 @@ export async function backupExport(): Promise<BackupSummary> {
     payloads,
   };
   const blob = await pack(JSON.stringify(archive));
-  const name = filename(`colorreader-backup-${stamp()}`, "colorreader-backup");
+  const name = filename(`fangce-backup-${stamp()}`, "fangce-backup");
   downloadBytes(blob, `${name}.${canCompress() ? "json.gz" : "json"}`);
   return { files, bytes };
 }

@@ -1,5 +1,5 @@
 // foliate-js ships plain ES modules with no type declarations. Only the
-// surface ColorReader actually touches is declared here; everything else
+// surface 方册 actually touches is declared here; everything else
 // stays `unknown` so a foliate upgrade cannot silently type-check against a
 // shape we invented. The wildcard module names match the vendored copy at
 // `src/vendor/foliate-js/` (the readest fork).

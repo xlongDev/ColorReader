@@ -1,5 +1,5 @@
 /**
- * The `colorreader://` links the app writes into its exported notes, read back.
+ * The `fangce://` links the app writes into its exported notes, read back.
  *
  * The shape is the one `library/export.rs::link` emits, and both ends are
  * pinned to the same string by tests on either side.
@@ -13,12 +13,12 @@
  */
 
 /** The scheme the app answers to; the same string `resource::SCHEME` registers. */
-const SCHEME = "colorreader:";
+const SCHEME = "fangce:";
 
 /**
  * The host that marks a link as *this* kind of link. The scheme is shared with
  * the resource protocol the webview streams covers and book files through
- * (`colorreader://localhost/…`), and that one is not something a reader follows.
+ * (`fangce://localhost/…`), and that one is not something a reader follows.
  */
 const LINK_HOST = "book";
 

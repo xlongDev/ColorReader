@@ -108,7 +108,7 @@ def main(out: str) -> None:
     opf = f"""<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="bookid" xml:lang="zh">
   <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
-    <dc:identifier id="bookid">urn:uuid:colorreader-images</dc:identifier>
+    <dc:identifier id="bookid">urn:uuid:fangce-images</dc:identifier>
     <dc:title>图片样书</dc:title>
     <dc:language>zh</dc:language>
     <meta property="dcterms:modified">2026-09-26T00:00:00Z</meta>

@@ -19,7 +19,7 @@ interface ChromeState {
    * another book), which would make "go back one" mean something else.
    *
    * Not persisted, and it should not be: it is where this session came from,
-   * not a preference. `/` is the answer for a `colorreader://` link, which
+   * not a preference. `/` is the answer for a `fangce://` link, which
    * arrives without ever having been anywhere.
    */
   readerReturnPath: string;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate ColorReader application icons (PNG / ICNS / ICO).
+"""Generate 方册 application icons (PNG / ICNS / ICO).
 
 Dependency free on purpose: the repo must not need Pillow or a headless
 browser just to regenerate branding assets.
@@ -35,7 +35,9 @@ SS = 3  # supersample factor, 3x3 -> 9 alpha levels on edges
 BG_TOP = (0x17, 0x1B, 0x22)
 BG_BOTTOM = (0x0B, 0x0D, 0x11)
 
-# Five reading lines in a muted spectrum: the "color" in ColorReader.
+# Five reading lines in a muted spectrum. The app was called ColorReader when
+# this was drawn — the spectrum was the "color" — and the mark outlived the
+# rename, so it stays as it is rather than being redesigned around the new name.
 BARS = [
     (0xF0, 0xA9, 0x3B),  # amber
     (0xE0, 0x73, 0x5C),  # coral

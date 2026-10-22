@@ -43,7 +43,7 @@ use crate::secrets::SECRET_FIELDS;
 /// Identifies the archive: a ZIP has no magic of its own, so this entry is
 /// what tells a backup from any other `.zip`.
 const MANIFEST_ENTRY: &str = "backup.json";
-const MANIFEST_FORMAT: &str = "colorreader-backup";
+const MANIFEST_FORMAT: &str = "fangce-backup";
 const MANIFEST_VERSION: u32 = 1;
 
 /// Sibling directory a restore is unpacked into.
@@ -131,8 +131,7 @@ fn redacted_db(library: &Library) -> AppResult<PathBuf> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|since| since.as_nanos())
         .unwrap_or_default();
-    let tmp =
-        std::env::temp_dir().join(format!("colorreader-backup-{}-{nanos}.db", std::process::id()));
+    let tmp = std::env::temp_dir().join(format!("fangce-backup-{}-{nanos}.db", std::process::id()));
     let _ = fs::remove_file(&tmp);
     library.with(|conn| {
         // `VACUUM INTO` takes the target as SQL text, so a quote in the path
@@ -179,7 +178,7 @@ pub fn stage(data_dir: &Path, archive: &Path) -> AppResult<BackupSummary> {
 
     let manifest: Manifest = serde_json::from_reader(
         zip.by_name(MANIFEST_ENTRY)
-            .map_err(|_| AppError::Message("这个文件不是 ColorReader 书库备份".into()))?,
+            .map_err(|_| AppError::Message("这个文件不是 方册 书库备份".into()))?,
     )?;
     if manifest.format != MANIFEST_FORMAT {
         return Err(AppError::UnsupportedFormat(manifest.format));

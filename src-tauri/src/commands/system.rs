@@ -84,7 +84,7 @@ mod tests {
     #[test]
     fn payload_uses_camel_case() {
         let info = SystemInfo {
-            app_name: "colorreader".into(),
+            app_name: "方册".into(),
             app_version: "0.1.0".into(),
             os: "macos".into(),
             arch: "aarch64".into(),

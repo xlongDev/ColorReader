@@ -1,14 +1,14 @@
 [package]
-name = "colorreader"
+name = "fangce"
 version = "0.1.0"
-description = "ColorReader - AI native, local first, high performance ebook reader"
+description = "方册 - AI native, local first, high performance ebook reader"
 authors = ["xlongDev"]
 edition = "2024"
 rust-version = "1.90"
-default-run = "colorreader"
+default-run = "fangce"
 
 [lib]
-name = "colorreader_lib"
+name = "fangce_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -81,7 +81,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 # Desktop only, and the crate says so itself (`#![cfg(not(android | ios))]`);
 # `run()` gates the registration the same way. Windows and Linux deliver a
-# `colorreader://` link to a *new* process, so this is what forwards that
+# `fangce://` link to a *new* process, so this is what forwards that
 # launch's argv to the instance already running — the `deep-link` feature is
 # what lets the handoff reuse the deep-link plugin's event and its single
 # argument check rather than a private payload.

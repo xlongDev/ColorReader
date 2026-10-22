@@ -273,7 +273,7 @@ const FOLIATE_FIXTURES: Record<string, { path: string; label: string }> = {
 /**
  * The fixture bytes for a foliate book, for the reader's foliate path.
  *
- * In the app the book comes over IPC (or streams over the ColorReader
+ * In the app the book comes over IPC (or streams over the 方册
  * protocol); a browser has no backend to read a file from, so the fixture
  * serves one from `public/` instead. `null` for every other book — the caller
  * falls through to the real load path, which in a browser is what it always

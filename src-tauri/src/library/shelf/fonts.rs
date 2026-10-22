@@ -223,7 +223,7 @@ mod tests {
     use super::*;
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("colorreader-fonts-{name}"));
+        let dir = std::env::temp_dir().join(format!("fangce-fonts-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir

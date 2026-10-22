@@ -9,11 +9,8 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 
 /// Wikipedia asks API clients to identify themselves.
-const WIKI_USER_AGENT: &str = concat!(
-    "ColorReader/",
-    env!("CARGO_PKG_VERSION"),
-    " (https://github.com/xlongDev/ColorReader)"
-);
+const WIKI_USER_AGENT: &str =
+    concat!("Fangce/", env!("CARGO_PKG_VERSION"), " (https://github.com/xlongDev/fangce)");
 
 /// How many characters of a selection are used as the Wikipedia lookup key.
 /// A whole selected sentence still finds its article via the search fallback;

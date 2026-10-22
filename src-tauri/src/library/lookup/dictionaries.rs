@@ -466,7 +466,7 @@ mod tests {
     }
 
     fn scratch(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("colorreader-dictionaries-{name}"));
+        let dir = std::env::temp_dir().join(format!("fangce-dictionaries-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("scratch");
         dir

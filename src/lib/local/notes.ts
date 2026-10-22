@@ -14,7 +14,7 @@
  */
 
 /** The scheme the app registers, so a row can be reopened where it came from. */
-const SCHEME = "colorreader";
+const SCHEME = "fangce";
 
 /** A byte-order mark, so Excel opens the file as UTF-8 instead of guessing the
  *  system code page — the difference between 三体 and mojibake. */
@@ -99,7 +99,7 @@ function frontmatter(books: Notes[]): string {
     }
     fields.push(`progress: ${only!.progress.toFixed(2)}`);
   }
-  fields.push("tags:", "  - ColorReader");
+  fields.push("tags:", "  - 方册");
   return `---\n${fields.join("\n")}\n---`;
 }
 
@@ -123,7 +123,7 @@ function body(notes: Notes, heading: string, dialect: Dialect, blocks: string[])
     if (entry.note !== null) blocks.push(entry.note);
     // The way back in. A link rather than a bare URL: note apps render the one
     // and leave the other as text that has to be copied out by hand.
-    blocks.push(`[在 ColorReader 中打开](${link(notes.id, entry.id)})`);
+    blocks.push(`[在 方册 中打开](${link(notes.id, entry.id)})`);
   }
 }
 

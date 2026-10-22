@@ -17,7 +17,7 @@ const BOOK = "public/demo/page-numbers.epub";
 async function seed(page: Page) {
   await page.evaluate(async () => {
     const database = await new Promise<IDBDatabase>((resolve) => {
-      const request = indexedDB.open("colorreader");
+      const request = indexedDB.open("fangce");
       request.addEventListener("success", () => resolve(request.result));
     });
     const books = await new Promise<{ id: string }[]>((resolve) => {
@@ -64,7 +64,7 @@ async function forget(page: Page) {
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
-        const request = indexedDB.open("colorreader");
+        const request = indexedDB.open("fangce");
         request.addEventListener("success", () => {
           const tx = request.result.transaction("annotations", "readwrite");
           tx.objectStore("annotations").clear();

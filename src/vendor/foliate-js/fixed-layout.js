@@ -1,4 +1,4 @@
-// ColorReader patch: dropped `import 'construct-style-sheets-polyfill'` —
+// 方册 patch: dropped `import 'construct-style-sheets-polyfill'` —
 // constructable stylesheets ship in WebKit 16.4+ / all Chromium, which covers
 // every Tauri webview this app targets.
 

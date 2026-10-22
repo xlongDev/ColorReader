@@ -384,7 +384,7 @@ fn build_bar(app: &AppHandle) -> tauri::Result<WebviewWindow> {
         // second window could be pointed at instead.
         WebviewUrl::App("index.html?mini=1".into()),
     )
-    .title("ColorReader 朗读")
+    .title("方册 朗读")
     .inner_size(BAR_SIZE.0, BAR_SIZE.1)
     // A capsule lying on the desktop, so the window itself has to be nothing:
     // no frame, no shadow, and a transparent surface for the pill's rounded

@@ -58,7 +58,7 @@ function styleId(id: string): string {
  * *network* — a compromised CDN — and is not a defence against someone who can
  * already edit this app's state.
  */
-const SHEET_STORE = "colorreader.catalogFontSheets";
+const SHEET_STORE = "fangce.catalogFontSheets";
 
 interface StoredSheet {
   /** Which bytes this was built from — see `fingerprintOf`. */

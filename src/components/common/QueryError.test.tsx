@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { QueryError } from "@/components/common/QueryError";
 
-const ERROR = new Error("database is locked: /Users/x/Library/Application Support/colorreader.db");
+const ERROR = new Error("database is locked: /Users/x/Library/Application Support/fangce.db");
 
 describe("QueryError", () => {
   it("leads with a human sentence, not the exception", () => {

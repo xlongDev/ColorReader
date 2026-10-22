@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "ColorReader",
+  "productName": "方册",
   "version": "0.1.0",
-  "identifier": "dev.xlong.colorreader",
+  "identifier": "dev.xlong.fangce",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "ColorReader",
+        "title": "方册",
         "width": 1280,
         "height": 820,
         "minWidth": 1024,
@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost colorreader://localhost http://colorreader.localhost https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob: asset: http://asset.localhost colorreader://localhost http://colorreader.localhost https://upload.wikimedia.org; font-src 'self' data: colorreader://localhost http://colorreader.localhost https://cdn.jsdelivr.net https://unpkg.com; frame-src 'self' blob:; worker-src 'self' blob:"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost fangce://localhost http://fangce.localhost https://cdn.jsdelivr.net https://unpkg.com; style-src 'self' 'unsafe-inline' blob:; img-src 'self' data: blob: asset: http://asset.localhost fangce://localhost http://fangce.localhost https://upload.wikimedia.org; font-src 'self' data: fangce://localhost http://fangce.localhost https://cdn.jsdelivr.net https://unpkg.com; frame-src 'self' blob:; worker-src 'self' blob:"
     },
     "withGlobalTauri": false,
     "macOSPrivateApi": true
@@ -34,13 +34,13 @@
   "plugins": {
     "deep-link": {
       "desktop": {
-        "schemes": ["colorreader"]
+        "schemes": ["fangce"]
       }
     },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEIwMDVFMEZBMjRGMjAwRTQKUldUa0FQSWsrdUFGc0F5NVkwMEljUk9IcG9ubnlrbjFNUXBseHY0Sys4WDRsb0FaL3ZFNTlkTXcK",
       "endpoints": [
-        "https://github.com/xlongDev/ColorReader/releases/latest/download/latest.json"
+        "https://github.com/xlongDev/fangce/releases/latest/download/latest.json"
       ]
     }
   },
@@ -57,6 +57,6 @@
     ],
     "category": "Productivity",
     "shortDescription": "AI native, local first ebook reader",
-    "longDescription": "ColorReader is a cross-platform ebook reader built for very large books: a Rust reading engine, SQLite FTS5 search and a local-first AI reading assistant behind a quiet desktop interface."
+    "longDescription": "方册 is a cross-platform ebook reader built for very large books: a Rust reading engine, SQLite FTS5 search and a local-first AI reading assistant behind a quiet desktop interface."
   }
 }

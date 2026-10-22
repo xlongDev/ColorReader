@@ -185,10 +185,10 @@ export const useSettings = create<SettingsState>()(
         set((state) => ({ downloadedFonts: state.downloadedFonts.filter((font) => font !== id) })),
     }),
     {
-      name: "colorreader.settings",
       // Not bumped: the merge is shallow, so a payload written before
       // `shelfViews` existed simply keeps the default above. Bumping without a
       // `migrate` would instead throw every stored preference away.
+      name: "fangce.settings",
       version: 1,
     },
   ),

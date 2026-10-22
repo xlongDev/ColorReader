@@ -314,7 +314,7 @@ function ThemeSwitch({ collapsed }: { collapsed: boolean }) {
 }
 
 /** Where the GitHub action points; the opener capability whitelists this URL. */
-const REPO_URL = "https://github.com/xlongDev/ColorReader";
+const REPO_URL = "https://github.com/xlongDev/fangce";
 
 interface FooterAction {
   key: string;

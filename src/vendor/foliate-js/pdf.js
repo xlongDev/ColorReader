@@ -1,9 +1,9 @@
-// ColorReader patch: the reader renders PDFs through its own pdf.js pipeline
+// 方册 patch: the reader renders PDFs through its own pdf.js pipeline
 // (lib/pdf.ts + PdfPageView), so foliate's PDF path is never entered. The
 // upstream `import('@pdfjs/pdf.min.mjs')` alias does not resolve in our
 // bundler, so the loader is stubbed out instead.
 const loadPDFJS = async () => {
-    throw new Error('foliate PDF rendering is disabled in ColorReader; use lib/pdf.ts')
+    throw new Error('foliate PDF rendering is disabled in 方册; use lib/pdf.ts')
 }
 
 const DC_NS = 'http://purl.org/dc/elements/1.1/'

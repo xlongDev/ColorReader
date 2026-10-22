@@ -30,7 +30,7 @@ import { type StoredBook } from "./rows";
 export async function clippingsImportFile(file: File, dryRun: boolean): Promise<Outcome> {
   const parsed = parseClippings(await file.text());
   if (!parsed) {
-    throw new Error("只认得 ColorReader 导出的 .md 与 .csv；Kindle 的 My Clippings.txt 得先导入书");
+    throw new Error("只认得 方册 导出的 .md 与 .csv；Kindle 的 My Clippings.txt 得先导入书");
   }
 
   const books = await db.all<StoredBook>("books");

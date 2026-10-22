@@ -49,9 +49,9 @@ describe("fontFaceCss", () => {
   const id = "abc-123";
 
   it("declares one face per imported font", () => {
-    const css = fontFaceCss([{ id, url: "colorreader://localhost/font/abc-123" }]);
+    const css = fontFaceCss([{ id, url: "fangce://localhost/font/abc-123" }]);
     expect(css).toContain(`font-family: "${customFontFamily(id)}"`);
-    expect(css).toContain("colorreader://localhost/font/abc-123");
+    expect(css).toContain("fangce://localhost/font/abc-123");
   });
 
   it("swaps the face in rather than blocking on it", () => {

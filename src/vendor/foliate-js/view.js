@@ -33,7 +33,7 @@ const makeZipLoader = async file => {
     const { configure, ZipReader, BlobReader, TextWriter, BlobWriter } =
         await import('./vendor/zip.js')
     configure({ useWebWorkers: false })
-    // A string is a ColorReader protocol URL: read the archive over HTTP Range
+    // A string is a 方册 protocol URL: read the archive over HTTP Range
     // requests so the reader never pulls the whole book across the wire.
     const reader = new ZipReader(
         typeof file === 'string' ? new ProtocolRangeReader(file) : new BlobReader(file),
@@ -49,7 +49,7 @@ const makeZipLoader = async file => {
 }
 
 /**
- * A zip.js `Reader` backed by HTTP Range requests against a ColorReader custom
+ * A zip.js `Reader` backed by HTTP Range requests against a 方册 custom
  * protocol URL. Satisfies the interface `ZipReader` expects: a finite `size`
  * and an async `readUint8Array(offset, length)`. The reader probes the total
  * size once (a `bytes=0-0` request) so `ZipReader` can locate the central
@@ -139,7 +139,7 @@ const fetchFile = async url => {
 }
 
 export const makeBook = async file => {
-    // A string is a ColorReader protocol URL (e.g. `colorreader://localhost/book/<id>`).
+    // A string is a 方册 protocol URL (e.g. `fangce://localhost/book/<id>`).
     // Stream the archive over HTTP Range requests instead of downloading it whole;
     // only EPUB is routed this way today, so build an EPUB directly.
     if (typeof file === 'string') {

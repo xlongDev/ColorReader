@@ -6,7 +6,7 @@ interface WordmarkProps {
   compact?: boolean;
 }
 
-/** The ColorReader mark: a five-bar muted spectrum over the wordmark. */
+/** The 方册 mark: a five-bar muted spectrum over the wordmark. */
 export function Wordmark({ compact = false }: WordmarkProps) {
   return (
     <div className="flex items-center gap-2.5 select-none">
@@ -29,7 +29,7 @@ export function Wordmark({ compact = false }: WordmarkProps) {
         }}
         className="text-text-1 text-[15px] font-semibold tracking-tight whitespace-nowrap"
       >
-        ColorReader
+        方册
       </motion.span>
     </div>
   );

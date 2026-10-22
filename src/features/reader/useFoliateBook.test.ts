@@ -18,7 +18,7 @@ import type { Annotation, ChapterMeta } from "@/types/ipc";
  * paint again.
  */
 
-const CFI_KEY = "colorreader:foliate:book-1";
+const CFI_KEY = "fangce:foliate:book-1";
 
 /** Three chapters of 100 characters each, so a whole-book fraction of 0.5 lands
  *  on the second one and the mapping can be checked by hand. */

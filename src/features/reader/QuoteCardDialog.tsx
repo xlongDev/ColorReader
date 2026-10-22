@@ -157,7 +157,7 @@ export function QuoteCardDialog({
       open={open}
       onOpenChange={onOpenChange}
       title="金句卡片"
-      description="画的是你正在读的那张纸：你的字体、你的标注颜色、你的进度。右下角的二维码在 ColorReader 里打开这一句。"
+      description="画的是你正在读的那张纸：你的字体、你的标注颜色、你的进度。右下角的二维码在 方册 里打开这一句。"
       widthClass="w-[min(92vw,420px)]"
     >
       <div className="flex justify-center">

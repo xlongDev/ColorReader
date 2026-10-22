@@ -30,7 +30,7 @@ use crate::secrets;
 #[derive(specta::Type, Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncConfig {
-    /// WebDAV collection, e.g. `https://dav.example.com/dav/ColorReader`.
+    /// WebDAV collection, e.g. `https://dav.example.com/dav/方册`.
     pub url: String,
     /// Empty means the server needs no authentication.
     #[serde(default)]
@@ -984,13 +984,13 @@ mod tests {
         let saved = set_config(
             &harness.library,
             &SyncConfig {
-                url: "https://dav.example.com/dav/ColorReader/".into(),
+                url: "https://dav.example.com/dav/方册/".into(),
                 username: "reader@example.com".into(),
                 password: "app-password".into(),
             },
         )
         .expect("save");
-        assert_eq!(saved.url, "https://dav.example.com/dav/ColorReader", "尾斜杠要去掉");
+        assert_eq!(saved.url, "https://dav.example.com/dav/方册", "尾斜杠要去掉");
 
         // The round trip alone cannot tell sealing from not sealing — a
         // plaintext row reads back just as well. This is what fails if
