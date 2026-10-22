@@ -1,6 +1,6 @@
 //! Reads this app's own Markdown export back into highlights.
 
-use super::{Clipping, LINK_PREFIX, Parsed, linked_book_id};
+use super::{Clipping, Parsed, carries_link, linked_book_id};
 
 /// The file is written to be *read* — a quoted passage, the note under it, a
 /// link home — so the parse is a small state machine over those blocks rather
@@ -84,7 +84,7 @@ pub fn parse_markdown(source: &str) -> Parsed {
             }
             continue;
         }
-        if line.contains(LINK_PREFIX) {
+        if carries_link(line) {
             let before = parsed.highlights.len();
             flush(&mut passage, &mut note, &mut in_note, &title, chapter, &mut parsed);
             // The link closes the entry above it, so it is stamped onto the
@@ -162,9 +162,9 @@ mod tests {
             "## 第 2 章",
             "> The Moon rose over the Halls.",
             "月亮升起来了",
-            &format!("[在 ColorReader 中打开]({LINK})"),
+            &format!("[在 方册 中打开]({LINK})"),
             "> A second one.",
-            &format!("[在 ColorReader 中打开]({LINK})"),
+            &format!("[在 方册 中打开]({LINK})"),
         ]);
         let parsed = parse_markdown(&source);
 
@@ -190,12 +190,12 @@ mod tests {
             "Susanna Clarke",
             "### 第 1 章",
             "> The Beauty of the House.",
-            &format!("[在 ColorReader 中打开]({LINK})"),
+            &format!("[在 方册 中打开]({LINK})"),
             "## 《三体》",
             "刘慈欣",
             "### 第 3 章",
             "> 不要回答。",
-            &format!("[在 ColorReader 中打开]({LINK})"),
+            &format!("[在 方册 中打开]({LINK})"),
         ]);
         let parsed = parse_markdown(&source);
 
@@ -217,7 +217,7 @@ mod tests {
             "## 第 1 章",
             "> First line.\n> Second line.",
             "A note that\nspans lines.",
-            &format!("[在 ColorReader 中打开]({LINK})"),
+            &format!("[在 方册 中打开]({LINK})"),
         ]);
         let parsed = parse_markdown(&source);
 
@@ -247,7 +247,7 @@ mod tests {
              3 条标注\n\n\
              ## 第 1 章\n\n\
              > 你好\n\n\
-             [在 ColorReader 中打开](colorreader://book/b1?annotation=a1)\n",
+             [在 方册 中打开](fangce://book/b1?annotation=a1)\n",
         );
         assert_eq!(markdown.highlights[0].book_id.as_deref(), Some("b1"));
         // The query is the highlight, not the book, and is dropped.
@@ -266,9 +266,9 @@ mod tests {
         let source = "# 《三体》标注与笔记\n\n\
                       ## 第 1 章\n\n\
                       > 第一条\n\n\
-                      [在 ColorReader 中打开](colorreader://book/b1?annotation=a1)\n\n\
+                      [在 方册 中打开](fangce://book/b1?annotation=a1)\n\n\
                       > 第二条\n\n\
-                      [在 ColorReader 中打开](colorreader://book/b2?annotation=a2)\n\n\
+                      [在 方册 中打开](fangce://book/b2?annotation=a2)\n\n\
                       ## 第 2 章\n\n\
                       > 第三条\n";
         let parsed = parse_markdown(source);

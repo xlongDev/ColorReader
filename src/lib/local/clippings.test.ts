@@ -103,8 +103,6 @@ describe("what is ours and what is not", () => {
   });
 
   it("refuses a CSV with no 原文 column instead of guessing which one holds it", () => {
-    expect(parseCsv("\uFEFF章节,链接\n1,colorreader://book/b1?annotation=a1\n").highlights).toEqual(
-      [],
-    );
+    expect(parseCsv("\uFEFF章节,链接\n1,fangce://book/b1?annotation=a1\n").highlights).toEqual([]);
   });
 });

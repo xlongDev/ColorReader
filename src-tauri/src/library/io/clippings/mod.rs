@@ -122,19 +122,25 @@ pub enum Shape {
 }
 
 /// The scheme and path every highlight in an export links back through.
-const LINK_PREFIX: &str = "colorreader://book/";
+const LINK_PREFIX: &str = "fangce://book/";
+
+/// Whether `text` carries one of this app's export links.
+pub(super) fn carries_link(text: &str) -> bool {
+    text.contains(LINK_PREFIX)
+}
 
 /// The book id an export's link names, or `None` when the line carries no link.
 ///
-/// The shape is `colorreader://book/<book id>?annotation=<highlight id>`, which
+/// The shape is `fangce://book/<book id>?annotation=<highlight id>`, which
 /// `export::link` writes and `src/lib/deeplink.ts` parses from the other end.
 /// The query is dropped here: this is asking which book, not which highlight.
 ///
 /// Searched for rather than matched at the start: in the Markdown the link is
-/// wrapped in `[在 ColorReader 中打开](…)`, and a reader who pasted the file
+/// wrapped in `[在 方册 中打开](…)`, and a reader who pasted the file
 /// through something that rewrote the wrapper should still be matched.
 fn linked_book_id(text: &str) -> Option<String> {
-    let rest = &text[text.find(LINK_PREFIX)? + LINK_PREFIX.len()..];
+    let at = text.find(LINK_PREFIX)?;
+    let rest = &text[at + LINK_PREFIX.len()..];
     let id = rest.split(['?', ')', ']', ' ']).next().unwrap_or("").trim();
     (!id.is_empty()).then(|| id.to_string())
 }
@@ -146,7 +152,7 @@ fn linked_book_id(text: &str) -> Option<String> {
 /// themselves in their first lines.
 ///
 /// Order matters, and the header has to be looked at first: a CSV export carries
-/// the same `colorreader://` link on every row that a Markdown one does, so
+/// the same `fangce://` link on every row that a Markdown one does, so
 /// asking "does this mention a link?" before "is this a table?" calls every CSV
 /// a Markdown file. (Measured: it did.) The header row is unambiguous — a table
 /// opens with column names, and neither of the other two shapes can.
@@ -159,7 +165,7 @@ pub fn detect(source: &str) -> Shape {
     // An export with nothing in it carries no link, so the heading is then the
     // only thing left to go on. Kindle's first line is `Title (Author)` and
     // never starts with a hash.
-    if source.contains(LINK_PREFIX) || first.starts_with('#') {
+    if carries_link(source) || first.starts_with('#') {
         return Shape::Markdown;
     }
     Shape::Kindle
@@ -196,11 +202,8 @@ mod tests {
 
         // A cross-book export names no book in its title heading; the link on
         // the entries is what gives it away.
-        let many = blocks(&[
-            "# 笔记导出",
-            "2 本书 · 3 条标注",
-            &format!("[在 ColorReader 中打开]({LINK})"),
-        ]);
+        let many =
+            blocks(&["# 笔记导出", "2 本书 · 3 条标注", &format!("[在 方册 中打开]({LINK})")]);
         assert_eq!(detect(&many), Shape::Markdown);
 
         // An export with nothing in it has neither a link nor a 原文 column —

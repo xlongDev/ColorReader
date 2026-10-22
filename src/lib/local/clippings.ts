@@ -16,7 +16,7 @@
  */
 
 /** The link this app writes, and the book id inside it. */
-const LINK_PREFIX = "colorreader://book/";
+const LINK_PREFIX = "fangce://book/";
 
 /** One highlight read out of a file. */
 export interface Clipping {
@@ -61,6 +61,9 @@ const linkedBookId = (line: string): string | null => {
   const id = rest.split(/[?\s)"']/)[0] ?? "";
   return id.length > 0 ? id : null;
 };
+
+/** Whether a line carries one of this app's links. */
+const carriesLink = (line: string): boolean => linkedBookId(line) !== null;
 
 /** "第 3 章" → 2. One-based in the file, zero-based in the library. */
 const chapterNumber = (heading: string): number | null => {
@@ -132,7 +135,7 @@ export function parseMarkdown(source: string): Parsed {
       }
       continue;
     }
-    if (line.includes(LINK_PREFIX)) {
+    if (carriesLink(line)) {
       const before = parsed.highlights.length;
       flush();
       // The link closes the entry above it, so it is stamped onto the highlight

@@ -20,7 +20,7 @@
 //! The number is also what the reader's own annotation list shows, so the file
 //! and the app agree on where a highlight lives.
 //!
-//! Every highlight also carries a `colorreader://` link back to itself. The
+//! Every highlight also carries a `fangce://` link back to itself. The
 //! link names the book and the annotation and *nothing else* — no position, no
 //! chapter, no offset. Positions are the one thing this app cannot state
 //! portably: a foliate highlight is anchored by CFI, a paragraph one by
@@ -64,7 +64,7 @@ const CSV_HEADER: &str = "书名,章节,原文,笔记,颜色,样式,链接\n";
 
 /// Scheme the app registers for deep links (see `deep_link`), so a highlight in
 /// an exported file can be reopened in the app that wrote it.
-pub const SCHEME: &str = "colorreader";
+pub const SCHEME: &str = "fangce";
 
 /// One highlight as the export prints it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,7 +175,7 @@ fn frontmatter(books: &[&Notes]) -> String {
         fields.push(format!("progress: {:.2}", only.progress));
     }
     fields.push("tags:".to_string());
-    fields.push("  - ColorReader".to_string());
+    fields.push("  - 方册".to_string());
     let mut out = String::from("---\n");
     for field in fields {
         out.push_str(&field);
@@ -328,7 +328,7 @@ fn markdown_body(notes: &Notes, heading: &str, dialect: Dialect, blocks: &mut Ve
         }
         // The way back in. A link rather than a bare URL: note apps render the
         // one and leave the other as text that has to be copied out by hand.
-        blocks.push(format!("[在 ColorReader 中打开]({})", link(&notes.id, &entry.id)));
+        blocks.push(format!("[在 方册 中打开]({})", link(&notes.id, &entry.id)));
     }
 }
 
@@ -463,7 +463,7 @@ mod tests {
                 &self.layout,
                 paths,
                 None,
-                &mut |_, _, _| {},
+                &|_, _, _| {},
             )
         }
 
@@ -575,11 +575,11 @@ mod tests {
              \n\
              第三章的伏笔\n\
              \n\
-             [在 ColorReader 中打开](colorreader://book/b1?annotation=a1)\n\
+             [在 方册 中打开](fangce://book/b1?annotation=a1)\n\
              \n\
              > 再见\n\
              \n\
-             [在 ColorReader 中打开](colorreader://book/b1?annotation=a2)\n\
+             [在 方册 中打开](fangce://book/b1?annotation=a2)\n\
              \n\
              ## 第 3 章\n\
              \n\
@@ -587,7 +587,7 @@ mod tests {
              \n\
              记一笔\n\
              \n\
-             [在 ColorReader 中打开](colorreader://book/b1?annotation=a3)\n"
+             [在 方册 中打开](fangce://book/b1?annotation=a3)\n"
         );
     }
 
@@ -595,7 +595,7 @@ mod tests {
     fn the_link_format_is_the_one_the_frontend_parses() {
         // The other end of this contract is `parseDeepLink` in
         // `src/lib/deeplink.ts`; the two are pinned to the same string.
-        assert_eq!(link("book-1", "note-1"), "colorreader://book/book-1?annotation=note-1");
+        assert_eq!(link("book-1", "note-1"), "fangce://book/book-1?annotation=note-1");
     }
 
     #[test]
@@ -610,12 +610,12 @@ mod tests {
         assert!(rendered.contains("title: \"《三体》标注与笔记\""), "{rendered}");
         assert!(rendered.contains("authors: [\"刘慈欣\"]"), "{rendered}");
         assert!(rendered.contains("progress: 0.50"), "{rendered}");
-        assert!(rendered.contains("  - ColorReader"), "{rendered}");
+        assert!(rendered.contains("  - 方册"), "{rendered}");
         // And the parts a vault treats as links rather than text.
         assert!(rendered.contains("# [[三体]] 标注与笔记"), "{rendered}");
         assert!(rendered.contains("> [!quote]\n> 你好"), "{rendered}");
         // The way back into this app is the same one it always was.
-        assert!(rendered.contains("[在 ColorReader 中打开](colorreader://book/b1?annotation=a1)"));
+        assert!(rendered.contains("[在 方册 中打开](fangce://book/b1?annotation=a1)"));
     }
 
     #[test]
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(
             rendered,
             "\u{feff}书名,章节,原文,笔记,颜色,样式,链接\n\
-             三体,1,你好,伏笔,,,colorreader://book/b1?annotation=a1\n",
+             三体,1,你好,伏笔,,,fangce://book/b1?annotation=a1\n",
             "旧标注没写过颜色和样式，文件不该替它们编一个"
         );
     }
@@ -687,9 +687,7 @@ mod tests {
         // Real ids are v4 UUIDs, and every highlight gets its own link.
         assert_eq!(ids.len(), 3);
         for annotation_id in &ids {
-            let back = format!(
-                "[在 ColorReader 中打开](colorreader://book/{id}?annotation={annotation_id})"
-            );
+            let back = format!("[在 方册 中打开](fangce://book/{id}?annotation={annotation_id})");
             assert!(rendered.contains(&back), "缺链接 {back}\n{rendered}");
         }
     }
@@ -766,7 +764,7 @@ mod tests {
              \n\
              伏笔\n\
              \n\
-             [在 ColorReader 中打开](colorreader://book/b1?annotation=a1)\n\
+             [在 方册 中打开](fangce://book/b1?annotation=a1)\n\
              \n\
              ## 《球状闪电》\n\
              \n\
@@ -776,7 +774,7 @@ mod tests {
              \n\
              另一条的笔记\n\
              \n\
-             [在 ColorReader 中打开](colorreader://book/b2?annotation=b1)\n"
+             [在 方册 中打开](fangce://book/b2?annotation=b1)\n"
         );
     }
 
@@ -791,8 +789,8 @@ mod tests {
         assert_eq!(
             rendered,
             "\u{feff}书名,章节,原文,笔记,颜色,样式,链接\n\
-             三体,1,你好,伏笔,,,colorreader://book/b1?annotation=a1\n\
-             球状闪电,1,另一本,,,,colorreader://book/b2?annotation=b1\n"
+             三体,1,你好,伏笔,,,fangce://book/b1?annotation=a1\n\
+             球状闪电,1,另一本,,,,fangce://book/b2?annotation=b1\n"
         );
     }
 
