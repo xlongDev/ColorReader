@@ -417,7 +417,7 @@ pub async fn download(
         layout,
         std::slice::from_ref(&staged),
         None,
-        &mut |_, _, _| {},
+        &|_, _, _| {},
     );
     if let Err(err) = std::fs::remove_file(&staged) {
         tracing::warn!(path = %staged.display(), error = %err, "清理下载暂存文件失败");

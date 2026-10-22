@@ -33,7 +33,7 @@ pub const PACK_EXTENSIONS: [&str; 2] = ["ctz", "ctzx"];
 /// Name of the manifest inside the archive. A ZIP cannot carry magic bytes, so
 /// this file is what identifies an archive as a book pack.
 const MANIFEST_ENTRY: &str = "pack.json";
-const MANIFEST_FORMAT: &str = "colorreader-book-pack";
+const MANIFEST_FORMAT: &str = "fangce-book-pack";
 const MANIFEST_VERSION: u32 = 1;
 
 /// Entry holding the original file; the extension names the source format.
@@ -42,7 +42,7 @@ const SOURCE_PREFIX: &str = "source.";
 const READING_ENTRY: &str = "reading.json";
 
 const ENCRYPTED_EXT: &str = "ctzx";
-const ENCRYPTED_FORMAT: &str = "colorreader-book-pack-enc";
+const ENCRYPTED_FORMAT: &str = "fangce-book-pack-enc";
 const ENCRYPTED_VERSION: u32 = 1;
 
 const SALT_BYTES: usize = 16;
@@ -447,7 +447,7 @@ mod tests {
                 &self.layout,
                 paths,
                 None,
-                &mut |_, _, _| {},
+                &|_, _, _| {},
             )
         }
 

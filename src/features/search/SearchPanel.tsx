@@ -21,7 +21,7 @@ interface SearchPanelProps {
 
 /** Query history, most recent first. Local on purpose: a reading history is
  *  the reader's own business and there is nothing to sync it with. */
-const HISTORY_KEY = "colorreader.search-history";
+const HISTORY_KEY = "fangce.search-history";
 const HISTORY_MAX = 5;
 
 function readHistory(): string[] {
@@ -231,12 +231,11 @@ export function SearchPanel({ bookId = null, onPick, initialQuery = "" }: Search
                 <ul>
                   {group.rows.map(({ hit, at, key, parts }) => {
                     const on = at === active;
-                    // No entrance animation on these rows, on purpose. The
-                    // query runs on every keystroke (see `useSearch`:
-                    // debouncing would only add lag), and a row's key carries
-                    // its index, so any reorder remounts it — a stagger here
-                    // would re-run on each keypress and read as flicker rather
-                    // than polish. Instant is what fast feels like.
+                    // No entrance animation on these rows, on purpose. A row's
+                    // key carries its index, so any reorder remounts it — a
+                    // stagger here would re-run on each query and read as
+                    // flicker rather than polish. Instant is what fast feels
+                    // like.
                     return (
                       <li key={key} className="relative">
                         {/* The cursor is one element that glides between rows,

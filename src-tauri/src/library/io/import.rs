@@ -6,6 +6,8 @@
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -43,36 +45,79 @@ impl ImportOutcome {
     }
 }
 
-/// Imports every path, reporting progress after each file.
+/// How many files are imported at once.
+///
+/// Each file is hashed, parsed and copied — three operations that spend most of
+/// their time waiting on the disk or on one core, and that share nothing. Doing
+/// them one file after another leaves the other cores idle for the whole batch;
+/// this is the same pool size readest uses. Measured on a four-book batch
+/// (14.8 M characters): 447 ms one file at a time, 182 ms with the pool — the
+/// slowest single book is what the batch now costs, which is where it flattens.
+/// The bench that produced those numbers is in `library/bench.rs`.
+///
+/// The writes do *not* overlap: `Library` owns one connection behind a mutex, so
+/// the transactions queue up. That is deliberate — the point of the pool is the
+/// parsing and the copying, and a second writer would only buy `SQLITE_BUSY`.
+const IMPORT_CONCURRENCY: usize = 4;
+
+/// Imports every path, reporting progress as each file finishes.
 ///
 /// `password` is only consulted by `.ctzx` packs; every other format ignores
 /// it, so a mixed batch works with one prompt.
+///
+/// Outcomes come back in the order the paths were given, whatever order the
+/// workers finished in — the summary the UI draws counts them, and the progress
+/// counter is the only thing that is allowed to be out of order.
 pub fn import_files(
     library: &Library,
     layout: &Layout,
     paths: &[PathBuf],
     password: Option<&str>,
-    on_progress: &mut dyn FnMut(usize, usize, &str),
+    on_progress: &(dyn Fn(usize, usize, &str) + Sync),
 ) -> Vec<ImportOutcome> {
     let total = paths.len();
-    let mut outcomes = Vec::with_capacity(total);
-
-    for (index, path) in paths.iter().enumerate() {
-        let outcome = match guarded(|| import_one(library, layout, path, password)) {
-            Ok(result) => result,
-            Err(err) => {
-                tracing::warn!(file = %path.display(), error = %err, "导入失败");
-                ImportOutcome::Failed {
-                    path: path.to_string_lossy().to_string(),
-                    message: err.to_string(),
-                }
-            }
-        };
-        on_progress(index + 1, total, &path.to_string_lossy());
-        outcomes.push(outcome);
+    if total == 0 {
+        return Vec::new();
     }
+    let next = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    let finished: Mutex<Vec<(usize, ImportOutcome)>> = Mutex::new(Vec::with_capacity(total));
 
-    outcomes
+    std::thread::scope(|scope| {
+        for _ in 0..IMPORT_CONCURRENCY.min(total) {
+            scope.spawn(|| {
+                loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(path) = paths.get(index) else { break };
+                    let outcome = match guarded(|| import_one(library, layout, path, password)) {
+                        Ok(result) => result,
+                        Err(err) => {
+                            tracing::warn!(file = %path.display(), error = %err, "导入失败");
+                            ImportOutcome::Failed {
+                                path: path.to_string_lossy().to_string(),
+                                message: err.to_string(),
+                            }
+                        }
+                    };
+                    // The book's transaction has committed by now, so a shelf
+                    // refetch this event triggers will see it. The counter is
+                    // the only number that crosses threads, and it is shared by
+                    // every worker on purpose: what it must report is "how many
+                    // are done", not "which one this was".
+                    {
+                        let mut finished = finished.lock().unwrap_or_else(|err| err.into_inner());
+                        finished.push((index, outcome));
+                    }
+                    let count = done.fetch_add(1, Ordering::Relaxed) + 1;
+                    on_progress(count, total, &path.to_string_lossy());
+                }
+            });
+        }
+    });
+
+    let mut finished = finished.into_inner().unwrap_or_else(|err| err.into_inner());
+    finished.sort_by_key(|(index, _)| *index);
+    finished.into_iter().map(|(_, outcome)| outcome).collect()
 }
 
 /// Runs one file's pipeline with a panic turned into that file's failure.
@@ -343,7 +388,7 @@ mod tests {
         }
 
         fn import(&self, paths: &[PathBuf]) -> Vec<ImportOutcome> {
-            import_files(&self.library, &self.layout, paths, None, &mut |_, _, _| {})
+            import_files(&self.library, &self.layout, paths, None, &|_, _, _| {})
         }
 
         fn shelve(&self) -> Vec<repository::BookSummary> {
@@ -447,6 +492,42 @@ mod tests {
 
         assert!(matches!(&outcomes[0], ImportOutcome::Duplicate { .. }), "{:?}", outcomes[0]);
         assert_eq!(harness.shelve().len(), 1, "重复导入不得产生第二行记录");
+    }
+
+    #[test]
+    fn the_same_bytes_twice_in_one_batch_still_lands_once() {
+        // The race the import pool opens. Two workers hash the same file at the
+        // same time, both miss `find_by_hash`, and only the UNIQUE index on
+        // `content_hash` decides — so the loser has to answer "duplicate", not
+        // "failed", and has to take the copy it already made with it.
+        let harness = Harness::new("import-dupe-batch");
+        let first = epub(&harness.dir, "a.epub", "三体");
+        let second = epub(&harness.dir, "b.epub", "三体");
+
+        let outcomes = harness.import(&[first, second]);
+        assert_eq!(outcomes.len(), 2);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, ImportOutcome::Imported { .. }))
+                .count(),
+            1,
+            "{outcomes:?}"
+        );
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, ImportOutcome::Duplicate { .. }))
+                .count(),
+            1,
+            "{outcomes:?}"
+        );
+        assert_eq!(harness.shelve().len(), 1, "同一份字节不得产生两行记录");
+        assert_eq!(
+            std::fs::read_dir(&harness.layout.books_dir).expect("read").count(),
+            1,
+            "落败的那一次必须清掉自己复制的文件"
+        );
     }
 
     #[test]
@@ -789,10 +870,14 @@ mod tests {
         let a = epub(&harness.dir, "a.epub", "A");
         let b = epub(&harness.dir, "b.epub", "B");
 
-        let mut seen: Vec<(usize, usize)> = Vec::new();
-        import_files(&harness.library, &harness.layout, &[a, b], None, &mut |done, total, _| {
-            seen.push((done, total));
+        // The counter is shared by the workers, so it arrives out of order —
+        // what it must not do is skip or repeat a number.
+        let seen: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+        import_files(&harness.library, &harness.layout, &[a, b], None, &|done, total, _| {
+            seen.lock().expect("progress").push((done, total));
         });
+        let mut seen = seen.into_inner().expect("progress");
+        seen.sort_unstable();
         assert_eq!(seen, [(1, 2), (2, 2)]);
     }
 

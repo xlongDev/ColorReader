@@ -1,4 +1,4 @@
-# ColorReader 架构
+# 方册 架构
 
 本文档记录**当前已落地**的架构，以及后续阶段的演进方向。只写已经存在的东西，未来计划单独标注。
 
@@ -19,7 +19,7 @@
 └───────────────────────┬─────────────────────────────────┘
                         │
 ┌───────────────────────┴─────────────────────────────────┐
-│  SQLite（WAL）· FTS5 · sqlite-vec                         │
+│  SQLite（WAL）· sqlite-vec                                │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -44,7 +44,7 @@
 | `ai/`         | AI 配置仓储（`settings` KV 表）+ OpenAI 兼容流式聊天客户端（SSE 解析为纯函数）+ embedding 客户端（批量、归一化、f32 序列化）+ rerank 客户端（Cohere 兼容）                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `library/`    | 导入管线（去重、文件落盘、元数据提取）+ 书籍仓储（查询 / 统计）+ 章节仓储 + 标注仓储 + 全文检索 + 书档（导入 / 导出 / 加密）+ 笔记导出（Markdown / CSV）+ RAG（组块 / 索引 / 暴力检索）+ 知识图谱（LLM 抽取 / 存储 / 邻域查询）+ 书源（JSON 规则 / 搜索 / 下载）+ WebDAV 同步（进度 / LWW 合并）。**分七个子目录**：`shelf/`（书目 / 章节 / 标签 / 阅读时长 / 字体）、`marks/`（标注 / 书签 / 跨版本迁移）、`lookup/`（词典注册表 + StarDict 与 MDict 两个格式层 + 词条标记）、`retrieval/`（全文检索 / RAG）、`assist/`（知识图谱 / 阅读助手 / OCR 回写）、`transfer/`（WebDAV 同步 / 整库备份）、`io/`（导入 / 导出 / 书档 / 标注回填 / 书源）—— 标注回填自己按来源再分一层：`io/clippings/{kindle,markdown,csv}.rs` 三个解析器，加 `anchor.rs`（匹配书目与定位原文）与 `import.rs`（落库与报告）。**子目录是私有的，`mod.rs` 把每个模块 `pub use` 回顶层**，所以 `crate::library::repository` 仍然成立 —— 分层管的是「该打开哪个文件」，不是新的路径。两个目录不叫 `search/` 和 `sync/` 是因为 `pub mod search;` 与 `pub use search::search;` 同名会撞 E0255，理由写在 `library/mod.rs` 的模块文档里 |
 | `document/`   | 七种格式的元数据、封面与章节正文提取：`epub`（OPF / spine）、`pdf`（逐页文本）、`mobi/`（`pdb` PDB 容器与段头 / `palmdoc` PalmDOC 与 HUFF-CDIC 解压 / `exth` 元数据块 / `index` KF8 与 MOBI6 目录 / `markup` Kindle 专有属性改写 / `text` 与 `bytes` 解码与字节读取器）、`fb2`（XML，含 `.fb2.zip`）、`cbz`（图片页）、`plain`（TXT / Markdown），`html.rs` 为前三者共用的 HTML → 段落解析器                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `resource.rs` | `colorreader://` 自定义协议：封面图片按 id 从 Rust 流式返回                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `resource.rs` | `fangce://` 自定义协议：封面图片按 id 从 Rust 流式返回                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `secrets.rs`  | 凭据落盘时的封装：32 字节随机主密钥交给系统凭据库（Keychain / Credential Manager / Secret Service）保管，`SECRET_FIELDS` 里的字段用 AES-256-GCM 逐字段封装。**这一条常量同时被备份的脱敏引用** —— 「被封装的」与「备份里被抹掉的」必须是同一批，见下                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `error.rs`    | `AppError`：thiserror 定义，实现 `Serialize`，统一转成 `{ message }` 交给前端                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `state.rs`    | `AppState`（启动时间、数据目录布局、书库句柄），通过 `app.manage` 注入                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -59,8 +59,6 @@ books ─┬─ book_authors ── authors      作者多对多，按 position 
        └─ chapters                   章节正文（book_id + idx 复合主键，级联删除）
        └─ annotations                标注（book_id 级联删除，chapter_idx + start_char 索引）
        └─ entities / entity_relations 知识图谱（migration v7，book_id 级联删除）
-
-chapters_fts（FTS5 外部内容表，内容指向 chapters，由触发器维护）
 
 settings（KV：AI / 同步凭据 / 词典与字体列表，migration v5；**凭据字段在 `secrets.rs` 里封装，见下**）· chunks（RAG 向量，v6）
 sources（书源规则，v8）· bookmarks（v9）· reading_sessions（阅读时长，v13）
@@ -139,15 +137,17 @@ AI Key、DeepL Key、WebDAV 账号与密码都住在 `settings` 这张 KV 表里
 
 ### 检索模型
 
-`chapters_fts` 是挂在 `chapters` 上的 **FTS5 外部内容表**（`content='chapters'`），正文在磁盘上只存一份，migration v4 的三个触发器（`ai` / `ad` / `au`）负责与源表同步。分词器选 **trigram**（`tokenize='trigram'`）而不是默认的 `unicode61`：后者按空格和标点切词，中文整段会退化成一个「词」，子串查询命中不了；trigram 对 CJK 子串天然可用，代价是索引更大。
+检索是**扫描**，不是索引：`chapters.content` 逐行读出来用 `LIKE '%…%'` 匹配（通配符在 Rust 侧转义），命中结果带三样东西——上下文片段、命中在章节 joined text 里的字符偏移、章节序号。片段里被命中的那一段用两个控制字符包裹（`U+0002` / `U+0003`），前端 `parseSnippet` 按它们切开渲染：用控制字符而不是 HTML 标签，是因为正文里不可能出现它们，且后端不必假设前端怎么渲染。
 
-排序用 SQLite 内建的 **BM25**（`ORDER BY bm25(chapters_fts)`，值越小越相关），不自己实现打分。查询串一律用双引号包成字面量后再交给 FTS5，避免用户输入的 `*`、`OR` 被当成查询语法。查询不足 3 个字符时 trigram 索引无意义，退回 `LIKE '%…%'` 子串匹配（`LIKE` 的通配符在 Rust 侧转义）。
+这里原本是 migration v4 建的一张 FTS5 外部内容表（`tokenize='trigram'`，靠三个触发器跟源表同步），migration 18 把它删了。**理由是实测**：在一个真实的 194 本书、8300 万字的书库上，那张索引占 **1.12 GB**（是被索引正文的 4.6 倍，整个数据库的 78%），并且每一次导入、每一次删除都在为它付账——一本 550 万字的书，建索引 3.7 s、拆索引 3.3 s，同样的行不建索引是 93 ms 和 4 ms。慢的是删除触发器：FTS5 外部内容表的 `delete` 要把整章正文重新分词一遍才能找到它要摘掉的 posting。而全库扫描一次 8300 万字是 **150 ms**。导入和删除每本书都要做一次，检索只是偶尔问一次，所以这个交换是划算的：批量导入 4 本真实书从 7072 ms 降到 182 ms，删除从 6422 ms 降到 7 ms，数据库从 153 MB 降到 45 MB（同一批 1483 万字）。
 
-命中结果带三样东西：上下文片段、命中在章节 joined text 里的字符偏移、章节序号。片段里被命中的那一段用两个控制字符包裹（`U+0002` / `U+0003`），前端 `parseSnippet` 按它们切开渲染——用控制字符而不是 HTML 标签，是因为正文里不可能出现它们，且后端不必假设前端怎么渲染。
+当时选 `trigram` 是为了中文子串——默认的 `unicode61` 把一串汉字当成一个词，`世界` 在 `你好世界` 里永远命中不了——它确实解决了这个问题，只是代价太大；扫描同样解决它。
 
-`search_query` 在 `spawn_blocking` 里跑，且先为「没有 chapters 行的书」补建索引（Phase 3 之前导入的书），保证检索覆盖全库。书库侧的「全文检索」页与书内搜索抽屉共用同一条命令，只是前者不传 `book_id`。点击命中结果跳到对应章节，并把偏移换算成段落下标后滚动到视野中间。
+**结果按书摊开**，不是按表顺序取前 N 条：一次全库检索如果直接 `LIMIT 50`，列表会被 id 排在最前的那本书包圆。所以扫描先把所有命中按书分组，再轮流发牌——每本书的第一条、然后每本书的第二条——直到凑够 `limit`。前端本来就按书分组，于是读起来是「这个词在每本书里各出现了一次」。章节正文**不在扫描阶段取**：常见词能命中几千章，把它们从 SQLite 里捞出来再扔掉是这条查询的大头。
 
-实测（release，内存库，Apple Silicon，600 章 / 828,000 字）：索引构建 25.8 ms，单次查询 0.64–0.75 ms（返回 50 条 BM25 排序命中）。远在交互预算内，因此暂不做结果缓存与增量索引；Phase 13 建立正式 Benchmark 时再拿真实书库复测。
+`search_query` 在 `spawn_blocking` 里跑，且先为「没有 chapters 行的书」补建章节（Phase 3 之前导入的书、以及正文被推迟抽取的 PDF），保证检索覆盖全库。书库侧的「全文检索」页与书内搜索抽屉共用同一条命令，只是前者不传 `book_id`。点击命中结果跳到对应章节，并把偏移换算成段落下标后滚动到视野中间。
+
+前端在 `useSearch` 里让输入停顿 150 ms 再发查询：一次查询是 150 ms 级的扫描，逐键发会把四次全表扫描背靠背排起来，中间的骨架屏一闪一闪。
 
 ### 书档模型
 
@@ -180,21 +180,23 @@ AI Key、DeepL Key、WebDAV 账号与密码都住在 `settings` 这张 KV 表里
 
 ### 深链
 
-导出文件里每条标注都带一个 `colorreader://book/<bookId>?annotation=<annotationId>`：点击即回到应用并定位到那条高亮。生产端是 `library/io/export.rs::link`，消费端是 `AppShell` 挂的 `useDeepLink`，中间由 `tauri-plugin-deep-link` 把系统递来的 URL 变成事件。
+导出文件里每条标注都带一个 `fangce://book/<bookId>?annotation=<annotationId>`：点击即回到应用并定位到那条高亮。生产端是 `library/io/export.rs::link`，消费端是 `AppShell` 挂的 `useDeepLink`，中间由 `tauri-plugin-deep-link` 把系统递来的 URL 变成事件。
 
 **链接只带身份，不带位置**，这是被证据逼出来的设计。本应用有三种互不通约的位置模型——foliate 用 CFI、纯文本用「章节 + 字符偏移」、PDF 用页码——写进 URL 的无论哪一种，用另外两种打开就是错的。而标注行自己知道它属于哪一种，所以 URL 只写 id，位置由应用查出来。同一个链接因此对三种通路都成立，将来加第四种也不用改。
 
 解析分两层：`src/lib/deeplink.ts::parseDeepLink` 是纯函数，对系统递来的任何字符串都不信，解析不了就丢弃；`useDeepLink` 把它变成 `/reader?book=…&annotation=…`，与搜索结果走同一套查询参数，不另开一条进入阅读器的通路。阅读器侧有一条硬约束：**初始位置必须在 render 期确定，不能靠 effect 回填**（`ReaderView` 的既有判据），所以路由层在链接指名了标注时先等标注列表加载完再挂载阅读视图——foliate 书把该标注的 CFI 喂给 `startCfi`，视图 `init()` 时就落在高亮上（改成挂载后再滚会是一次看得见的跳），纯文本书则把章节喂给初始 `chapterIdx`。链接指向的标注已删除或尚未铸锚时退化为「打开这本书」，而不是打不开。
 
-scheme 与资源协议同名（`resource.rs` 的 `colorreader`），靠 host 区分：`book` 是链接，`localhost` 是资源。两者职责不重叠——资源 URL 只在 webview 内部被 `src` 消费，从不外流。
+scheme 与资源协议同名（`resource.rs` 的 `fangce`），靠 host 区分：`book` 是链接，`localhost` 是资源。两者职责不重叠——资源 URL 只在 webview 内部被 `src` 消费，从不外流。
 
-**scheme 的注册全发生在打包期**：macOS 的 `CFBundleURLTypes` 由打包器从 `plugins.deep-link.desktop.schemes` 生成，Windows 的 NSIS / MSI 安装器写 `Software\Classes\colorreader`，Linux 的 deb 与 AppImage 带一份 `MimeType=x-scheme-handler/colorreader` 的 `.desktop`——因此不需要运行时 `register_all()` 兜底（那只对裸跑 AppImage、绿色版 exe 这类旁路安装有意义）。代价是注册只存在于打包产物里：**`tauri dev` 的窗口永远收不到链接**，macOS 实测必须 `--bundles app` 并安装到 `/Applications`（该平台不支持运行时注册，插件的 `register` 直接返回 `UnsupportedPlatform`）。
+**改名只有一次，在首个版本之前**（2026-10-21，ColorReader → 方册）：当时没有读者发版在手，于是 scheme、bundle identifier、所有持久化键、归档格式标记一起换，不留兼容路径——`tauri.conf.json` 只注册 `fangce`，`parseDeepLink` 只收它。代价全落在本机：应用数据目录随 identifier 变（`~/Library/Application Support/dev.xlong.fangce`，书库/书/字体要整体搬过去，见备忘），keychain 服务名同 identifier，凭据需重填一次，dev 浏览器的旧 localStorage 键作废。资源协议整体换名：它的 URL 从不外流，没有旧文件指着它。
+
+**scheme 的注册全发生在打包期**：macOS 的 `CFBundleURLTypes` 由打包器从 `plugins.deep-link.desktop.schemes` 生成，Windows 的 NSIS / MSI 安装器写 `Software\Classes\fangce`，Linux 的 deb 与 AppImage 带一份 `MimeType=x-scheme-handler/fangce` 的 `.desktop`——因此不需要运行时 `register_all()` 兜底（那只对裸跑 AppImage、绿色版 exe 这类旁路安装有意义）。代价是注册只存在于打包产物里：**`tauri dev` 的窗口永远收不到链接**，macOS 实测必须 `--bundles app` 并安装到 `/Applications`（该平台不支持运行时注册，插件的 `register` 直接返回 `UnsupportedPlatform`）。
 
 Windows / Linux 是另一套机制：系统不认识「已在运行的那个实例」，而是**再启动一个进程**，把 URL 当作唯一参数递过去。于是这一侧由 `tauri-plugin-single-instance` 承担合流，且**必须在所有插件之前注册**——「这个进程是否留下」是它在自己的 setup 里决定的：第二进程把 argv 交给先到的实例，然后退出。开启它的 `deep-link` feature 后，这次交接在进入回调之前就被转成与 macOS 同一个 `deep-link://new-url` 事件，所以 `useDeepLink` 不必区分来源；回调只剩一件事——把窗口调到前面，否则读者在浏览器里点了链接，应用却在后面。首启就带参的情况由 deep-link 插件自己处理（它 setup 时读一遍 `std::env::args`）。
 
 ### 金句卡片
 
-标注抽屉每行一个分享按钮，画一张 **1080×1440（3:4）的 PNG**：纸是读者**当前书页所在的那张阅读表面**（护眼即暖黄、夜间即深色），正文用读者的阅读字体，标注色以 26% 透明度涂在文字背后（荧光笔质感）。书有封面时，顶部是一条「书名页」：左上角一块 **168×236 的圆角封面**（按 `object-cover` 的语义中心裁剪——`coverCrop` 是纯函数，宽封面裁两边、高封面裁上下），书名与作者竖排居中于其右侧，引文区整体下移八十四像素，**底边一个像素都没动**（进度行、字标、二维码的位置与加封面之前完全相同）；没有封面的书，画的就是加封面之前那张卡。下方是进度行，左下是 ColorReader 字标，**右下角一块恒白底的二维码**，内容是上面那条深链（`annotationLink` 与 Rust 侧 `link()` 由两侧测试钉同一字面量）。
+标注抽屉每行一个分享按钮，画一张 **1080×1440（3:4）的 PNG**：纸是读者**当前书页所在的那张阅读表面**（护眼即暖黄、夜间即深色），正文用读者的阅读字体，标注色以 26% 透明度涂在文字背后（荧光笔质感）。书有封面时，顶部是一条「书名页」：左上角一块 **168×236 的圆角封面**（按 `object-cover` 的语义中心裁剪——`coverCrop` 是纯函数，宽封面裁两边、高封面裁上下），书名与作者竖排居中于其右侧，引文区整体下移八十四像素，**底边一个像素都没动**（进度行、字标、二维码的位置与加封面之前完全相同）；没有封面的书，画的就是加封面之前那张卡。下方是进度行，左下是 方册 字标，**右下角一块恒白底的二维码**，内容是上面那条深链（`annotationLink` 与 Rust 侧 `link()` 由两侧测试钉同一字面量）。
 
 **纸色只有一处解析**：对话框读 `useReadingSurface()`，与阅读页同一个 hook。这条是被实测 bug 逼出来的——第一版对话框自己读 `state.surface`（**日间**那个表面），于是书页处于夜间配色时（书页配色固定为「夜间」，或「跟随」+ 深色外观），读者在设置面板里点哪个背景都在改 `nightSurface`，卡片却永远在画日间那张纸，症状正是读者报的「不管切换什么颜色的阅读背景，导出的金句图片的颜色都一样」。`useReadingSurface` 的注释里那句「再手写一遍解析，迟早会写出第二个答案」说的就是这件事。现在有一条单测钉住夜间分支（日间设护眼、夜间设松烟时，纸必须是松烟的 `#1b231e`），并做过变异验证：把对话框改回手写解析，它立刻红在 `#f4ecd8` 上。
 
@@ -290,7 +292,7 @@ DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CO
 
 ### 资源协议
 
-封面不经过 `file://`，走 `Builder::register_uri_scheme_protocol` 注册的 `colorreader://`。URL 形态因平台而异（macOS `colorreader://localhost/cover/{id}`，Windows/Linux `http://colorreader.localhost/cover/{id}`），由 `resource::resource_origin()` 在编译期编码，前端只拿后端拼好的 `coverUrl`。处理链：校验 id 形态（UUID 字符集、长度上限、拒绝 `..`）→ 查库定位封面路径 → 读文件按 MIME 返回，非法 id 一律 404。同一协议还承担两件事：**书籍源文件**（`/book/{id}`，支持 `Range`，让开书不再随文件体积增长）与**导入的字体**（`/font/{id}`）。字体那条多了两个必须的头：`Access-Control-Allow-Origin: *` —— 字体是跨源加载且受 CORS 约束，漏了就是静默回退到别的字体；`Cache-Control: immutable` —— URL 里是导入时新生成的 UUID，内容不可能变，而一个 20 MB 的中文字体若每上一屏就重取一次，就是肉眼可见的卡顿。
+封面不经过 `file://`，走 `Builder::register_uri_scheme_protocol` 注册的 `fangce://`。URL 形态因平台而异（macOS `fangce://localhost/cover/{id}`，Windows/Linux `http://fangce.localhost/cover/{id}`），由 `resource::resource_origin()` 在编译期编码，前端只拿后端拼好的 `coverUrl`。处理链：校验 id 形态（UUID 字符集、长度上限、拒绝 `..`）→ 查库定位封面路径 → 读文件按 MIME 返回，非法 id 一律 404。同一协议还承担两件事：**书籍源文件**（`/book/{id}`，支持 `Range`，让开书不再随文件体积增长）与**导入的字体**（`/font/{id}`）。字体那条多了两个必须的头：`Access-Control-Allow-Origin: *` —— 字体是跨源加载且受 CORS 约束，漏了就是静默回退到别的字体；`Cache-Control: immutable` —— URL 里是导入时新生成的 UUID，内容不可能变，而一个 20 MB 的中文字体若每上一屏就重取一次，就是肉眼可见的卡顿。
 
 ### 自定义字体
 
@@ -298,7 +300,7 @@ DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CO
 
 命名是这条链的关键一步：字体在 CSS 里叫 `cr-<id>`，设置里选中它用 `custom:<id>`，**两个名字都由 id 推出来**。这让 `resolveFont` 保持成一个对设置值的纯函数——选择器有列表，样式构建器没有。
 
-**字体目录**（`src/lib/fontCatalog.ts`）是另一条路：一键安装、零文件。装的不是字体，是**样式表**——几百 KB 的 `@font-face` 规则，字形子集仍按 `unicode-range` 从 CDN 现取：这是「不内置」与「能用中文字体」之间唯一不要 29 MB 的走法。每条 sheet 用 sha256 钉死（`downloadCatalogFont` 校验不过就整款拒收，不留记录不留文件），两个源（jsDelivr / unpkg）依次回退；CSS 抓下来先重写成绝对 URL 再以 `<style>` 采纳——跨源 `<link>` 读不到 `cssRules`，blob 没有基址，只有内联 `<style>` 既同源可读、URL 又已绝对，`adoptedFontFaces` 才能把规则原样抄进 section。目录只收 OFL 字体（许可允许我们从 CDN 提供字节）；协议禁止再分发的品牌字面**没有条目**——读者自己下载后用「导入字体」添加。HarmonyOS Sans 曾走另一条「从厂商整包解成员」的路，2026-10-16 连那条路一起退役（要再加品牌字面，是把那条路重搭一遍，不是加一条目录数据）；MiSans 则从来就没做——小米只发 217 MB 的嵌套包，协议连把字体转交他人都不允许。已下载列表存 `settings.downloadedFonts`（与 `reading.fonts` 分开：那份是导入的文件，这份是「选择器可以提供的字体」）。**采纳过的样式表另存一份在 `localStorage`（`colorreader.catalogFontSheets`）**：它是这条通路需要 CDN 的全部，只留在文档里就意味着装好的字体下次启动断网时**整款**消失（不是回退某个子集，是全部字形）。存的时候带一条由清单 sha256 拼成的指纹，包版本或钉死的哈希一改旧副本即失效重取——没有这条比较，就等于用「本构建会拒收的字节」渲染正文。**字形子集仍归浏览器**：只取本书文字落进去的那几个，由 webview 的 HTTP 缓存留住（jsDelivr 对版本化路径发 `immutable`），所以读过的一本书离线完整，没读过的字断网时回退到字体栈下一款；把子集全部搬本地是 28.5 MB（霞鹜文楷）/ 约 18 MB（Noto Serif SC），正是这个目录存在的理由要避免的体积。断网口径因此是**两句话**：样式表在本地，字形在缓存——设置页那句描述按这个写，别退回「首次安装需要网络」。
+**字体目录**（`src/lib/fontCatalog.ts`）是另一条路：一键安装、零文件。装的不是字体，是**样式表**——几百 KB 的 `@font-face` 规则，字形子集仍按 `unicode-range` 从 CDN 现取：这是「不内置」与「能用中文字体」之间唯一不要 29 MB 的走法。每条 sheet 用 sha256 钉死（`downloadCatalogFont` 校验不过就整款拒收，不留记录不留文件），两个源（jsDelivr / unpkg）依次回退；CSS 抓下来先重写成绝对 URL 再以 `<style>` 采纳——跨源 `<link>` 读不到 `cssRules`，blob 没有基址，只有内联 `<style>` 既同源可读、URL 又已绝对，`adoptedFontFaces` 才能把规则原样抄进 section。目录只收 OFL 字体（许可允许我们从 CDN 提供字节）；协议禁止再分发的品牌字面**没有条目**——读者自己下载后用「导入字体」添加。HarmonyOS Sans 曾走另一条「从厂商整包解成员」的路，2026-10-16 连那条路一起退役（要再加品牌字面，是把那条路重搭一遍，不是加一条目录数据）；MiSans 则从来就没做——小米只发 217 MB 的嵌套包，协议连把字体转交他人都不允许。已下载列表存 `settings.downloadedFonts`（与 `reading.fonts` 分开：那份是导入的文件，这份是「选择器可以提供的字体」）。**采纳过的样式表另存一份在 `localStorage`（`fangce.catalogFontSheets`）**：它是这条通路需要 CDN 的全部，只留在文档里就意味着装好的字体下次启动断网时**整款**消失（不是回退某个子集，是全部字形）。存的时候带一条由清单 sha256 拼成的指纹，包版本或钉死的哈希一改旧副本即失效重取——没有这条比较，就等于用「本构建会拒收的字节」渲染正文。**字形子集仍归浏览器**：只取本书文字落进去的那几个，由 webview 的 HTTP 缓存留住（jsDelivr 对版本化路径发 `immutable`），所以读过的一本书离线完整，没读过的字断网时回退到字体栈下一款；把子集全部搬本地是 28.5 MB（霞鹜文楷）/ 约 18 MB（Noto Serif SC），正是这个目录存在的理由要避免的体积。断网口径因此是**两句话**：样式表在本地，字形在缓存——设置页那句描述按这个写，别退回「首次安装需要网络」。
 
 **归档类条目（`CATALOG_FILES`）已于 2026-10-16 整体退役**：条目、`font_archive.rs`、`font_range.rs`、`font.install_catalog` 命令、`Font.catalogId` 字段一起删除，浏览器端那行「请自行下载后用『导入字体』」的说明也一并消失。它当年做的是「从厂商自己的包里解出原件落盘」（窄路只发几个 `Range` 请求，宽路下载整包，两条路交出同一批字节），而这条路只有 HarmonyOS Sans 一个用户。**唯一留下的痕迹是 `Font.license`**：装过它的读者磁盘上还有 `<id>.license.txt`，而 `remove` 是唯一能把它清掉的地方——删掉字段就等于在字体目录里留一个谁也清不掉的文件。要恢复这条路，看 git 历史里那两个文件，别只看这个字段。
 
@@ -320,7 +322,7 @@ DeepL / Wikipedia 在**后端**发请求，因此 Key 永远不进渲染层，CO
 
 ### 错误处理
 
-生产路径禁止 `unwrap()` / `expect()`。所有命令返回 `Result<T, AppError>`，错误必须满足：类型化、可序列化、对用户友好、已记录日志。日志走 `tracing`，默认 `colorreader=info`，用 `RUST_LOG` 提级。
+生产路径禁止 `unwrap()` / `expect()`。所有命令返回 `Result<T, AppError>`，错误必须满足：类型化、可序列化、对用户友好、已记录日志。日志走 `tracing`，默认 `fangce=info`，用 `RUST_LOG` 提级。
 
 ---
 
@@ -347,7 +349,7 @@ Feature-oriented：`components/` 放可复用 UI，`features/` 放业务领域�
 
 | 通路                   | 何时使用                          | 渲染                                                                     |
 | ---------------------- | --------------------------------- | ------------------------------------------------------------------------ |
-| Document Model         | pdf / fb2 / cbz / markdown / txt  | Rust 抽取纯文本段落 → 段落索引 → FTS5 / 标注 / 朗读 / RAG 全基于段落索引 |
+| Document Model         | pdf / fb2 / cbz / markdown / txt  | Rust 抽取纯文本段落 → 段落索引 → 检索 / 标注 / 朗读 / RAG 全基于段落索引 |
 | foliate-js（原书排版） | mobi / azw / azw3 / **epub** 恒用 | `makeBook()` + `<foliate-view>` 渲染原书 XHTML + CSS                     |
 
 两个**容器格式**都走 foliate：KF8 把正文拆成 skeleton + fragment，部首页壁纸、
@@ -358,7 +360,7 @@ FB2 / CBZ / TXT / MD 仍走 Document Model——它们的原书样式几乎没�
 PDF 走自己的 pdf.js 通路，foliate 的 `pdf.js` 已打桩禁用。
 
 **一份语料**：`document::read_chapters` 对七种格式（含 mobi、epub）统一抽纯文本
-入库，导入期由 `library/io/import.rs` 落表。所以不论哪条通路在渲染，FTS5 / RAG 组块 /
+入库，导入期由 `library/io/import.rs` 落表。所以不论哪条通路在渲染，检索 / RAG 组块 /
 书内检索命中的都是同一份章节文本。双轨只存在于**渲染侧**：标注、划词、朗读定位
 在 foliate 通路上以 CFI 为锚，在 Document Model 上以「章 idx + 偏移」为锚。
 这点正是我们没有照搬 readest 全量方案的原因——它把渲染全交给 foliate 后，
@@ -379,7 +381,7 @@ PDF 走自己的 pdf.js 通路，foliate 的 `pdf.js` 已打桩禁用。
 
 - 入口：`src/features/reader/FoliateBookView.tsx`，路由级 lazy，仅上述书籍打开时加载。
 - 位置：CFI 存 `books.location`（`readerSetProgress` 的 `location` 参数）；
-  旧的 `localStorage: colorreader:foliate:<bookId>` 只作一次性兜底读取。
+  旧的 `localStorage: fangce:foliate:<bookId>` 只作一次性兜底读取。
   🔴 切通路不换算坐标：epub 首次以 foliate 打开时没有 CFI 可续，从书首开始；
   之后位置一直是 CFI。
 - foliate 通路已对齐：标注回显（`draw-annotation` + `create-overlay` 重绘）、
@@ -430,7 +432,7 @@ PDF 走自己的 pdf.js 通路，foliate 的 `pdf.js` 已打桩禁用。
   keydown/mouseup 同一入口，幂等）读 `data-path` → `onImageOpen` → `ReaderPage`
   在 `book_images` 里定位 → 打开 `ImageLightbox`。渲染框任一边小于 48px 的图不当
   可点目标（书里的分隔线、项目符号也是图片）。
-- 协议：ColorReader 为 AGPL-3.0-or-later，foliate-js 为 MIT，
+- 协议：方册 为 AGPL-3.0-or-later，foliate-js 为 MIT，
   见 `THIRD-PARTY-NOTICES.md` 与 `THIRD-PARTY-foliate-js-LICENSE`。
 
 ### 命令系统
@@ -605,7 +607,7 @@ Liquid Glass 的代价是 `backdrop-filter`：**嵌套的玻璃会把模糊一�
 - **最小权限，且权限是逐命令的**：`capabilities/default.json` 目前授予 `core:*`（app / event / window）+ `core:window:allow-start-dragging` / `is-fullscreen` / `set-fullscreen` / `set-theme`、`dialog:allow-open`、`dialog:allow-save`、`deep-link:default`、`opener:allow-open-url`（白名单只放行本仓库与维基百科）。**每个条目必须对应一个真实存在的调用**，并说明理由。
   🔴 两个坑：其一，`dialog:allow-open` **不放行** `save`——该插件没有 `default` 权限集，只能逐条列；被 ACL 拒绝时前端拿到的是 **reject**，于是空 `catch {}` 会让它退化成「按钮没反应」，源码里查不出（`save` 的两个调用点因此共用 `src/hooks/useSavePath.ts` 收口这条接缝）。其二，capability 是**编进 Rust 二进制**的，改完必须重启 dev / 重新打包。
 - **不给渲染层 `fs *` / `shell *` / `process *`。**
-- **不暴露 `file://`**：资源走 `colorreader://resource/{id}`，由 Rust 校验 id → 路径后流式返回（Phase 2 落地）。
+- **不暴露 `file://`**：资源走 `fangce://resource/{id}`，由 Rust 校验 id → 路径后流式返回（Phase 2 落地）。
 - CSP 已收紧为 `default-src 'self'`，样式允许内联（Tailwind 运行时需要）。
 
 ---
@@ -619,7 +621,7 @@ Liquid Glass 的代价是 `backdrop-filter`：**嵌套的玻璃会把模糊一�
 | 整本书进内存 / React State / DOM  | 禁止。走 Document Model → 章节索引 → 段落索引 → viewport → 虚拟渲染 |
 | 主线程同步解析大文件              | 禁止。Rust 侧异步任务 + 进度事件                                    |
 | 主线程同步执行 AI 调用            | 禁止。流式事件增量渲染                                              |
-| JS `String.includes()` 做全文搜索 | 禁止。用 SQLite FTS5 + BM25                                         |
+| JS `String.includes()` 做全文搜索 | 禁止。走 `search.query`，在 SQLite 侧扫描章节表                     |
 | 无 Benchmark 支撑的性能结论       | 禁止。所有数字必须实测                                              |
 | 主 chunk 超 500 kB                | 禁止。路由级 lazy + vendor 分块（`advancedChunks`）保持告警静默     |
 
@@ -703,7 +705,7 @@ capability 只放行实际用到的三条：`updater:allow-check`、`updater:all
 ### 生产化基线（Phase 14）
 
 - **CI**：`.github/workflows/ci.yml`（push/PR 跑 `verify` + Rust 三件套 + bundle size 摘要；e2e 前装 `fonts-noto-cjk` —— 跑批机没有中文字体时，版面度量与任何真实读者都不同）、`release.yml`（`v*` tag → tauri-action 四平台 draft release，打包前先跑 Rust 门禁）。
-- **打包**：`pnpm tauri build` 本地实测产出 `ColorReader.app`（arm64，ad-hoc 签名，二进制 7.7 MB）；dmg 由 CI 产出。
+- **打包**：`pnpm tauri build` 本地实测产出 `方册.app`（arm64，ad-hoc 签名，二进制 7.7 MB）；dmg 由 CI 产出。
 - **E2E**：`pnpm test:e2e`（Playwright，**chromium + webkit 两个 project** —— 前者是开发便利，后者才是 Tauri 真正用的引擎）对 `vite preview` 的生产构建跑 **96 条**：路由 smoke（书库 → 搜索 → 设置）之外，还覆盖阅读排版与页码、PDF、Kindle 容器、书库交互、朗读与悬浮条。**两个 project 都要跑**——同一串中文字符在 WebKit 里宽约 15%，只在一个引擎上断言过的布局等于没断言。
 - **Benchmark**：`cargo test --release bench -- --ignored --nocapture`（600 章 / 2.7 MB 参考书）：导入（切章 + FTS 索引）60 ms，检索均值 1.3 ms，目录加载 0.6 ms。Apple M 系列、release profile。
 

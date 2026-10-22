@@ -73,21 +73,17 @@ fn large_book_pipeline_bench() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nreference book: {CHAPTERS} chapters, {bytes} bytes");
 
     let started = Instant::now();
-    let outcomes = import::import_files(
-        &library,
-        &layout,
-        std::slice::from_ref(&source),
-        None,
-        &mut |_, _, _| {},
-    );
+    let outcomes =
+        import::import_files(&library, &layout, std::slice::from_ref(&source), None, &|_, _, _| {});
     let import_ms = ms(started.elapsed());
     let book_id = match &outcomes[0] {
         import::ImportOutcome::Imported { id, .. } => id.clone(),
         other => panic!("期望导入成功，实际 {other:?}"),
     };
 
-    // The import triggers already populated chapters_fts; measure a warm query
-    // and a cold-ish one (different needle) over the whole library.
+    // The chapters are in the table by now; measure a warm query and a
+    // cold-ish one (different needle) over the whole library. This is the
+    // scan `search::query` runs, so the number is what a keystroke costs.
     let warmed = (0..20)
         .map(|i| {
             let started = Instant::now();
@@ -154,13 +150,8 @@ fn pdf_import_bench() -> Result<(), Box<dyn std::error::Error>> {
     println!("\nreference pdf: {PDF_PAGES} pages");
 
     let started = Instant::now();
-    let outcomes = import::import_files(
-        &library,
-        &layout,
-        std::slice::from_ref(&source),
-        None,
-        &mut |_, _, _| {},
-    );
+    let outcomes =
+        import::import_files(&library, &layout, std::slice::from_ref(&source), None, &|_, _, _| {});
     let import_ms = ms(started.elapsed());
     let book_id = match &outcomes[0] {
         import::ImportOutcome::Imported { id, .. } => id.clone(),
@@ -290,5 +281,73 @@ fn rag_search_bench() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         println!("(P95 仍在 {RAG_ANN_P95_MS} ms 以下，暴力扫描是对的形状 —— 别动它)");
     }
+    Ok(())
+}
+
+/// Import and delete, on real books instead of fixtures.
+///
+/// The fixtures above are a few KB; the shelf this app actually holds is books
+/// of a megabyte and more, and the difference is not proportional — it is the
+/// whole point. Set the paths and run it:
+///
+/// ```text
+/// FANGCE_BENCH_BOOKS="/path/a.epub:/path/b.epub" \
+///   cargo test --release --manifest-path src-tauri/Cargo.toml bench -- --ignored --nocapture real_book
+/// ```
+///
+/// Skips (rather than fails) without the variable: the repository has no real
+/// book in it, and a bench that needs one should say so instead of pretending.
+#[test]
+#[ignore = "benchmark: 需要 FANGCE_BENCH_BOOKS 指向真实书"]
+fn real_books_import_and_delete_bench() -> Result<(), Box<dyn std::error::Error>> {
+    let Ok(list) = std::env::var("FANGCE_BENCH_BOOKS") else {
+        println!("\n跳过：未设置 FANGCE_BENCH_BOOKS（冒号分隔的真实书路径）");
+        return Ok(());
+    };
+    let sources: Vec<PathBuf> =
+        list.split(':').filter(|path| !path.is_empty()).map(PathBuf::from).collect();
+    if sources.is_empty() {
+        println!("\n跳过：FANGCE_BENCH_BOOKS 是空的");
+        return Ok(());
+    }
+
+    let bench = Bench::new("bench-real");
+    let layout = Layout::create(bench.dir.join("data")).expect("layout");
+    let library = Library::open(&layout.data_dir).expect("open library");
+
+    println!("\nreal books: {}", sources.len());
+    let started = Instant::now();
+    let outcomes = import::import_files(&library, &layout, &sources, None, &|_, _, _| {});
+    let import_ms = ms(started.elapsed());
+    let mut chars = 0_usize;
+    for outcome in &outcomes {
+        match outcome {
+            import::ImportOutcome::Imported { id, .. } => {
+                chars += library
+                    .with(|conn| chapters::list(conn, id))
+                    .expect("chapters")
+                    .iter()
+                    .map(|chapter| chapter.chars)
+                    .sum::<usize>();
+            }
+            other => panic!("期望导入成功，实际 {other:?}"),
+        }
+    }
+
+    let ids: Vec<String> = library
+        .with(|conn| crate::library::repository::list(conn, &Default::default()))
+        .expect("list")
+        .into_iter()
+        .map(|book| book.id)
+        .collect();
+    let started = Instant::now();
+    crate::library::delete_books(&library, &ids, &mut |_, _, _| {}).expect("delete");
+    let delete_ms = ms(started.elapsed());
+
+    let db_bytes = std::fs::metadata(layout.data_dir.join(crate::db::DB_FILE)).expect("stat").len();
+    println!("import total: {import_ms:.0} ms  ({:.0} ms/book)", import_ms / sources.len() as f64);
+    println!("  chapter text: {chars} chars ({:.2} M)", chars as f64 / 1e6);
+    println!("delete total: {delete_ms:.0} ms");
+    println!("database: {:.0} MB", db_bytes as f64 / 1e6);
     Ok(())
 }

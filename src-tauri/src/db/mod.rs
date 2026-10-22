@@ -35,6 +35,16 @@ const DICTIONARIES_DIR: &str = "dictionaries";
 /// Directory holding fonts the reader imported for the reading surface.
 const FONTS_DIR: &str = "fonts";
 
+/// Freelist worth compacting, in bytes.
+///
+/// SQLite never gives freed pages back to the filesystem: after migration 18
+/// dropped the 1.1 GB trigram index the file stayed 1.4 GB with almost all of
+/// it on the freelist. `VACUUM` rewrites the database into a fresh file — on
+/// that library it took 1.2 s and left 258 MB — so it is worth doing, but only
+/// when there is something to win. Below this the check costs nothing and a
+/// startup that just deleted three books is not made to rewrite the database.
+const COMPACT_THRESHOLD_BYTES: i64 = 64 * 1024 * 1024;
+
 /// Resolved locations under the data directory.
 #[derive(Debug, Clone)]
 pub struct Layout {
@@ -94,6 +104,14 @@ impl Library {
         let version = migrations::migrate(&mut conn)?;
         tracing::info!(path = %path.display(), schema = version, "书库数据库已就绪");
 
+        // After the migration, not inside it: `VACUUM` may not run in a
+        // transaction, and the migration that freed a gigabyte committed
+        // already. Never fatal — a database with holes in it still works, and a
+        // full disk must not stop the reader from opening.
+        if let Err(err) = compact_if_fragmented(&conn) {
+            tracing::warn!(error = %err, "回收空闲页失败，数据库照常使用");
+        }
+
         Ok(Self { conn: Arc::new(Mutex::new(conn)) })
     }
 
@@ -116,6 +134,28 @@ impl Library {
     fn lock(&self) -> AppResult<MutexGuard<'_, Connection>> {
         self.conn.lock().map_err(|_| AppError::poisoned("library"))
     }
+}
+
+/// Rewrites the database when a large share of its file is free pages.
+///
+/// Called once at startup. A library whose index was just dropped is the case
+/// this exists for; a library that has been deleting books for a year is the
+/// same case, slower.
+fn compact_if_fragmented(conn: &Connection) -> AppResult<()> {
+    let free: i64 = conn.pragma_query_value(None, "freelist_count", |row| row.get(0))?;
+    let page: i64 = conn.pragma_query_value(None, "page_size", |row| row.get(0))?;
+    let reclaimable = free.saturating_mul(page);
+    if reclaimable < COMPACT_THRESHOLD_BYTES {
+        return Ok(());
+    }
+    let started = std::time::Instant::now();
+    conn.execute_batch("VACUUM")?;
+    tracing::info!(
+        freed_mb = reclaimable / 1024 / 1024,
+        took_ms = started.elapsed().as_millis() as u64,
+        "回收了空闲页"
+    );
+    Ok(())
 }
 
 #[cfg(test)]

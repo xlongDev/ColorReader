@@ -1,10 +1,10 @@
 //! Writing recognised page text back into the chapter corpus.
 //!
 //! The corpus is the one thing every downstream feature already speaks: search
-//! (`chapters_fts` is maintained by trigger on this table), read-aloud, RAG
-//! chunking and the reading assistant all read `chapters`. A recognised page
-//! joins them by being an ordinary row, not by a second path through the
-//! reader — which is why this module is one `UPDATE` and nothing else.
+//! (which scans this table), read-aloud, RAG chunking and the reading assistant
+//! all read `chapters`. A recognised page joins them by being an ordinary row,
+//! not by a second path through the reader — which is why this module is one
+//! `UPDATE` and nothing else.
 
 use rusqlite::params;
 use serde::Serialize;
