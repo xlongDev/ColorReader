@@ -44,6 +44,17 @@ interface GlassDialogProps {
   children: ReactNode;
   /** Tailwind width class, defaults to a comfortable palette width. */
   widthClass?: string;
+  /**
+   * Runs before the dialog acts on Escape, and can stand it down with
+   * `preventDefault`.
+   *
+   * Radix listens for the key on the document in the capture phase, so
+   * anything inside the content that wants Escape for itself — a list closing,
+   * a picker folding away — cannot catch it in React: by the time a handler
+   * runs, the dialog has already decided to close. This is the one hook that
+   * runs early enough to say otherwise.
+   */
+  onEscapeKeyDown?: (event: KeyboardEvent) => void;
 }
 
 /** Modal surface with Radix focus management and a motion-aware entry. */
@@ -54,6 +65,7 @@ export function GlassDialog({
   description,
   children,
   widthClass = "w-[min(92vw,640px)]",
+  onEscapeKeyDown,
 }: GlassDialogProps) {
   const m = useMotion();
 
@@ -118,7 +130,7 @@ export function GlassDialog({
                 transition={{ duration: m.reduce ? 0 : DURATION.base }}
               />
             </Dialog.Overlay>
-            <Dialog.Content asChild forceMount>
+            <Dialog.Content asChild forceMount onEscapeKeyDown={onEscapeKeyDown}>
               <motion.div
                 className={cn(
                   // `left` reads the pane's centre, falling back to the
