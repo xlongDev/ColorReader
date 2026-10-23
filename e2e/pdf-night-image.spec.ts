@@ -51,6 +51,10 @@ test("inverts the demo PDF's image without erasing the page", async ({ page }) =
   expect(chroma(before)).toBeGreaterThan(40);
 
   await page.getByRole("button", { name: "阅读设置" }).first().click();
+  // 图片反色 is a sub-row that only exists where a picture is actually being
+  // re-mapped: with the axis on 跟随主题 in the day there is nothing to invert,
+  // so the panel does not offer it. Pin 夜间反色 first — the state under test.
+  await page.getByRole("button", { name: "夜间反色", exact: true }).click();
   await page.getByRole("button", { name: "图片反色", exact: true }).click();
   await page.keyboard.press("Escape");
 
