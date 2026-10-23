@@ -95,11 +95,53 @@ async function openPdf(page: Page, layout: "单页" | "双页") {
 }
 
 /**
- * Lets the prefetch run: it waits 300 ms for the page to settle before it
- * starts, then rasterises. This is that budget, not a hope.
+ * Mirrors `PREFETCH_SETTLE_MS` in `PdfPageView.tsx`: how long the page must sit
+ * still before the next one is rasterised behind the reader's back. Duplicated
+ * rather than imported on purpose — the e2e suite has no view of a module's
+ * constants, and a budget that silently forgets the settle is worse than one
+ * that has to be updated alongside it.
+ */
+const PREFETCH_SETTLE_MS = 300;
+
+/**
+ * What one raster may cost. `PdfPageView` documents 90–150 ms for an
+ * illustrated page, which is a machine with a GPU; CI has none and shares two
+ * cores with the rest of the suite, so this is ~20× that and is an allowance
+ * rather than a deadline. A prefetch that never lands still fails — only later,
+ * which is the point: nothing here can turn a cold turn into a warm one.
+ */
+const RASTER_ALLOWANCE_MS = 2500;
+
+/**
+ * Lets the prefetch run, and waits for the link that arms it.
+ *
+ * `PdfPageView` schedules the prefetch as the *last* thing its render does —
+ * after the page's own raster, and after the text layer it builds over the
+ * canvas — then waits `PREFETCH_SETTLE_MS`, then rasterises. So the chain has
+ * three links and only one of them has a witness in the DOM: the text layer,
+ * which is the element that same render fills. Waiting for it is what leaves a
+ * budget instead of a hope, because the layer is also the slowest and the most
+ * variable of the three, and it had been assumed rather than seen.
+ *
+ * Measured (webkit, fixture PDF, 1280×820): with every layer already built the
+ * spread is warm 200–400 ms later. The flat 900 ms this replaces had to cover
+ * the layers as well as the settle and the raster, and it overran on CI twice
+ * — once on a runner whose install phase had degraded 50×, and once on a
+ * perfectly healthy one (e2e 20m01s against 19m54s the run before), which is
+ * what says the budget was wrong rather than the machine. When it overruns the
+ * second half of the spread rasterises for real.
+ *
+ * Every page view on screen is waited for, not a fixed count: in double-page
+ * mode each half arms its own prefetch, and after a turn the views are
+ * different pages, so counting from one would wait for a layer that is no
+ * longer mounted.
  */
 async function letPrefetchSettle(page: Page) {
-  await page.waitForTimeout(900);
+  const views = page.locator("[data-pdf-page]");
+  for (let i = 0; i < (await views.count()); i++) {
+    await expect(views.nth(i).locator("[data-pdf-layer]")).not.toBeEmpty({ timeout: 20_000 });
+  }
+  await page.waitForTimeout(PREFETCH_SETTLE_MS + RASTER_ALLOWANCE_MS);
 }
 
 test("a paged PDF rasterises into a canvas, and carries its own text layer", async ({ page }) => {

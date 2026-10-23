@@ -134,6 +134,51 @@ function panelBox() {
   return { top: Math.round(p.top), bottom: Math.round(p.bottom) };
 }
 
+/**
+ * Waits for the panel's entrance to finish.
+ *
+ * The panel enters on `SPRING.enter` — stiffness 420, damping 30 — which is a
+ * damping ratio of 0.73 and roughly 400–500 ms to settle, `scale: 0.92 → 1`
+ * included. A flat 400 ms sits *inside* that window, so what it measured was
+ * whatever the spring happened to have reached, and on a runner dropping frames
+ * that is still mid-flight: Playwright's click then waits for the button's box
+ * to stop moving while the spring is still moving it ("element is not stable"),
+ * and the box this file measures is one the panel is about to leave.
+ *
+ * Two consecutive frames with an identical box is the witness, and it is the
+ * only thing here that is not a guess about the frame rate. A panel that never
+ * comes to rest fails here rather than quietly measuring a moving target.
+ */
+async function panelAtRest(page: Page) {
+  await page.waitForFunction(
+    () => {
+      const panel = document.querySelector("[data-toolbar-rev]");
+      if (!panel) return false;
+      const box = panel.getBoundingClientRect();
+      // Carried on `window` because `waitForFunction` re-evaluates this body
+      // every frame: the previous frame's box has to survive between polls.
+      const slot = window as unknown as { panelRestBox?: DOMRect };
+      const seen = slot.panelRestBox;
+      slot.panelRestBox = box;
+      if (!seen) return false;
+      return (
+        Math.abs(seen.top - box.top) < 0.5 &&
+        Math.abs(seen.left - box.left) < 0.5 &&
+        Math.abs(seen.width - box.width) < 0.5 &&
+        Math.abs(seen.height - box.height) < 0.5
+      );
+    },
+    undefined,
+    { polling: "raf", timeout: 8000 },
+  );
+}
+
+/** The panel, mounted and at rest — the state every measurement below assumes. */
+async function panelSettled(page: Page) {
+  await page.waitForSelector(PANEL, { timeout: 5000 });
+  await panelAtRest(page);
+}
+
 test("the note field never pushes the panel off the page or over the words", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await openBook(page);
@@ -150,13 +195,12 @@ test("the note field never pushes the panel off the page or over the words", asy
       true,
     );
     if (!picked.ok) continue;
-    await page.waitForSelector(PANEL, { timeout: 5000 });
-    await page.waitForTimeout(400);
+    await panelSettled(page);
 
     for (const step of ["closed", "open"] as const) {
       if (step === "open") {
         await page.getByRole("button", { name: "记笔记" }).click();
-        await page.waitForTimeout(400);
+        await panelAtRest(page);
       }
       const box = await page.evaluate(panelBox);
       expect(box, `${height}px ${step}: the panel must be mounted`).not.toBeNull();
@@ -198,10 +242,9 @@ test("a press on the panel's own controls does not count as leaving it", async (
   await openBook(page);
 
   await page.locator(MARK).first().click();
-  await page.waitForSelector(PANEL, { timeout: 5000 });
-  await page.waitForTimeout(400);
+  await panelSettled(page);
   await page.getByRole("button", { name: "记笔记" }).click();
-  await page.waitForTimeout(400);
+  await panelAtRest(page);
 
   const field = page.getByRole("textbox", { name: "笔记" });
   await field.fill("写到一半换个颜色");
@@ -227,10 +270,9 @@ test("清空 empties the field only, and 删除 drops the note but not the highl
 
   const openField = async () => {
     await page.locator(MARK).first().click();
-    await page.waitForSelector(PANEL, { timeout: 5000 });
-    await page.waitForTimeout(400);
+    await panelSettled(page);
     await page.getByRole("button", { name: "记笔记" }).click();
-    await page.waitForTimeout(400);
+    await panelAtRest(page);
   };
 
   await openField();
