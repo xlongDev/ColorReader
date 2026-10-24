@@ -3,8 +3,9 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import type { Annotation } from "@/types/ipc";
+import type { PendingSelection } from "./selection";
 
-import { SelectionOverlay, SelectionToolbar } from "./SelectionToolbar";
+import { SelectionOverlay, SelectionToolbar, selectionKeyOf } from "./SelectionToolbar";
 
 /** The highlight a tapped pill edits; `note` is what the field pre-fills from. */
 function highlight(note: string | null = null): Annotation {
@@ -28,6 +29,7 @@ function toolbarProps(annotation: Annotation | null, onNote = vi.fn(), onHighlig
   return {
     x: 400,
     y: 400,
+    selectionKey: "s:0:10:20",
     annotation,
     defaultColor: "#ffd12e",
     defaultStyle: "highlight" as const,
@@ -130,6 +132,39 @@ describe("SelectionToolbar note field", () => {
     await user.type(field(), "   ");
     await user.click(document.body);
     expect(onNote).not.toHaveBeenCalled();
+  });
+
+  it("closes the field, without committing it, when the selection changes", async () => {
+    const user = userEvent.setup();
+    const onNote = vi.fn();
+    const { rerender } = render(<SelectionToolbar {...toolbarProps(null, onNote)} />);
+    await openField(user);
+    await user.type(field(), "上一段的想法");
+
+    // The same panel instance over a different passage — what the reader gets
+    // by selecting again without closing anything.
+    rerender(<SelectionToolbar {...toolbarProps(null, onNote)} selectionKey="s:0:40:60" />);
+
+    expect(screen.queryByRole("textbox", { name: "笔记" })).not.toBeInTheDocument();
+    // What was in the field belonged to the passage that left, so it is dropped
+    // rather than offered to the new one.
+    expect(onNote).not.toHaveBeenCalled();
+    // And the panel is still standing: the reader is picking an ink, not leaving.
+    expect(screen.getByRole("button", { name: "记笔记" })).toBeInTheDocument();
+  });
+
+  it("keeps the field open across a re-measure of the same selection", async () => {
+    const user = userEvent.setup();
+    const props = toolbarProps(null);
+    const { rerender } = render(<SelectionToolbar {...props} />);
+    await openField(user);
+    await user.type(field(), "写了一半");
+
+    // A page turn re-anchors the panel: same passage, new box. The key is the
+    // range, so this must not read as a new selection.
+    rerender(<SelectionToolbar {...props} x={420} y={430} bottom={470} />);
+
+    expect(field()).toHaveValue("写了一半");
   });
 
   it("saves the note when the panel is closed by its own button", async () => {
@@ -240,5 +275,53 @@ describe("SelectionOverlay", () => {
   it("renders nothing while there is no selection and no lookup", () => {
     render(<SelectionOverlay toolbar={null} lookup={null} onLookupClose={vi.fn()} />);
     expect(document.querySelector("[data-toolbar-rev]")).toBeNull();
+  });
+});
+
+/**
+ * The half of the key's contract that lives on the caller's side.
+ *
+ * The component receives a finished string, so it cannot tell a range key from
+ * a box key — and a key that carried the box would close the field on every
+ * re-measure, which is the one thing this prop exists to prevent. The box is
+ * therefore handed in and asserted *out* of the answer: appending it to the key
+ * (the obvious "more precise" edit) fails every case below.
+ */
+describe("selectionKeyOf", () => {
+  const range = { start: 10, end: 20, text: "被划中的那一段" };
+  const pending = (over: Partial<PendingSelection> = {}): PendingSelection => ({
+    range,
+    x: 400,
+    y: 400,
+    ...over,
+  });
+
+  it("is the range for a bare selection", () => {
+    expect(selectionKeyOf(pending(), null, 3)).toBe("s:3:10:20");
+  });
+
+  it("prefers the range's own chapter over the one on screen", () => {
+    expect(selectionKeyOf(pending({ chapterIdx: 7 }), null, 3)).toBe("s:7:10:20");
+  });
+
+  it("is the highlight's id in edit mode", () => {
+    expect(selectionKeyOf(pending(), "a1", 3)).toBe("a:a1");
+  });
+
+  it("does not notice a re-measure of the same selection", () => {
+    // A page turn moves the box and nothing else: same range, new x/y/bottom.
+    const before = selectionKeyOf(pending({ bottom: 470 }), null, 1);
+    const after = selectionKeyOf(pending({ x: 420, y: 430, bottom: 512 }), null, 1);
+    expect(after).toBe(before);
+  });
+
+  it("changes when the passage does", () => {
+    expect(selectionKeyOf(pending({ range: { ...range, start: 40, end: 60 } }), null, 1)).not.toBe(
+      selectionKeyOf(pending(), null, 1),
+    );
+    // …and when the chapter does, even at the same offsets.
+    expect(selectionKeyOf(pending({ chapterIdx: 2 }), null, 1)).not.toBe(
+      selectionKeyOf(pending({ chapterIdx: 1 }), null, 1),
+    );
   });
 });

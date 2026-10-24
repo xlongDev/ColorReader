@@ -73,7 +73,11 @@ import {
 } from "@/features/reader/selection";
 import { washCss, washRule } from "@/features/reader/ttsWash";
 import { RsvpPlayer } from "@/features/reader/RsvpPlayer";
-import { SelectionOverlay, type LookupKind } from "@/features/reader/SelectionToolbar";
+import {
+  SelectionOverlay,
+  selectionKeyOf,
+  type LookupKind,
+} from "@/features/reader/SelectionToolbar";
 import type { AnnotationStyle } from "@/types/ipc";
 import { useTtsHost } from "@/features/reader/TtsHost";
 import { resolveSurface, readerGlassVars } from "@/features/reader/theme";
@@ -2641,6 +2645,8 @@ export function ReaderView({
                     window.getSelection()?.removeAllRanges();
                     setPending(null);
                   },
+                  // The range, not the box — see `selectionKeyOf`.
+                  selectionKey: selectionKeyOf(pending, pendingAnnotation?.id ?? null, chapterIdx),
                 }
               : null
           }

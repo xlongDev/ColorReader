@@ -30,6 +30,7 @@ import type { Annotation, AnnotationStyle } from "@/types/ipc";
 import { HIGHLIGHT_COLORS } from "@/stores/reader";
 import { NoteAction } from "./AnnotationNote";
 import { inkWash } from "./selection";
+import type { PendingSelection } from "./selection";
 import { SPRING } from "@/lib/motion";
 
 /**
@@ -52,6 +53,19 @@ import { SPRING } from "@/lib/motion";
 type Props = {
   x: number;
   y: number;
+  /**
+   * Which selection this toolbar is for, as a string that is stable across
+   * re-measures of the *same* selection and different for a new one.
+   *
+   * The panel instance survives from one selection to the next, so this is
+   * what tells it that the passage under it changed: the note field, its
+   * draft and its caret all belong to the passage that was selected when the
+   * field opened, and carrying them onto the next one would offer the reader
+   * the previous note to commit onto words they never wrote it about.
+   *
+   * Built by `selectionKeyOf` — never from the box.
+   */
+  selectionKey: string;
   /** Bottom edge of the selection box, in host window coordinates — the
    *  lowest line carrying text, not the range's bounding box (see
    *  `selectionBottom`). */
@@ -115,6 +129,31 @@ function readingViewport(): DOMRect | null {
   );
 }
 
+/**
+ * The toolbar's identity for one selection — the contract behind
+ * `Props.selectionKey`.
+ *
+ * The range, never the box: `x`/`y`/`bottom` move every time the host
+ * re-measures (a foliate page turn re-anchors the panel), and a key built from
+ * them would close a note field the reader is still writing in. A highlight's
+ * id stands in for its range in edit mode, and it is the *resolved* row's id —
+ * the annotation query can still be in flight when the toolbar opens, and a key
+ * that changed shape when it landed would close the field on its own.
+ *
+ * Takes the whole `PendingSelection`, box included, on purpose: a signature
+ * that accepted only the range could not be tested against the mistake this
+ * exists to prevent, because the box would not be there to leave out.
+ */
+export function selectionKeyOf(
+  pending: PendingSelection,
+  annotationId: string | null,
+  chapterIdx: number,
+): string {
+  return annotationId !== null
+    ? `a:${annotationId}`
+    : `s:${pending.chapterIdx ?? chapterIdx}:${pending.range.start}:${pending.range.end}`;
+}
+
 const STYLES: { key: AnnotationStyle; label: string }[] = [
   { key: "highlight", label: "背景高亮" },
   { key: "underline", label: "直线" },
@@ -138,11 +177,15 @@ export function SelectionToolbar({
   onNote,
   onDelete,
   onClose,
+  selectionKey,
 }: Props) {
   const reduce = useReducedMotion();
   const [copied, setCopied] = useState(false);
   // The draft ink: what the next apply paints. Edit mode starts from the
   // highlight's own values, a fresh selection from the reader's last pick.
+  // Deliberately *not* reset with `selectionKey` below: it is the reader's last
+  // pick, which `createHighlight` also folds into settings, so a new passage
+  // starts where the last one left off.
   const [color, setColor] = useState(annotation?.color ?? defaultColor);
   // Rust stores the ink style as a plain `String` (validated on the way in), so
   // the narrowing to the three legal values happens here.
@@ -159,6 +202,32 @@ export function SelectionToolbar({
   /** The panel itself — its measured height is what places it. */
   const panel = useRef<HTMLDivElement>(null);
   const noting = draft !== null;
+
+  // A new selection is a new thought. The panel instance outlives the passage
+  // it was opened over, so without this the field would stay open — and stay
+  // filled with the last passage's draft — under the next one, where clicking
+  // 记笔记 reads as "close the field" instead of "open it". Measured on the
+  // reader: selecting a second paragraph with the field open left it open, and
+  // the blur the close raises then committed the stale draft onto the new
+  // words.
+  //
+  // Render-phase rather than an effect: this codebase bans `setState` in
+  // effects, and the field has to be gone in the same commit that shows the new
+  // selection. The close is marked as the app's own so the blur the unmount
+  // raises cannot commit the draft being dropped — `rewound` is the same flag
+  // Escape uses, and it is cleared when a field opens again below.
+  //
+  // The ref write is in the render phase on purpose, and it has to be: the blur
+  // it is guarding against is raised while React removes the textarea, which is
+  // inside this very commit — before any layout or passive effect could run. An
+  // effect would let the note be written onto the passage that just left.
+  const [seenKey, setSeenKey] = useState(selectionKey);
+  if (seenKey !== selectionKey) {
+    setSeenKey(selectionKey);
+    // oxlint-disable-next-line react-hooks/refs -- the mark must exist before the commit
+    if (draft !== null) rewound.current = true;
+    setDraft(null);
+  }
   const copiedTimer = useRef<number | null>(null);
   useEffect(
     () => () => {
@@ -172,6 +241,12 @@ export function SelectionToolbar({
   // already there, so editing one continues it instead of typing backwards.
   useEffect(() => {
     if (!noting) return;
+    // A freshly opened field has nothing to rewind. The flag only means "the
+    // close happening right now is the app's own, not the reader leaving", and
+    // it is set by the selection change above and by Escape — both of which
+    // close a field that is already open. Clearing it here is what stops a
+    // close whose blur never arrived from swallowing the next real one.
+    rewound.current = false;
     const el = field.current;
     if (!el) return;
     el.focus();
