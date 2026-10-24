@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Frame, type Page } from "@playwright/test";
 
 /**
  * The image browser, in the browser build.
@@ -23,14 +23,32 @@ import { expect, test, type Page } from "@playwright/test";
  *  also index 0 of the right one. */
 const THIRD = 2;
 
+/**
+ * `img[data-path]` in one frame — or 0 for a frame that has since gone away.
+ *
+ * The reader recreates its iframes (a chapter change, a re-render, a layout
+ * mode that arrives after mount), and `page.frames()` is a snapshot taken
+ * before any of that can happen: a frame in it can be gone by the time the
+ * count runs. `locator.count()` then throws "Frame was detached", and since
+ * `expect.poll` re-throws whatever its callback throws instead of retrying,
+ * one such frame took the whole poll down on the runner. A frame that cannot
+ * be asked holds no pictures, which is all either caller here needs to know —
+ * a reader that really has none still fails the poll's own timeout below.
+ */
+async function imagesIn(frame: Frame): Promise<number> {
+  try {
+    return await frame.locator("img[data-path]").count();
+  } catch {
+    return 0;
+  }
+}
+
 /** One picture of the open book, in reading order, inside foliate's iframe. */
 async function bookImage(page: Page, position: number) {
   await expect
     .poll(
       async () =>
-        (
-          await Promise.all(page.frames().map((frame) => frame.locator("img[data-path]").count()))
-        ).reduce((sum, count) => sum + count, 0),
+        (await Promise.all(page.frames().map(imagesIn))).reduce((sum, count) => sum + count, 0),
       { timeout: 15_000, message: "样书的图片没有渲染出来" },
     )
     .toBeGreaterThanOrEqual(3);
@@ -38,7 +56,7 @@ async function bookImage(page: Page, position: number) {
   const view = page.viewportSize()!;
   for (const frame of page.frames()) {
     const images = frame.locator("img[data-path]");
-    if ((await images.count()) <= position) continue;
+    if ((await imagesIn(frame)) <= position) continue;
     const image = images.nth(position);
     // Wait for the picture to be one the reader could actually click: laid out
     // (the handler ignores anything under 48px) and inside the pane. A section

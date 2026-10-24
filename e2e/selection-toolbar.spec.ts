@@ -148,8 +148,15 @@ function panelBox() {
  * Two consecutive frames with an identical box is the witness, and it is the
  * only thing here that is not a guess about the frame rate. A panel that never
  * comes to rest fails here rather than quietly measuring a moving target.
+ *
+ * The record is cleared on the way in: the slot lives on `window`, so without
+ * that the first poll of a later call compares against the *previous* call's
+ * last box and can return true on a panel that has not come to rest at all.
  */
 async function panelAtRest(page: Page) {
+  await page.evaluate(() => {
+    delete (window as unknown as { panelRestBox?: DOMRect }).panelRestBox;
+  });
   await page.waitForFunction(
     () => {
       const panel = document.querySelector("[data-toolbar-rev]");
@@ -177,6 +184,21 @@ async function panelAtRest(page: Page) {
 async function panelSettled(page: Page) {
   await page.waitForSelector(PANEL, { timeout: 5000 });
   await panelAtRest(page);
+}
+
+/**
+ * Waits for the panel to be *gone*, not merely dismissed.
+ *
+ * The exit runs the same `SPRING.enter` the entrance does — 460–490 ms here,
+ * longer on a runner that drops frames — and `AnimatePresence` keeps the node
+ * in the DOM for all of it. A flat 300 ms therefore leaves the previous round's
+ * panel still mounted while the next round's is appearing: `querySelector`
+ * returns the dying one first, so every box measured after it belongs to a panel
+ * that is on its way out, and `getByRole` resolves to two 记笔记 buttons. Both
+ * were seen on the runner.
+ */
+async function panelGone(page: Page) {
+  await page.waitForSelector(PANEL, { state: "detached", timeout: 8000 });
 }
 
 test("the note field never pushes the panel off the page or over the words", async ({ page }) => {
@@ -232,8 +254,11 @@ test("the note field never pushes the panel off the page or over the words", asy
       }
     }
 
+    // Closing the panel is also what ends the round: the note field dies with
+    // its selection, so the next round opens over a panel that is not already
+    // noting. The wait is for the node to leave the DOM — see `panelGone`.
     await page.getByRole("button", { name: "关闭" }).click();
-    await page.waitForTimeout(300);
+    await panelGone(page);
   }
 });
 
