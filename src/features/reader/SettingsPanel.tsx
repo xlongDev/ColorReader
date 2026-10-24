@@ -7,6 +7,8 @@ import { GlassSwitch } from "@/components/glass/input";
 import { useResolvedTheme } from "@/hooks/useTheme";
 import {
   DEFAULT_AUTO_SCROLL_SPEED,
+  DEFAULT_MARGIN_X,
+  DEFAULT_MARGIN_Y,
   HIGHLIGHT_COLORS,
   LINE_HEIGHTS,
   MAX_AUTO_SCROLL_SPEED,
@@ -222,12 +224,22 @@ export function SettingsPanel({
             <div className="flex flex-wrap gap-1.5">
               {MARGIN_X_PRESETS.map((preset, index) => {
                 const active = nearestMargin(settings.marginX) === preset;
+                // 窄 and 标准 also carry the vertical default: both are the
+                // compact end of the scale, where a reader who has dragged 上下
+                // away wants it back, and the wider two only speak for 左右.
+                const resetVertical = preset <= DEFAULT_MARGIN_X;
                 return (
                   <motion.button
                     key={preset}
                     type="button"
                     aria-pressed={active}
-                    onClick={() => update({ marginX: preset })}
+                    onClick={() =>
+                      update(
+                        resetVertical
+                          ? { marginX: preset, marginY: DEFAULT_MARGIN_Y }
+                          : { marginX: preset },
+                      )
+                    }
                     whileTap={reduce ? undefined : { scale: 0.94 }}
                     transition={SPRING.tap}
                     className={cn(

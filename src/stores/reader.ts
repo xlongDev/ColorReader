@@ -365,16 +365,18 @@ export const LINE_HEIGHTS = [1.6, 1.8, 2.0, 2.2] as const;
 export const PARA_GAPS = [0.6, 0.9, 1.2, 1.6] as const;
 
 /** Horizontal page margin presets in px; the slider fine-tunes around them.
- * 标准 (96) is the old 特宽 look, promoted per the wider-page-margins brief. */
-export const MARGIN_X_PRESETS = [64, 96, 128, 160] as const;
+ * 标准 (86) is the old 特宽 look, promoted per the wider-page-margins brief.
+ * 2026-10-24: 两端各让开一格（32 → 224），foliate 的页宽上限按边距反向收窄，
+ * 所以这里的 px 现在是「真的会变窄的 px」，宽的那一端才值得给足。 */
+export const MARGIN_X_PRESETS = [32, 86, 160, 224] as const;
 
 /** Bounds for the continuous side/top/bottom margin sliders, and defaults. */
-export const MIN_MARGIN_X = 32;
-export const MAX_MARGIN_X = 192;
-export const MIN_MARGIN_Y = 24;
+export const MIN_MARGIN_X = 1;
+export const MAX_MARGIN_X = 224;
+export const MIN_MARGIN_Y = 1;
 export const MAX_MARGIN_Y = 160;
-export const DEFAULT_MARGIN_X = 96;
-export const DEFAULT_MARGIN_Y = 64;
+export const DEFAULT_MARGIN_X = 86;
+export const DEFAULT_MARGIN_Y = 54;
 
 /**
  * Auto-scroll speed bounds in px per second, and the initial speed.

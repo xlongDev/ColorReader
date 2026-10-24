@@ -5,6 +5,7 @@ import { Overlayer } from "foliate-js/overlayer.js";
 import type { FoliateRelocate, View, makeBook } from "foliate-js/view.js";
 import type { Annotation } from "@/types/ipc";
 import type { LayoutMode, PageTransition } from "./theme";
+import { DEFAULT_MARGIN_X } from "@/stores/reader";
 import { speechUnits, unitsFromOffset } from "./speech";
 import type { SpeechUnit, Span } from "./speech";
 import { foliateWash } from "./ttsWash";
@@ -441,6 +442,30 @@ const TURN_STYLE: Record<PageTransition, string | null> = {
 };
 
 /**
+ * foliate's own page-box width — `--_max-inline-size` in `paginator.js`.
+ *
+ * The box is capped here, which is why the side margin cannot be a plain
+ * padding: `--_margin-*` are grid tracks *outside* the box, so raising the
+ * margin widens the container the columns are measured against and the text
+ * gets wider, not narrower (the reader's「窄更宽、宽更窄」).
+ */
+const PAGE_WIDTH = 720;
+
+/** Page box is never squeezed below this, whatever the margin says. */
+const MIN_PAGE_WIDTH = 240;
+
+/**
+ * The box cap that makes a bigger side margin mean a narrower page.
+ *
+ * Box + both margins stays constant, so the cap shrinks by twice what each
+ * margin grows by and the columns are measured against less width. Calibrated
+ * so the default margin (96) lands on foliate's own 720 — the look before this
+ * existed is unchanged.
+ */
+const pageWidthFor = (marginX: number) =>
+  Math.max(MIN_PAGE_WIDTH, PAGE_WIDTH + 2 * (DEFAULT_MARGIN_X - marginX));
+
+/**
  * Maps our layout mode onto the foliate paginator's attributes:
  * scroll = one continuous flow, single = one column, double = a spread.
  * Setting an attribute triggers the paginator's own re-render, and it
@@ -494,6 +519,7 @@ const applyLayout = (
       put("turn-style", null);
     }
   }
+  put("max-inline-size", `${pageWidthFor(margin.x)}px`);
   put("margin-left", `${margin.x}px`);
   put("margin-right", `${margin.x}px`);
   put("margin-top", `${margin.y}px`);
