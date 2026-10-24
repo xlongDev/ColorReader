@@ -2149,15 +2149,33 @@ export class Paginator extends HTMLElement {
         this.#lastLayout = layout
         return layout
     }
+    /** Whether two `#beforeRender` layouts describe the same page box. */
+    #sameLayout(a, b) {
+        if (!a || !b) return false
+        for (const key of new Set([...Object.keys(a), ...Object.keys(b)]))
+            if (a[key] !== b[key]) return false
+        return true
+    }
     render() {
         if (this.#views.size === 0) return
         const primaryView = this.#primaryView
         if (!primaryView) return
         this.#stabilizing = true
+        const previous = this.#lastLayout
         const layout = this.#beforeRender({
             vertical: this.#vertical,
             rtl: this.#rtl,
         })
+        // The container's size is how a pane resize reaches us, but our own
+        // attributes resize it too — `max-column-count` feeds `--_max-width`,
+        // so switching a spread on changes the container and resizes straight
+        // back into here. That second pass computes the layout we already have,
+        // and re-columnising the section for it is a full reflow that changes
+        // nothing (about a second on a book whose whole text is one section).
+        if (this.#sameLayout(previous, layout)) {
+            this.#stabilizing = false
+            return
+        }
         for (const [, view] of this.#views) {
             if (view.document) view.render(layout)
         }

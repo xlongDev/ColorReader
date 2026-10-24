@@ -77,3 +77,29 @@ test("打开一本书，第一次渲染就是单页，不会先闪一页双页",
   expect(renders[0], "第一次渲染就已经是单页").toBe(1);
   expect(renders, "全程不该出现一次双页渲染").not.toContain(2);
 });
+
+/**
+ * 一次切换只付一次重排的钱。
+ *
+ * 每条布局属性都是一次整节重排（WebKit 上一本单节书约 1 秒），而切一次
+ * 排版只该动一条属性；分页器自己还会因为容器尺寸变了再重排一遍，那一遍
+ * 算出来的版式与上一次一模一样。这里钉住「切换 = 一次重排」，两条都得在：
+ * `applyLayout` 只写变了的值，分页器跳过重复版式。
+ */
+test("切换单页 → 双页只重排一次", async ({ page }) => {
+  await recordRenders(page);
+  await openSample(page);
+  // 开书那几次渲染先落定，别算进切换的账。
+  await page.waitForTimeout(1500);
+  const before = await page.evaluate<number>(`${RENDERS}.length`);
+
+  await page.getByRole("button", { name: "阅读设置" }).first().click();
+  await page.waitForTimeout(700);
+  await page.getByRole("button", { name: "双页", exact: true }).first().click();
+  await page.waitForTimeout(2000);
+
+  const after: number[] = await page.evaluate(RENDERS);
+  const switched = after.slice(before);
+  expect(switched, "一次切换只该重排一次").toHaveLength(1);
+  expect(switched[0], "并且真的排成了双页").toBe(2);
+});

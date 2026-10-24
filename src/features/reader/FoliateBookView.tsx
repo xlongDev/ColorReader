@@ -446,6 +446,11 @@ const TURN_STYLE: Record<PageTransition, string | null> = {
  * Setting an attribute triggers the paginator's own re-render, and it
  * anchors the current position while reflowing. Page margins ride the same
  * channel (`margin-*` attributes feed the paginator's `--_margin-*` vars).
+ *
+ * Every write is skipped when the attribute already holds that value, because
+ * each one is a full re-columnisation of the section (about a second per
+ * chapter in WebKit): writing all seven unconditionally turned 单页 → 双页 —
+ * one attribute's worth of change — into seven reflows and ~6s of dead time.
  */
 const applyLayout = (
   view: View,
@@ -455,36 +460,44 @@ const applyLayout = (
 ) => {
   const renderer = view.renderer;
   if (!renderer) return;
+  /** Set (or clear) one attribute, but only when it actually changes. */
+  const put = (name: string, value: string | null) => {
+    if (value === null) {
+      if (renderer.hasAttribute(name)) renderer.removeAttribute(name);
+    } else if (renderer.getAttribute(name) !== value) {
+      renderer.setAttribute(name, value);
+    }
+  };
   if (layout === "scroll") {
-    renderer.setAttribute("flow", "scrolled");
-    renderer.removeAttribute("max-column-count");
-    renderer.removeAttribute("animated");
-    renderer.removeAttribute("turn-style");
+    put("flow", "scrolled");
+    put("max-column-count", null);
+    put("animated", null);
+    put("turn-style", null);
   } else {
-    renderer.setAttribute("flow", "paginated");
-    renderer.setAttribute("max-column-count", layout === "double" ? "2" : "1");
+    // Column count before flow: while the paginator is still scrolled, writing
+    // it re-renders cheaply (a scrolled flow has no columns to lay out), and
+    // the one expensive re-columnisation then happens on the flow switch.
+    // The other order pays for two — 滚动 → 单页 was 1.8s on a book whose whole
+    // text is a single section, against 0.9s this way. Both writes land in the
+    // same task, so the half-applied state is never painted.
+    put("max-column-count", layout === "double" ? "2" : "1");
+    put("flow", "paginated");
     // `animated` is the master switch. `pan` omits `turn-style` so foliate uses
     // its native scroll pan (clipped to the reading pane); `slide` / `fade` /
     // `paper` set a layered `turn-style` for VT effects, scoped to
     // `data-view-transition-root`.
     if (ANIMATED[transition]) {
-      renderer.setAttribute("animated", "");
-      const turn = TURN_STYLE[transition];
-      if (turn) renderer.setAttribute("turn-style", turn);
-      else renderer.removeAttribute("turn-style");
+      put("animated", "");
+      put("turn-style", TURN_STYLE[transition] ?? null);
     } else {
-      renderer.removeAttribute("animated");
-      renderer.removeAttribute("turn-style");
+      put("animated", null);
+      put("turn-style", null);
     }
   }
-  for (const [name, px] of [
-    ["margin-left", margin.x],
-    ["margin-right", margin.x],
-    ["margin-top", margin.y],
-    ["margin-bottom", margin.y],
-  ] as const) {
-    renderer.setAttribute(name, `${px}px`);
-  }
+  put("margin-left", `${margin.x}px`);
+  put("margin-right", `${margin.x}px`);
+  put("margin-top", `${margin.y}px`);
+  put("margin-bottom", `${margin.y}px`);
 };
 
 /**
