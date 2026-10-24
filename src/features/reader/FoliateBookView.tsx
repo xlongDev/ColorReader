@@ -1209,6 +1209,12 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
         // on the axis it finds there, then caches it. A sheet injected once the
         // first section is already up leaves the whole book horizontal.
         view.renderer?.setStyles?.(buildStyleSheet(styleRef.current));
+        // Same reason as the sheet: the paginator's own default is a
+        // two-column spread, so a book opened in 单页 painted a spread first
+        // and re-columnised once the layout effect ran after `init` — the
+        // double-then-single flash. Attributes here, before any section is
+        // rendered, make the first paint the chosen layout.
+        applyLayout(view, layoutRef.current, transitionRef.current, marginsRef.current);
         await view.init(startCfi ? { lastLocation: startCfi } : {});
         if (!startCfi && startFraction && view.book?.splitTOCHref) {
           await view.goToFraction(startFraction);
@@ -1242,7 +1248,6 @@ const FoliateBookView = forwardRef<FoliateHandle, Props>(function FoliateBookVie
           }
         }
         if (cancelled) return;
-        applyLayout(view, layoutRef.current, transitionRef.current, marginsRef.current);
         // The style effect predates the view, so a book opened straight into
         // the night palette needs the fixed-layout tint applied here too.
         syncPageInvert(view, styleRef.current);
