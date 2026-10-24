@@ -44,6 +44,17 @@ const installPad = () => {
     value: () => [pad],
     configurable: true,
   });
+  // A frame counter, and the reason `pushStick`/`holdButton` release a held
+  // input only after frames have run: the hook polls the pad on
+  // `requestAnimationFrame` (the Gamepad API has no events), so an input that
+  // is set and cleared inside one long task is never polled at all.
+  const counter = window as unknown as { frameCount: number };
+  counter.frameCount = 0;
+  const countFrame = () => {
+    counter.frameCount += 1;
+    requestAnimationFrame(countFrame);
+  };
+  requestAnimationFrame(countFrame);
 };
 
 type Pad = {
@@ -62,14 +73,18 @@ async function press(page: Page, index: number) {
  * The long hold is a different gesture from the short one and is tested as one:
  * a pad that answers a held button with exactly one press cannot walk the ruler
  * down a page, and `REPEAT_DELAY` is where that decision lives.
+ *
+ * The release waits for frames as well as for the clock — see `pushStick`.
  */
 async function holdButton(page: Page, index: number, ms: number) {
-  await page.evaluate((i) => {
-    const p = (window as unknown as { pad: Pad }).pad;
-    p.buttons[i]!.pressed = true;
-    p.buttons[i]!.value = 1;
+  const from = await page.evaluate((i) => {
+    const w = window as unknown as { pad: Pad; frameCount: number };
+    w.pad.buttons[i]!.pressed = true;
+    w.pad.buttons[i]!.value = 1;
+    return w.frameCount;
   }, index);
   await page.waitForTimeout(ms);
+  await waitFrames(page, from);
   await page.evaluate((i) => {
     const p = (window as unknown as { pad: Pad }).pad;
     p.buttons[i]!.pressed = false;
@@ -79,20 +94,49 @@ async function holdButton(page: Page, index: number, ms: number) {
 }
 
 /**
+ * Waits until two real animation frames have run since `from`.
+ *
+ * rAF callbacks run in registration order inside a frame, and the hook's poll
+ * loop registers itself before `installPad`'s counter does — so every frame
+ * this waits for is a frame the hook already polled the pad in.
+ */
+async function waitFrames(page: Page, from: number) {
+  await page.waitForFunction(
+    (start) => (window as unknown as { frameCount: number }).frameCount >= start + 2,
+    from,
+  );
+}
+
+/**
  * Pushes a stick to the stop and holds it there for `ms`, then centers it.
  *
  * The hold is the point twice over: a latch that forgets to re-arm turns this
- * into a step per frame, and a stick that never repeats turns a held push into a
- * single step.
+ * into a step per frame, and a stick that never repeats turns a held push into
+ * a single step.
+ *
+ * 🔴 **The release waits for frames, not only for the clock.** The hook polls
+ * the pad on `requestAnimationFrame` — the Gamepad API has no events — so a
+ * push that is set and cleared inside one long task is never polled at all:
+ * the step is lost and every assertion after it reads "nothing happened".
+ * Measured: a 300ms spin on the main thread with the push inside it drops the
+ * step every time; the same push, released after two real frames, lands. That
+ * is the shape of what CI kept reporting — a push after a layout switch and one
+ * after the ruler's first measurement, both heavy. Two frames is ~33ms on a
+ * healthy machine and however long it takes on a loaded one, and it stays well
+ * under `REPEAT_DELAY` (420ms) so the hold is still one press rather than a
+ * walk.
  */
 async function pushStick(page: Page, axisIndex: 0 | 1, to: number, ms = 160) {
-  await page.evaluate(
+  const from = await page.evaluate(
     (move) => {
-      (window as unknown as { pad: Pad }).pad.axes[move.axisIndex] = move.to;
+      const w = window as unknown as { pad: Pad; frameCount: number };
+      w.pad.axes[move.axisIndex] = move.to;
+      return w.frameCount;
     },
     { axisIndex, to },
   );
   await page.waitForTimeout(ms);
+  await waitFrames(page, from);
   await page.evaluate(
     (back) => {
       (window as unknown as { pad: Pad }).pad.axes[back.axisIndex] = 0;
