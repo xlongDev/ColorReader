@@ -599,6 +599,9 @@ export function ReaderView({
   const rulerDirRef = useRef<1 | -1 | 0>(0);
   // Latest position along the active axis, read outside the scroll handler.
   const fractionRef = useRef<number>(start.fraction);
+  // The offset the layout hook last scrolled the viewport to itself, so
+  // `onScroll` below can tell a re-anchor from the reader leaving.
+  const layoutScrollRef = useRef<{ left: number; top: number } | null>(null);
   // Everything about the column grid: measured viewport, the tail spacer and
   // the two mirrors every scroll callback reads (mode, applied margin).
   const { tail, measureTail, viewportW, viewportH, pinnedW, layoutModeRef, marginRef } =
@@ -609,6 +612,7 @@ export function ReaderView({
       marginX,
       fullscreen,
       fractionRef,
+      layoutScrollRef,
       fontSize,
       lineHeightIdx,
       paraGapIdx,
@@ -1484,7 +1488,22 @@ export function ReaderView({
     // Stale for the dismissal only: the page still moved, so everything
     // below still runs — the reveal's own progress has to land.
     const stale = !!el && !!at && el.scrollLeft === at.left && el.scrollTop === at.top;
-    if (!stale) setPending(null);
+    // The layout re-anchoring after a re-flow (a resize, a typography change,
+    // a sidebar spring) is not the reader leaving the passage: the words are
+    // still under the toolbar, and `remeasureSelection` keeps it on them. So
+    // the anchor is re-recorded instead of the toolbar dropped — resizing the
+    // window used to close it, which is the same gesture a reader makes while
+    // a note is half-written. Consumed either way, so it can never excuse a
+    // scroll that is not this one.
+    const laid = layoutScrollRef.current;
+    const relaid =
+      laid !== null && !!el && laid.left === el.scrollLeft && laid.top === el.scrollTop;
+    if (relaid) {
+      layoutScrollRef.current = null;
+      openedScrollAt.current = { left: el.scrollLeft, top: el.scrollTop };
+    } else if (!stale) {
+      setPending(null);
+    }
     if (!el) return;
     const pagedNow = layoutModeRef.current !== "scroll";
     const max = pagedNow ? el.scrollWidth - el.clientWidth : el.scrollHeight - el.clientHeight;

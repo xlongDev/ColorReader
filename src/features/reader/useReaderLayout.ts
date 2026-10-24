@@ -19,6 +19,20 @@ export interface ReaderLayoutInput {
   fullscreen: boolean;
   /** Fraction along the active axis to re-anchor on after any re-flow. */
   fractionRef: RefObject<number>;
+  /**
+   * The offset this hook last scrolled the viewport to itself.
+   *
+   * A scroll event carrying this offset is the layout re-anchoring after a
+   * re-flow — a resize, a typography change, a sidebar spring — and not the
+   * reader moving the page. The selection toolbar has to survive those: the
+   * words are still under it (`remeasureSelection` moves it onto them), and
+   * dismissing on them closed the toolbar the moment the window was resized.
+   *
+   * Written as an offset rather than a flag so it goes stale by itself: a
+   * re-anchor that changes nothing fires no scroll event, and a flag left set
+   * would then excuse the reader's very next scroll.
+   */
+  layoutScrollRef: RefObject<{ left: number; top: number } | null>;
   fontSize: number;
   lineHeightIdx: number;
   paraGapIdx: number;
@@ -47,6 +61,7 @@ export function useReaderLayout({
   marginX,
   fullscreen,
   fractionRef,
+  layoutScrollRef,
   fontSize,
   lineHeightIdx,
   paraGapIdx,
@@ -69,13 +84,26 @@ export function useReaderLayout({
   const sideMargin = marginX + (fullscreen ? FULLSCREEN_MARGIN_BONUS : 0);
   const marginRef = useRef<number>(sideMargin);
 
+  /**
+   * Moves the viewport to where the current layout puts `fractionRef`, and
+   * records the offset it wrote so the reader's scroll handler can tell this
+   * scroll from the reader's own (see `layoutScrollRef`).
+   */
+  const positionForLayout = useCallback(
+    (el: HTMLDivElement, margin: number) => {
+      applyPosition(el, fractionRef.current, layoutModeRef.current, margin);
+      layoutScrollRef.current = { left: el.scrollLeft, top: el.scrollTop };
+    },
+    [fractionRef, layoutScrollRef],
+  );
+
   /** Re-measure the tail spacer and re-anchor on the current fraction. */
   const reanchor = useCallback(
     (el: HTMLDivElement, margin: number) => {
       alignTail(el, layoutModeRef.current, margin, tailRef, setTail);
-      applyPosition(el, fractionRef.current, layoutModeRef.current, margin);
+      positionForLayout(el, margin);
     },
-    [fractionRef],
+    [positionForLayout],
   );
 
   /** Just the tail half of `reanchor`, for callers that position themselves. */
@@ -91,8 +119,8 @@ export function useReaderLayout({
       tailRef.current = null;
       setTail(null);
     }
-    if (el) applyPosition(el, fractionRef.current, layoutMode, marginRef.current);
-  }, [layoutMode, scrollRef, fractionRef]);
+    if (el) positionForLayout(el, marginRef.current);
+  }, [layoutMode, scrollRef, positionForLayout]);
 
   // Keep the margin mirror fresh; margin is not needed for rendering effects.
   useEffect(() => {
