@@ -211,6 +211,14 @@ test("a batch delete takes every book's rows with it", async ({ page }) => {
   await expect(dialog).toContainText("删除选中的 2 本书？");
   await dialog.getByRole("button", { name: "删除", exact: true }).click();
 
+  // Radix hides everything behind an open dialog: the content outside it goes
+  // `aria-hidden`, and a role query skips that subtree. So while the confirm
+  // dialog is up — its exit animation included — "the card is gone" is true
+  // whether or not it ever left, and the loop below would pass over a shelf
+  // that still holds both books. Waiting for the node to detach is what gives
+  // that assertion its meaning back.
+  await expect(dialog).toBeHidden();
+
   // The cards go, and the shelf comes back empty rather than half-deleted.
   for (const title of TITLES) {
     await expect(page.getByRole("button", { name: title })).toHaveCount(0);
@@ -219,8 +227,20 @@ test("a batch delete takes every book's rows with it", async ({ page }) => {
   // The rows go with them — this is the assertion the old per-book scan could
   // fail: an orphaned chapter, highlight or bookmark row would keep a deleted
   // book searchable and in the notes list.
-  const left = await rowsLeftFor(page, ids);
-  expect(left).toEqual({ books: 0, files: 0, chapters: 0, annotations: 0, bookmarks: 0 });
+  //
+  // Polled, not read once: the confirm click only *starts* the batch.
+  // `useShelfSelection.confirmDelete` fires the mutation and closes the dialog
+  // without awaiting it, so a read taken the moment the cards vanish can beat
+  // the transactions — on a loaded machine that read found every row still
+  // there, twice in eight runs. A row that outlives its book never lands, so
+  // the poll still times out on exactly the orphan this assertion exists to
+  // catch.
+  await expect
+    .poll(() => rowsLeftFor(page, ids), {
+      timeout: 15_000,
+      message: "删除后仍有书的子行残留（章节 / 高亮 / 书签 / 文件）",
+    })
+    .toEqual({ books: 0, files: 0, chapters: 0, annotations: 0, bookmarks: 0 });
 
   // Selection was spent; the mode stays open for the next batch.
   await expect(bar).toContainText("已选 0 本");
